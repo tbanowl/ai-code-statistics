@@ -1,0 +1,96 @@
+# 功能开关
+features:
+  enabled: true
+  auto_stats: true
+
+# Git 平台配置
+git:
+  type: gitlab
+  gitlab:
+    base_url: https://gitlab.com
+    private_token: ${GITLAB_PRIVATE_TOKEN}
+    api_timeout: 30
+  github:
+    base_url: https://api.github.com
+    token: ${GITHUB_TOKEN}
+    api_timeout: 30
+
+# 数据库配置
+database:
+  type: sqlite
+  sqlite:
+    path: data/ai_stats.db
+  postgresql:
+    host: localhost
+    port: 5432
+    database: ai_stats
+    user: postgres
+    password: ${DB_PASSWORD}
+    pool_size: 5
+
+# 定时任务配置
+scheduler:
+  enabled: true
+  timezone: Asia/Shanghai
+  jobs:
+    # 配置文件可以覆盖注解中的默认配置
+    # 如果任务不存在于此，则使用注解默认值
+    dimensions_update:
+      enabled: true
+    # 新添加的任务示例
+    # daily_stats:
+    #   cron: "0 10 * * *"  # 覆盖注解中的 0 2 * * *
+    #   enabled: false
+
+# Web 服务配置
+web:
+  host: 0.0.0.0
+  port: 8888
+  debug: true
+
+# Swagger API 文档配置
+swagger:
+  enabled: true
+  title: Git AI 代码统计 API
+  version: 2.0.0
+  description: |
+    Git AI 代码统计 - 独立 Web 应用 v2.0
+    统计 GitLab/GitHub 仓库中 AI 生成代码的占比。
+
+    数据来源：Git-AI 客户端通过 `/worker/metrics/upload` API 上传 Metrics 数据，
+    系统存储到数据库后通过定时任务进行多维度统计分析。
+  docs_path: docs/api  # YAML 文档目录
+  output_path: swagger_config.json  # 生成输出路径
+  contact:
+    name: API Support
+  license:
+    name: MIT
+
+# 日志配置
+logging:
+  # 日志目录（相对于项目根目录）
+  dir: .logs
+  # 全局日志级别：DEBUG, INFO, WARNING, ERROR, CRITICAL
+  level: INFO
+  # 主日志文件名
+  file: app.log
+  # 单个日志文件最大大小（字节），默认 10MB
+  max_bytes: 10485760
+  # 保留的日志文件数量
+  backup_count: 5
+  # 是否单独记录错误日志
+  separate_error_file: true
+  # 错误日志文件名
+  error_file: error.log
+  # 错误日志文件最大大小
+  error_max_bytes: 10485760
+  # 错误日志备份数量
+  error_backup_count: 5
+  # 是否记录访问日志
+  access_log: true
+  # 第三方库日志级别
+  third_party:
+    werkzeug: INFO
+    urllib3: WARNING
+    requests: WARNING
+    apscheduler: WARNING

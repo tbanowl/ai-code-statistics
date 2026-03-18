@@ -1,0 +1,47 @@
+tags:
+  - name: stats
+    description: 统计分析 API
+
+endpoints:
+  /api/stats/analyze:
+    POST:
+      summary: 执行统计分析
+      description: 根据指定的日期范围和部门，统计分析 AI 代码占比
+      parameters:
+        - name: body
+          in: body
+          required: true
+          schema:
+            type: object
+            properties:
+              start_date:
+                type: string
+                format: date
+              end_date:
+                type: string
+                format: date
+              departments:
+                type: array
+                items:
+                  type: string
+      responses:
+        '200':
+          description: 统计分析结果
+          schema:
+            $ref: '#/definitions/SuccessResponse'
+
+  /api/stats/repo_stats:
+    GET:
+      summary: 获取仓库统计数据
+      description: 获取指定时间范围内的仓库级统计数据
+      responses:
+        '200':
+          description: 仓库统计数据
+
+  /api/stats/contributor_stats:
+    GET:
+      summary: 获取贡献者统计数据
+      description: 获取指定时间范围内的贡献者级统计数据
+      responses:
+        '200':
+          description: 贡献者统计数据

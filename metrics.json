@@ -1,0 +1,32 @@
+{
+  "v": 1,
+  "events": [
+    {
+      "t": 1773814571,
+      "e": 1,
+      "v": {
+        "12": "- \u6dfb\u52a0 MetricsRepo, MetricsContributor, MetricsRepoContributor \u6570\u636e\u6a21\u578b\n- \u5b9e\u73b0 SQLite \u6570\u636e\u5e93\u8bbf\u95ee\u65b9\u6cd5\n- \u521b\u5efa\u7ef4\u5ea6\u8868\u7edf\u8ba1\u66f4\u65b0\u8c03\u5ea6\u4efb\u52a1\n- \u6dfb\u52a0\u7ef4\u5ea6\u8868 API \u8def\u7531\uff08\u4ed3\u5e93\u3001\u4f5c\u8005\u3001\u5173\u8054\u8868\uff09\n- \u66f4\u65b0\u914d\u7f6e\u4ee5\u652f\u6301\u7ef4\u5ea6\u8c03\u5ea6\u4efb\u52a1\n- \u6dfb\u52a0\u5b8c\u6574\u7684\u5355\u5143\u6d4b\u8bd5\u548c\u96c6\u6210\u6d4b\u8bd5\n- \u6ce8\u518c Swagger API \u6807\u7b7e\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>",
+        "4": [0, 0],
+        "1": 7,
+        "6": [942, 942],
+        "9": [0, 0],
+        "2": 2640,
+        "10": 1773804670,
+        "0": 1698,
+        "3": ["all", "claude::GLM-4.7-fp8"],
+        "7": [964, 964],
+        "8": [22, 22],
+        "5": [942, 942],
+        "11": "feat: \u5b9e\u73b0\u4ed3\u5e93\u548c\u4f5c\u8005\u7ef4\u5ea6\u8868\u529f\u80fd"
+      },
+      "a": {
+        "3": "b8ca090f037929bd4f0e19f97aaf04f7952cbc7e",
+        "2": "dk03 <dk03@dk.com>",
+        "4": "daa6e281f218f8c7b7a9b85589eba7e7aae20e12",
+        "5": "main",
+        "1": "https://localhost/gitea/git-ai-code-metrics",
+        "0": "1.1.12"
+      }
+    }
+  ]
+}

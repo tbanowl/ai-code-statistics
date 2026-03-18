@@ -1,0 +1,44 @@
+tags:
+  - name: projects
+    description: 项目管理 API
+
+endpoints:
+  /api/projects/list:
+    GET:
+      summary: 获取项目列表
+      description: 获取所有项目列表
+      responses:
+        '200':
+          description: 项目列表
+
+  /api/projects/create:
+    POST:
+      summary: 创建新项目
+      description: 创建新的项目记录
+      parameters:
+        - name: body
+          in: body
+          required: true
+      responses:
+        '200':
+          description: 创建结果
+
+  /api/projects/delete:
+    DELETE:
+      summary: 删除项目
+      description: 删除指定项目
+      responses:
+        '200':
+          description: 删除结果
+
+  /api/projects/update:
+    PUT:
+      summary: 更新项目
+      description: 更新项目信息
+      parameters:
+        - name: body
+          in: body
+          required: true
+      responses:
+        '200':
+          description: 更新结果

@@ -1,0 +1,155 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "API Documentation",
+    "version": "1.0.0",
+    "description": ""
+  },
+  "basePath": "/",
+  "schemes": [
+    "http",
+    "https"
+  ],
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "paths": {
+    "/api/stats/analyze": {
+      "post": {
+        "summary": "执行统计分析",
+        "description": "根据指定的日期范围和部门，统计分析 AI 代码占比",
+        "tags": [
+          "stats"
+        ],
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "start_date": {
+                  "type": "string",
+                  "format": "date"
+                },
+                "end_date": {
+                  "type": "string",
+                  "format": "date"
+                },
+                "departments": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "统计分析结果",
+            "schema": {
+              "$ref": "#/definitions/SuccessResponse"
+            }
+          }
+        }
+      }
+    },
+    "/api/stats/latest": {
+      "get": {
+        "summary": "",
+        "description": "获取最新统计结果\n---\ntags:\n  - stats\nsummary: 获取最新统计结果\ndescription: 获取数据库中最新的统计记录\nresponses:\n  200:\n    description: 获取成功\n    schema:\n      type: object\n      properties:\n        success:\n          type: boolean\n          example: true\n        data:\n          type: object\n          description: 统计记录详情\n  404:\n    description: 暂无统计数据\n    schema:\n      $ref: '#/definitions/ErrorResponse'",
+        "tags": [
+          "stats"
+        ]
+      }
+    },
+    "/api/stats/history": {
+      "get": {
+        "summary": "",
+        "description": "获取统计历史记录\n---\ntags:\n  - stats\nsummary: 获取统计历史记录\ndescription: 获取指定日期范围内的统计历史记录\nparameters:\n  - in: query\n    name: start\n    type: string\n    format: date-time\n    description: 开始日期（可选）\n  - in: query\n    name: end\n    type: string\n    format: date-time\n    description: 结束日期（可选）\n  - in: query\n    name: limit\n    type: integer\n    default: 100\n    description: 返回记录数量限制\nresponses:\n  200:\n    description: 获取成功\n    schema:\n      type: object\n      properties:\n        success:\n          type: boolean\n          example: true\n        data:\n          type: array\n          description: 历史记录列表",
+        "tags": [
+          "stats"
+        ]
+      }
+    },
+    "/api/stats/<stat_id>": {
+      "get": {
+        "summary": "",
+        "description": "获取指定统计详情\n---\ntags:\n  - stats\nsummary: 获取指定统计详情\ndescription: 根据统计ID获取详细统计信息\nparameters:\n  - in: path\n    name: stat_id\n    type: string\n    required: true\n    description: 统计记录ID\nresponses:\n  200:\n    description: 获取成功\n    schema:\n      type: object\n      properties:\n        success:\n          type: boolean\n          example: true\n        data:\n          type: object\n          description: 统计记录详情\n  404:\n    description: 统计记录不存在\n    schema:\n      $ref: '#/definitions/ErrorResponse'",
+        "tags": [
+          "stats"
+        ]
+      }
+    },
+    "/api/v1/projects/": {
+      "get": {
+        "summary": "",
+        "description": "获取项目列表（按部门分组）\n---\ntags:\n  - projects\nsummary: 获取项目列表\ndescription: 获取所有项目，按部门分组展示\nresponses:\n  200:\n    description: 获取成功\n    schema:\n      type: object\n      properties:\n        success:\n          type: boolean\n          example: true\n        data:\n          type: object\n          properties:\n            departments:\n              type: array\n              items:\n                type: string\n              description: 部门列表\n              example: [\"backend\", \"frontend\"]\n            repos_by_department:\n              type: object\n              description: 各部门下的仓库列表\n              example:\n                backend: [\"repo1\", \"repo2\"]\n                frontend: [\"web-repo\"]\n            all_repos:\n              type: array\n              items:\n                type: string\n              description: 所有仓库列表",
+        "tags": [
+          "projects"
+        ]
+      }
+    },
+    "/api/v1/projects/departments": {
+      "get": {
+        "summary": "",
+        "description": "获取部门列表\n---\ntags:\n  - projects\nsummary: 获取部门列表\ndescription: 获取所有部门名称\nresponses:\n  200:\n    description: 获取成功\n    schema:\n      type: object\n      properties:\n        success:\n          type: boolean\n          example: true\n        data:\n          type: object\n          properties:\n            departments:\n              type: array\n              items:\n                type: string\n              example: [\"backend\", \"frontend\", \"mobile\"]\n              description: 部门名称列表",
+        "tags": [
+          "projects"
+        ]
+      }
+    },
+    "/worker/metrics/upload": {
+      "post": {
+        "summary": "",
+        "description": "上传 metrics 数据\n---\ntags:\n  - worker-metrics\nsummary: 上传 metrics 数据\ndescription: Git-AI 客户端批量上传 metrics 事件数据\nsecurity:\n  - Bearer: []\nparameters:\n  - in: body\n    name: body\n    description: Metrics 数据批次\n    required: true\n    schema:\n      type: object\n      properties:\n        v:\n          type: integer\n          description: 协议版本\n        events:\n          type: array\n          description: 事件列表\n          items:\n            type: object\nresponses:\n  200:\n    description: 处理成功\n    schema:\n      type: object\n      properties:\n        errors:\n          type: array\n          description: 错误列表（空表示全部成功）\n          items:\n            type: object\n            properties:\n              index:\n                type: integer\n                description: 事件索引\n              error:\n                type: string\n                description: 错误信息",
+        "tags": [
+          "metrics"
+        ]
+      }
+    }
+  },
+  "definitions": {
+    "SuccessResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "example": true
+        },
+        "data": {
+          "type": "object"
+        }
+      }
+    },
+    "ErrorResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "example": false
+        },
+        "error": {
+          "type": "string",
+          "example": "错误信息"
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "stats",
+      "description": "统计分析 API"
+    },
+    {
+      "name": "projects",
+      "description": "项目管理 API"
+    }
+  ]
+}
