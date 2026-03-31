@@ -1,0 +1,52 @@
+# Git 相关
+.git
+.gitignore
+.gitattributes
+
+# 环境变量
+.env
+.env.*
+.envrc
+
+# 日志
+.logs/
+*.log
+
+# 数据库文件（运行时生成，不应打包到镜像中）
+data/*.db
+data/*.sqlite
+
+# 虚拟环境
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# 测试
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 文档和计划
+docs/
+plans/
+
+# Docker 相关（构建镜像时不需要）
+.docker/
+.dockerignore
+
+# 临时文件
+node_modules/
+dist/
+*.tmp
+*.bak
+.DS_Store

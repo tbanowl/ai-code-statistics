@@ -1,0 +1,326 @@
+tags:
+  - name: dimensions
+    description: 维度表 API - 仓库、作者等维度统计数据管理
+
+endpoints:
+  /api/dimensions/repos:
+    GET:
+      summary: 获取仓库列表
+      description: 获取仓库列表，支持分页和排序
+      parameters:
+        - name: page
+          in: query
+          type: integer
+          default: 1
+          minimum: 1
+          description: 页码
+        - name: page_size
+          in: query
+          type: integer
+          default: 20
+          minimum: 1
+          maximum: 100
+          description: 每页数量
+        - name: sort
+          in: query
+          type: string
+          description: 排序字段
+      responses:
+        '200':
+          description: 仓库列表
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+              data:
+                type: array
+                items:
+                  type: object
+              pagination:
+                type: object
+                properties:
+                  total:
+                    type: integer
+                  page:
+                    type: integer
+                  page_size:
+                    type: integer
+        '400':
+          description: 请求参数错误
+        '500':
+          description: 服务器内部错误
+
+  /api/dimensions/repos/<repo_id>:
+    GET:
+      summary: 获取单个仓库详情
+      description: 根据 repo_id 获取仓库的详细统计信息
+      parameters:
+        - name: repo_id
+          in: path
+          type: string
+          required: true
+          description: 仓库 ID
+      responses:
+        '200':
+          description: 仓库详情
+          schema:
+            $ref: '#/definitions/SuccessResponse'
+        '404':
+          description: 仓库不存在
+        '500':
+          description: 服务器内部错误
+
+  /api/dimensions/repos/<repo_id>/contributors:
+    GET:
+      summary: 获取指定仓库的所有作者
+      description: 获取指定仓库下所有作者的分页列表
+      parameters:
+        - name: repo_id
+          in: path
+          type: string
+          required: true
+          description: 仓库 ID
+        - name: page
+          in: query
+          type: integer
+          default: 1
+          minimum: 1
+          description: 页码
+        - name: page_size
+          in: query
+          type: integer
+          default: 20
+          minimum: 1
+          maximum: 100
+          description: 每页数量
+      responses:
+        '200':
+          description: 作者列表
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+              data:
+                type: array
+                items:
+                  type: object
+              pagination:
+                type: object
+                properties:
+                  total:
+                    type: integer
+                  page:
+                    type: integer
+                  page_size:
+                    type: integer
+        '400':
+          description: 请求参数错误
+        '500':
+          description: 服务器内部错误
+
+  /api/dimensions/repos/sync:
+    POST:
+      summary: 手动触发仓库统计更新
+      description: 手动触发仓库维度表的统计更新任务
+      responses:
+        '200':
+          description: 同步成功
+          schema:
+            $ref: '#/definitions/SuccessResponse'
+        '500':
+          description: 服务器内部错误
+
+  /api/dimensions/contributors:
+    GET:
+      summary: 获取作者列表
+      description: 获取作者列表，支持分页和排序
+      parameters:
+        - name: page
+          in: query
+          type: integer
+          default: 1
+          minimum: 1
+          description: 页码
+        - name: page_size
+          in: query
+          type: integer
+          default: 20
+          minimum: 1
+          maximum: 100
+          description: 每页数量
+        - name: sort
+          in: query
+          type: string
+          description: 排序字段
+      responses:
+        '200':
+          description: 作者列表
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+              data:
+                type: array
+                items:
+                  type: object
+              pagination:
+                type: object
+                properties:
+                  total:
+                    type: integer
+                  page:
+                    type: integer
+                  page_size:
+                    type: integer
+        '400':
+          description: 请求参数错误
+        '500':
+          description: 服务器内部错误
+
+  /api/dimensions/contributors/<author>:
+    GET:
+      summary: 获取单个作者详情
+      description: 根据 author 获取作者的详细统计信息
+      parameters:
+        - name: author
+          in: path
+          type: string
+          required: true
+          description: 作者名
+      responses:
+        '200':
+          description: 作者详情
+          schema:
+            $ref: '#/definitions/SuccessResponse'
+        '404':
+          description: 作者不存在
+        '500':
+          description: 服务器内部错误
+
+  /api/dimensions/contributors/<author>/repos:
+    GET:
+      summary: 获取指定作者参与的所有仓库
+      description: 获取指定作者参与的仓库的分页列表
+      parameters:
+        - name: author
+          in: path
+          type: string
+          required: true
+          description: 作者名
+        - name: page
+          in: query
+          type: integer
+          default: 1
+          minimum: 1
+          description: 页码
+        - name: page_size
+          in: query
+          type: integer
+          default: 20
+          minimum: 1
+          maximum: 100
+          description: 每页数量
+      responses:
+        '200':
+          description: 仓库列表
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+              data:
+                type: array
+                items:
+                  type: object
+              pagination:
+                type: object
+                properties:
+                  total:
+                    type: integer
+                  page:
+                    type: integer
+                  page_size:
+                    type: integer
+        '400':
+          description: 请求参数错误
+        '500':
+          description: 服务器内部错误
+
+  /api/dimensions/contributors/sync:
+    POST:
+      summary: 手动触发作者统计更新
+      description: 手动触发作者维度表的统计更新任务
+      responses:
+        '200':
+          description: 同步成功
+          schema:
+            $ref: '#/definitions/SuccessResponse'
+        '500':
+          description: 服务器内部错误
+
+  /api/dimensions/repo-contributors:
+    GET:
+      summary: 获取仓库作者关联列表
+      description: 获取仓库-作者关联关系的分页列表，支持按 repo_id 或 author 过滤
+      parameters:
+        - name: page
+          in: query
+          type: integer
+          default: 1
+          minimum: 1
+          description: 页码
+        - name: page_size
+          in: query
+          type: integer
+          default: 20
+          minimum: 1
+          maximum: 100
+          description: 每页数量
+        - name: repo_id
+          in: query
+          type: string
+          description: 过滤指定仓库
+        - name: author
+          in: query
+          type: string
+          description: 过滤指定作者
+      responses:
+        '200':
+          description: 仓库作者关联列表
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+              data:
+                type: array
+                items:
+                  type: object
+              pagination:
+                type: object
+                properties:
+                  total:
+                    type: integer
+                  page:
+                    type: integer
+                  page_size:
+                    type: integer
+        '400':
+          description: 请求参数错误
+        '500':
+          description: 服务器内部错误
+
+  /api/dimensions/repo-contributors/sync:
+    POST:
+      summary: 手动触发关联表更新
+      description: 手动触发仓库-作者关联表的更新任务
+      responses:
+        '200':
+          description: 同步成功
+          schema:
+            $ref: '#/definitions/SuccessResponse'
+        '500':
+          description: 服务器内部错误

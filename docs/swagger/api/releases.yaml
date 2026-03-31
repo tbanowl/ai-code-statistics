@@ -1,0 +1,60 @@
+tags:
+  - name: releases
+    description: Releases API - 发布信息和版本管理
+
+endpoints:
+  /worker/releases/:
+    GET:
+      summary: 获取发布信息
+      description: 获取各发布渠道的版本和校验和信息
+      responses:
+        '200':
+          description: 发布信息
+          schema:
+            type: object
+            properties:
+              channels:
+                type: object
+                properties:
+                  latest:
+                    type: object
+                    description: 最新稳定版
+                    properties:
+                      version:
+                        type: string
+                        description: 版本号
+                      checksum:
+                        type: string
+                        description: 校验和
+                  next:
+                    type: object
+                    description: 下一个版本
+                    properties:
+                      version:
+                        type: string
+                        description: 版本号
+                      checksum:
+                        type: string
+                        description: 校验和
+                  enterprise-latest:
+                    type: object
+                    description: 企业版最新稳定版
+                    properties:
+                      version:
+                        type: string
+                        description: 版本号
+                      checksum:
+                        type: string
+                        description: 校验和
+                  enterprise-next:
+                    type: object
+                    description: 企业版下一个版本
+                    properties:
+                      version:
+                        type: string
+                        description: 版本号
+                      checksum:
+                        type: string
+                        description: 校验和
+        '500':
+          description: 服务器内部错误

@@ -1,0 +1,330 @@
+openapi: 3.0.0
+info:
+  title: REST Notes Store API
+  version: 2.0.0
+  description: API for storing and retrieving authorship notes when git notes is not supported.
+
+paths:
+  /worker/notes:
+    put:
+      summary: Create or update a single note
+      security:
+        - bearerAuth: []
+        - apiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - repo_url
+                - branch
+                - commit_sha
+                - author_name
+                - author_email
+                - content
+              properties:
+                repo_url:
+                  type: string
+                  example: https://github.com/user/repo.git
+                branch:
+                  type: string
+                  example: main
+                commit_sha:
+                  type: string
+                  format: uuid
+                  example: abc123def4567890123456789012345678901234
+                original_commit_sha:
+                  type: string
+                  nullable: true
+                author_name:
+                  type: string
+                  example: John Doe
+                author_email:
+                  type: string
+                  format: email
+                  example: john@example.com
+                content:
+                  type: string
+                  description: Authorship log content
+      responses:
+        '200':
+          description: Note created or updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+
+  /worker/notes/get:
+    post:
+      summary: Get a single note
+      security:
+        - bearerAuth: []
+        - apiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - repo_url
+                - commit_sha
+              properties:
+                repo_url:
+                  type: string
+                commit_sha:
+                  type: string
+      responses:
+        '200':
+          description: Note found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Note'
+        '404':
+          description: Note not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /worker/notes/batch:
+    post:
+      summary: Batch get notes
+      security:
+        - bearerAuth: []
+        - apiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - repo_url
+                - commit_shas
+              properties:
+                repo_url:
+                  type: string
+                commit_shas:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Batch notes retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      notes:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            commit_sha:
+                              type: string
+                            content:
+                              type: string
+                      missing:
+                        type: array
+                        items:
+                          type: string
+
+  /worker/notes/push:
+    post:
+      summary: Batch push (create/update) notes
+      security:
+        - bearerAuth: []
+        - apiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - repo_url
+                - notes
+              properties:
+                repo_url:
+                  type: string
+                notes:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - branch
+                      - commit_sha
+                      - author_name
+                      - author_email
+                      - content
+                    properties:
+                      branch:
+                        type: string
+                      commit_sha:
+                        type: string
+                      original_commit_sha:
+                        type: string
+                        nullable: true
+                      author_name:
+                        type: string
+                      author_email:
+                        type: string
+                      content:
+                        type: string
+      responses:
+        '200':
+          description: Notes pushed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      created:
+                        type: integer
+                      updated:
+                        type: integer
+
+  /worker/notes/list:
+    post:
+      summary: List all commit SHAs with notes for a repository
+      security:
+        - bearerAuth: []
+        - apiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - repo_url
+              properties:
+                repo_url:
+                  type: string
+      responses:
+        '200':
+          description: List of commit SHAs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      commit_shas:
+                        type: array
+                        items:
+                          type: string
+
+  /worker/notes/search:
+    post:
+      summary: Search notes by content pattern
+      security:
+        - bearerAuth: []
+        - apiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - repo_url
+                - pattern
+              properties:
+                repo_url:
+                  type: string
+                pattern:
+                  type: string
+                  description: Search pattern (uses LIKE)
+      responses:
+        '200':
+          description: Matching commit SHAs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      commit_shas:
+                        type: array
+                        items:
+                          type: string
+
+components:
+  schemas:
+    Note:
+      type: object
+      properties:
+        id:
+          type: string
+        commit_sha:
+          type: string
+        branch:
+          type: string
+        author_name:
+          type: string
+        author_email:
+          type: string
+        content:
+          type: string
+        created_at:
+          type: integer
+          format: int64
+        updated_at:
+          type: integer
+          format: int64
+
+    Error:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          enum: [false]
+        error:
+          type: string
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key

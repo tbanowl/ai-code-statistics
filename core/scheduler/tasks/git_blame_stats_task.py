@@ -1,0 +1,267 @@
+"""Git Blame 统计定时任务"""
+
+import tempfile
+import os
+from datetime import datetime, timedelta
+from typing import Dict, Optional
+from core.scheduler.tasks.base import BaseTask
+from core.scheduler.scheduled import scheduled
+from core.database import BlameStatsDatabase
+from core.services import SshKeyService, GitCloneService, BlameStatsService
+from core.config import load_config
+from core.config.logging import Logger
+
+
+@scheduled(cron="0 2 * * *", job_id="git_blame_stats", name="Git代码归因统计")
+class GitBlameStatsTask(BaseTask):
+    """Git Blame 统计任务 - 统计仓库中 AI 代码归占比"""
+
+    def __init__(self, config: Dict):
+        super().__init__(config)
+        self.blame_stats_db = BlameStatsDatabase()
+        self.ssh_key_service = SshKeyService()
+        self.git_clone_service = GitCloneService()
+        self.blame_stats_service = BlameStatsService(self.database)
+
+
+    def execute(self, context: Optional[Dict] = None) -> Dict:
+        """执行 Git Blame 统计任务"""
+        self.logger.info("开始执行 Git Blame 统计任务")
+
+        # 获取统计日期
+        stat_date = context.get('stat_date') if context else None
+        if stat_date is None:
+            # 默认统计昨天
+            yesterday = datetime.now() - timedelta(days=1)
+            stat_date = int(yesterday.replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
+
+        stat_date_dt = datetime.fromtimestamp(stat_date / 1000)
+        self.logger.info(f"统计日期: {stat_date_dt.strftime('%Y-%m-%d')}")
+
+        # 加载配置文件中的默认 SSH Key
+        default_ssh_key = self.ssh_key_service.load_default_ssh_key_from_config()
+
+        if default_ssh_key:
+            self.logger.info(f"已加载默认 SSH Key: {default_ssh_key['key_name']}")
+        else:
+            self.logger.info("未配置默认 SSH Key")
+
+        # 获取待统计的仓库列表
+        repos = self.blame_stats_db.get_repositories_to_stat()
+        self.logger.info(f"待统计仓库数量: {len(repos)}")
+
+        if not repos:
+            return {'success': True, 'message': '没有需要统计的仓库', 'stat_date': stat_date}
+
+        # 统计结果汇总
+        total_repos = 0
+        success_repos = 0
+        failed_repos = 0
+        skipped_repos = 0
+
+        for repo in repos:
+            repo_id = repo['id']
+            repo_path = repo['repo_path']
+            repo_name = repo.get('repo_name', repo_path)
+            repo_ssh_key_id = repo.get('ssh_key_id')
+
+            total_repos += 1
+            self.logger.info(f"开始统计仓库: {repo_name} ({repo_path})")
+
+            # 获取仓库可用的 SSH Key
+            ssh_key_info = self.ssh_key_service.get_ssh_key_for_repo(repo_ssh_key_id)
+
+            if not ssh_key_info:
+                self.logger.warning(f"仓库 {repo_name} 无可用 SSH Key，跳过统计")
+                skipped_repos += 1
+                continue
+
+            try:
+                # 克隆并统计仓库
+                result = self._stat_repository(repo_id, repo_path, stat_date, ssh_key_info)
+
+                if result:
+                    success_repos += 1
+                    self.logger.info(
+                        f"仓库 {repo_name} 统计完成: "
+                        f"总行数={result['total_lines']}, "
+                        f"AI 行数={result['ai_lines']}, "
+                        f"非 AI 行数={result['non_ai_lines']}, "
+                        f"AI 占比={result['ai_ratio']}%"
+                    )
+                else:
+                    failed_repos += 1
+
+            except Exception as e:
+                self.logger.error(f"仓库 {repo_name} 统计失败: {e}", exc_info=True)
+                failed_repos += 1
+
+        summary = {
+            'success': failed_repos == 0,
+            'stat_date': stat_date,
+            'total_repos': total_repos,
+            'success_repos': success_repos,
+            'failed_repos': failed_repos,
+            'skipped_repos': skipped_repos
+        }
+
+        self.logger.info(
+            f"任务完成: 成功 {success_repos}/{total_repos}, "
+            f"失败 {failed_repos}, 跳过 {skipped_repos}"
+        )
+
+        return summary
+
+    def _stat_repository(
+        self,
+        repo_id: str,
+        repo_path: str,
+        stat_date: int,
+        ssh_key_info: Dict
+    ) -> Dict | None:
+        """
+        统计单个仓库
+
+        Args:
+            repo_id: 仓库 ID
+            repo_path: 仓库路径（用作 repo_url）
+            stat_date: 统计日期
+            ssh_key_info: SSH Key 信息
+
+        Returns:
+            统计结果或 None
+        """
+        import tempfile
+
+        temp_dir = None
+        try:
+            # 创建临时目录
+            temp_dir = tempfile.mkdtemp(prefix='git_blame_')
+
+            # 克隆仓库
+            self.logger.info(f"克隆仓库到临时目录: {temp_dir}")
+
+            if not self.git_clone_service.clone_with_ssh_key(
+                repo_path,
+                ssh_key_info['private_key'],
+                temp_dir
+            ):
+                self.logger.error("仓库克隆失败")
+                return None
+
+            # 获取统计配置
+            config = load_config()
+            file_filter = config.get('blame_stats', {}).get('file_filter', {})
+
+            # 分析仓库
+            repo_url = self.blame_stats_db.get_repository_repo_url(repo_id)
+            result = self.blame_stats_service.analyze_repository(
+                repo_url,
+                temp_dir,
+                stat_date,
+                file_filter
+            )
+
+            if not result:
+                self.logger.error("仓库分析失败")
+                return None
+
+            # 保存仓库级统计结果
+            self.blame_stats_db.save_repo_blame_stats(
+                repo_id=repo_id,
+                stat_date=stat_date,
+                commit_sha=result.commit_sha,
+                branch=result.branch,
+                total_lines=result.total_lines,
+                ai_lines=result.ai_lines,
+                non_ai_lines=result.non_ai_lines,
+                total_files=result.total_files
+            )
+
+            # 保存文件级统计结果
+            for file_result in result.files_results:
+                self.blame_stats_db.save_file_blame_stats(
+                    repo_id=repo_id,
+                    stat_date=stat_date,
+                    file_path=file_result.file_path,
+                    commit_sha=file_result.commit_sha,
+                    total_lines=file_result.total_lines,
+                    ai_lines=file_result.ai_lines,
+                    non_ai_lines=file_result.non_ai_lines
+                )
+
+            # 保存仓库贡献者统计结果
+            contributor_ids = {}
+            for contrib_key, stats in result.contributor_stats.items():
+                contrib_id = self.blame_stats_db.get_or_create_contributor(
+                    'Unknown',  # 实际应该从 git blame 获取贡献者信息
+                    None
+                )
+                contributor_ids[contrib_key] = contrib_id
+
+                # 需要获取实际的贡献者名称和邮箱
+                # 这里简化处理，实际应该从 git blame 解析
+                contrib_name = f'Contributor_{contrib_key[:8]}'
+                contrib_email = ""
+
+                self.blame_stats_db.save_repo_contributor_stats(
+                    repo_id=repo_id,
+                    stat_date=stat_date,
+                    contributor_id=contrib_id,
+                    contributor_name=contrib_name,
+                    contributor_email=contrib_email,
+                    ai_lines=stats['ai_lines'],
+                    non_ai_lines=stats['non_ai_lines'],
+                    total_lines=stats['total_lines']
+                )
+
+            # 获取文件记录用于保存文件贡献者统计
+            file_records = self.blame_stats_db.get_file_blame_stats(repo_id, stat_date)
+            file_id_map = {r['file_path']: r['id'] for r in file_records}
+
+            # 保存文件贡献者统计（批量）
+            file_contributor_stats = []
+            for file_result in result.files_results:
+                file_id = file_id_map.get(file_result.file_path)
+                if not file_id:
+                    continue
+
+                for contrib_key, stats in file_result.contributor_stats.items():
+                    contrib_id = contributor_ids.get(contrib_key)
+
+                    file_contributor_stats.append({
+                        'file_id': file_id,
+                        'stat_date': stat_date,
+                        'repo_id': repo_id,
+                        'file_path': file_result.file_path,
+                        'contributor_id': contrib_id,
+                        'contributor_name': f'Contributor_{contrib_key[:8]}',
+                        'contributor_email': None,
+                        'ai_lines': stats['ai_lines'],
+                        'non_ai_lines': stats['non_ai_lines'],
+                        'total_lines': stats['total_lines']
+                    })
+
+            if file_contributor_stats:
+                self.blame_stats_db.save_batch_file_contributor_stats(
+                    file_contributor_stats
+                )
+
+            return {
+                'total_lines': result.total_lines,
+                'ai_lines': result.ai_lines,
+                'non_ai_lines': result.non_ai_lines,
+                'ai_ratio': round(
+                    (result.ai_lines / result.total_lines * 100) if result.total_lines > 0 else 0.0,
+                    2
+                )
+            }
+
+        except Exception as e:
+            self.logger.error(f"统计仓库时出错: {e}", exc_info=True)
+            return None
+
+        finally:
+            # 清理临时目录
+            if temp_dir and os.path.exists(temp_dir):
+                self.git_clone_service.cleanup_temp_dir(temp_dir)

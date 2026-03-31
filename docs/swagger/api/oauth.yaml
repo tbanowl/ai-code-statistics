@@ -1,0 +1,110 @@
+tags:
+  - name: oauth
+    description: OAuth API - 设备授权和令牌管理
+
+endpoints:
+  /worker/oauth/device/code:
+    POST:
+      summary: 获取设备授权码
+      description: 创建设备授权流程，返回设备码和用户验证码
+      parameters:
+        - name: body
+          in: body
+          schema:
+            type: object
+            description: 可选的客户端参数
+      responses:
+        '200':
+          description: 授权码创建成功
+          schema:
+            type: object
+            properties:
+              device_code:
+                type: string
+                description: 设备码 (用于后续轮询获取令牌)
+              user_code:
+                type: string
+                description: 用户验证码 (用户需要在浏览器中输入)
+              verification_uri:
+                type: string
+                description: 用户验证 URI
+              expires_in:
+                type: integer
+                description: 过期时间 (秒)
+              interval:
+                type: integer
+                description: 轮询间隔 (秒)
+        '500':
+          description: 服务器内部错误
+
+  /worker/oauth/verify_device:
+    GET:
+      summary: 验证设备授权
+      description: 验证设备授权状态 (预留接口)
+      responses:
+        '200':
+          description: 验证结果
+        '500':
+          description: 服务器内部错误
+
+  /worker/oauth/token:
+    POST:
+      summary: 交换令牌
+      description: 使用设备码或刷新令牌交换访问令牌
+      parameters:
+        - name: body
+          in: body
+          required: true
+          schema:
+            type: object
+            required:
+              - grant_type
+              - client_id
+            properties:
+              grant_type:
+                type: string
+                enum: [urn:ietf:params:oauth:grant-type:device_code, refresh_token]
+                description: 授权类型
+              device_code:
+                type: string
+                description: 设备码 (当 grant_type 为 device_code 时需要)
+              refresh_token:
+                type: string
+                description: 刷新令牌 (当 grant_type 为 refresh_token 时需要)
+              install_nonce:
+                type: string
+                description: 安装随机数 (可选)
+              client_id:
+                type: string
+                description: 客户端 ID
+      responses:
+        '200':
+          description: 令牌交换成功
+          schema:
+            type: object
+            properties:
+              access_token:
+                type: string
+                description: 访问令牌
+              refresh_token:
+                type: string
+                description: 刷新令牌
+              expires_in:
+                type: integer
+                description: 过期时间 (秒)
+              token_type:
+                type: string
+                description: 令牌类型 (通常是 "Bearer")
+        '400':
+          description: 令牌请求失败
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                description: 错误代码
+              error_description:
+                type: string
+                description: 错误描述
+        '500':
+          description: 服务器内部错误

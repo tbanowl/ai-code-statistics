@@ -1,0 +1,49 @@
+# 数据文件
+data/*.db
+data/*.sqlite
+
+# 日志文件
+.logs/
+.logs/*.log
+
+
+# 环境变量
+.env
+.env.production
+!.env*.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# 测试
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# nodejs
+node_modules/
+frontend/node_modules/
+frontend/dist
+
+# claude
+.claude/
+.claude/settings.local.json
+
+# git worktrees
+.worktrees/
+
+# git-ai
+git-ai*.exe

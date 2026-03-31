@@ -1,0 +1,7 @@
+scheduler:
+  enabled: true
+  jobs:
+    metrics_event_processor:
+      cron: "*/2 * * * *"
+      batch_size: 10
+      timeout_minutes: 10

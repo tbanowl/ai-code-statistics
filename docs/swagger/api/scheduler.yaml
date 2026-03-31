@@ -1,0 +1,165 @@
+tags:
+  - name: scheduler
+    description: 调度器管理 API - 管理定时任务
+
+endpoints:
+  /api/v1/scheduler/jobs:
+    GET:
+      summary: 获取所有任务
+      description: 获取所有注册的定时任务列表
+      responses:
+        '200':
+          description: 任务列表
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+              data:
+                type: object
+                properties:
+                  jobs:
+                    type: array
+                    items:
+                      type: object
+                    description: 任务列表
+        '503':
+          description: 调度器未启用
+        '500':
+          description: 服务器内部错误
+
+  /api/v1/scheduler/jobs/status:
+    GET:
+      summary: 获取任务状态
+      description: 获取指定任务的当前状态
+      parameters:
+        - name: jobId
+          in: query
+          type: string
+          required: true
+          description: 任务 ID
+      responses:
+        '200':
+          description: 任务状态
+          schema:
+            $ref: '#/definitions/SuccessResponse'
+        '400':
+          description: jobId 不能为空
+        '404':
+          description: 任务不存在
+        '503':
+          description: 调度器未启用
+        '500':
+          description: 服务器内部错误
+
+  /api/v1/scheduler/jobs/trigger:
+    POST:
+      summary: 手动触发任务
+      description: 手动触发指定任务执行
+      parameters:
+        - name: jobId
+          in: query
+          type: string
+          required: true
+          description: 任务 ID
+      responses:
+        '200':
+          description: 触发成功
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+              data:
+                type: object
+                properties:
+                  execution_id:
+                    type: integer
+                  status:
+                    type: string
+                  job_id:
+                    type: string
+        '400':
+          description: jobId 不能为空
+        '404':
+          description: 任务不存在
+        '409':
+          description: 任务正在执行中
+        '503':
+          description: 调度器未启用
+        '500':
+          description: 任务触发失败
+
+  /api/v1/scheduler/jobs/history/executions:
+    GET:
+      summary: 获取任务执行历史
+      description: 获取指定任务的执行历史记录
+      parameters:
+        - name: jobId
+          in: query
+          type: string
+          required: true
+          description: 任务 ID
+        - name: limit
+          in: query
+          type: integer
+          default: 10
+          description: 返回记录数量 (最大 100)
+        - name: status
+          in: query
+          type: string
+          description: 过滤执行状态
+      responses:
+        '200':
+          description: 执行历史记录
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+              data:
+                type: object
+                properties:
+                  executions:
+                    type: array
+                    items:
+                      type: object
+                  job_id:
+                    type: string
+                  count:
+                    type: integer
+        '400':
+          description: jobId 不能为空
+        '503':
+          description: 调度器未启用
+        '500':
+          description: 服务器内部错误
+
+  /api/v1/scheduler/jobs/execution-detail:
+    GET:
+      summary: 获取任务执行详情
+      description: 获取指定任务执行的详细信息
+      parameters:
+        - name: jobId
+          in: query
+          type: string
+          required: true
+          description: 任务 ID
+        - name: executionId
+          in: query
+          type: integer
+          required: true
+          description: 执行 ID
+      responses:
+        '200':
+          description: 执行详情
+          schema:
+            $ref: '#/definitions/SuccessResponse'
+        '400':
+          description: jobId 不能为空 或 executionId 不能为空
+        '400':
+          description: 执行记录不匹配
+        '404':
+          description: 执行记录不存在
+        '500':
+          description: 服务器内部错误

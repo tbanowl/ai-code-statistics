@@ -1,0 +1,103 @@
+# 数据库配置
+database:
+  # url: postgresql://gitai:${DB_PASSWORD}@postgres:5432/gitai_stats
+  url: ${DB_URL}
+  echo: ${DB_ECHO}  # 生产环境关闭 SQL 回显
+
+# 定时任务配置
+scheduler:
+  enabled: true
+  timezone: Asia/Shanghai
+
+  # JobStore 持久化配置（可选，不配置则使用内存模式）
+  jobstore:
+    type: sqlalchemy              # JobStore 类型（当前支持 sqlalchemy）
+    # tablename: apscheduler_jobs # 可选：自定义表名，默认为 apscheduler_jobs
+
+  # 任务默认行为配置
+  job_defaults:
+    coalesce: true              # 合并错过的执行（避免任务积压一次执行）
+    max_instances: 1            # 每个任务最多同时运行 1 个实例
+    misfire_grace_time: 300     # 错过执行的宽限时间（秒），超过则视为错过
+
+  jobs:
+    daily_aggregation:
+      enabled: true
+      cron: "0 2 * * *"
+    # Metrics 事件处理任务
+    metrics_event_processor:
+      enabled: true
+      cron: "*/2 * * * *"
+      batch_size: 100              # 每批处理的记录数
+      timeout_minutes: 10          # 任务超时阈值（分钟）
+    # Git Blame 统计任务
+    git_blame_stats:
+      enabled: true
+      cron: "0 2 * * *"
+
+# Git Blame 统计配置
+blame_stats:
+  # 默认 SSH Key 配置（可选）
+  default_ssh_key_name: "default-git-blame"
+  default_ssh_key_public: "${DEFAULT_SSH_PUBLIC_KEY}"
+  default_ssh_key_private: "${DEFAULT_SSH_PRIVATE_KEY}"
+
+  # 文件过滤配置
+  file_filter:
+    enabled: false
+    mode: code_only  # code_only | all | custom
+    extensions:
+      - .py
+
+# Web 服务配置
+web:
+  host: 0.0.0.0
+  port: 8888
+  debug: false
+
+# Swagger API 文档配置
+swagger:
+  enabled: true
+  title: Git AI 代码统计 API
+  version: 2.0.0
+  description: |
+    Git AI 代码统计 - 独立 Web 应用 v2.0
+    统计 GitLab/GitHub 仓库中 AI 生成代码的占比。
+
+    数据来源：Git-AI 客户端通过 `/worker/metrics/upload` API 上传 Metrics 数据，
+    系统存储到数据库后通过定时任务进行多维度统计分析。
+  docs_path: docs/api  # YAML 文档目录
+  output_path: swagger_config.json  # 生成输出路径
+  contact:
+    name: API Support
+  license:
+    name: MIT
+
+# 日志配置
+logging:
+  # 日志目录（相对于项目根目录）
+  dir: .logs
+  # 全局日志级别：DEBUG, INFO, WARNING, ERROR, CRITICAL
+  level: INFO
+  # 主日志文件名
+  file: app.log
+  # 单个日志文件最大大小（字节），默认 10MB
+  max_bytes: 10485760
+  # 保留的日志文件数量
+  backup_count: 5
+  # 是否单独记录错误日志
+  separate_error_file: true
+  # 错误日志文件名
+  error_file: error.log
+  # 错误日志文件最大大小
+  error_max_bytes: 10485760
+  # 错误日志备份数量
+  error_backup_count: 5
+  # 是否记录访问日志
+  access_log: true
+  # 第三方库日志级别
+  third_party:
+    werkzeug: INFO
+    urllib3: WARNING
+    requests: WARNING
+    apscheduler: WARNING

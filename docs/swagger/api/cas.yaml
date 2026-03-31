@@ -1,0 +1,82 @@
+tags:
+  - name: cas
+    description: CAS API - Content Addressable Storage，用于存储和检索 Git-AI 内容
+
+endpoints:
+  /worker/cas/upload:
+    POST:
+      summary: 上传 CAS 对象
+      description: 批量上传 CAS 内容对象
+      parameters:
+        - name: body
+          in: body
+          required: true
+          schema:
+            type: object
+            properties:
+              objects:
+                type: array
+                description: 对象列表
+                items:
+                  type: object
+                  required:
+                    - hash
+                    - data
+                  properties:
+                    hash:
+                      type: string
+                      description: 对象哈希值
+                    data:
+                      type: string
+                      description: 对象内容 (Base64 编码)
+      responses:
+        '200':
+          description: 上传结果
+          schema:
+            type: object
+            properties:
+              results:
+                type: array
+                items:
+                  type: object
+                description: 各对象的上传结果
+              success_count:
+                type: integer
+                description: 成功上传的数量
+              failure_count:
+                type: integer
+                description: 失败的数量
+        '500':
+          description: 服务器内部错误
+
+  /worker/cas/:
+    GET:
+      summary: 读取 CAS 对象
+      description: 根据哈希值批量读取 CAS 对象内容
+      parameters:
+        - name: hashes
+          in: query
+          type: string
+          required: true
+          description: 哈希值列表，逗号分隔 (最多 100 个)
+      responses:
+        '200':
+          description: 读取结果
+          schema:
+            type: object
+            properties:
+              results:
+                type: array
+                items:
+                  type: object
+                description: 各对象的读取结果
+              success_count:
+                type: integer
+                description: 成功读取的数量
+              failure_count:
+                type: integer
+                description: 失败的数量
+        '400':
+          description: 哈希值数量超过限制
+        '500':
+          description: 服务器内部错误

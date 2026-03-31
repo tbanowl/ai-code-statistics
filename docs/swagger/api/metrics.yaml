@@ -1,0 +1,84 @@
+tags:
+  - name: metrics
+    description: Metrics API - 用于 Git-AI 客户端上传代码指标数据
+
+endpoints:
+  /worker/metrics/upload:
+    POST:
+      summary: 上传 metrics 数据
+      description: 接收 Git-AI 客户端上传的代码指标事件数据
+      parameters:
+        - name: body
+          in: body
+          required: true
+          schema:
+            type: object
+            required:
+              - v
+              - events
+            properties:
+              v:
+                type: integer
+                description: 协议版本 (当前仅支持 1)
+                enum: [1]
+              events:
+                type: array
+                description: 事件列表
+                items:
+                  type: object
+                  properties:
+                    event_type:
+                      type: string
+                      enum: [committed, checkpoint, agent_usage, install_hooks]
+                      description: 事件类型
+                    timestamp:
+                      type: integer
+                      description: Unix 时间戳
+                    repo_url:
+                      type: string
+                      description: 仓库 URL
+                    # Committed 事件属性
+                    human_additions:
+                      type: integer
+                      description: 人工添加的代码行数
+                    ai_additions:
+                      type: object
+                      description: AI 工具添加的代码行数 (按工具/模型分组)
+                    human_deletions:
+                      type: integer
+                      description: 人工删除的代码行数
+                    ai_deletions:
+                      type: object
+                      description: AI 工具删除的代码行数 (按工具/模型分组)
+                    tool:
+                      type: string
+                      description: 使用的 AI 工具
+                    model:
+                      type: string
+                      description: 使用的 AI 模型
+                    user:
+                      type: string
+                      description: 用户名/作者名
+                    # AgentUsage 事件属性
+                    agent_task_id:
+                      type: string
+                      description: Agent 任务 ID
+                    # Checkpoint 事件属性
+                    checkpoint_id:
+                      type: string
+                      description: 检查点 ID
+      responses:
+        '200':
+          description: 处理成功（可能包含部分错误）
+          schema:
+            type: object
+            properties:
+              errors:
+                type: array
+                items:
+                  type: object
+                description: 错误列表（如果有）
+        '400':
+          description: 版本不支持
+        '500':
+          description: 服务器内部错误

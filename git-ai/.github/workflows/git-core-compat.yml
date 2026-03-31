@@ -1,0 +1,61 @@
+name: Git Core Compatibility
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'Taskfile.yml'
+      - 'flake.nix'
+      - 'flake.lock'
+      - '.github/workflows/git-core-compat.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'Taskfile.yml'
+      - 'flake.nix'
+      - 'flake.lock'
+      - '.github/workflows/git-core-compat.yml'
+  merge_group:
+    branches: [main]
+
+jobs:
+  git-core-tests:
+    name: Run core Git tests with git-ai
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Cache dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ubuntu-cargo-
+
+      - name: Build git-ai
+        run: cargo build --release --bin git-ai
+
+      - name: Run core Git compatibility tests
+        run: python3 tests/git-compat/run-core-tests.py
