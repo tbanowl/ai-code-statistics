@@ -565,7 +565,7 @@ CREATE INDEX IF NOT EXISTS idx_blame_fc_date ON stats_blame_file_contributor(sta
 
 CREATE TABLE IF NOT EXISTS apscheduler_jobs (
     id VARCHAR(191) NOT NULL PRIMARY KEY,
-    next_run_time TIMESTAMP WITH TIME ZONE,
+    next_run_time DOUBLE PRECISION,
     job_state BYTEA NOT NULL
 );
 

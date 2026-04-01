@@ -10,7 +10,7 @@ from core.database import SchedulerDatabase
 
 
 # 模块级变量，用于存储调度器实例（供任务执行函数使用）
-_scheduler_instance: Optional['AICodeScheduler'] = None
+_scheduler_instance: Optional["AICodeScheduler"] = None
 
 
 def _run_task_with_execution(job_id: str):
@@ -49,12 +49,10 @@ class AICodeScheduler:
         # 配置默认任务行为
         job_defaults = self._setup_job_defaults()
         # 获取时区配置
-        timezone = config.get('scheduler', {}).get('timezone', 'Asia/Shanghai')
+        timezone = config.get("scheduler", {}).get("timezone", "Asia/Shanghai")
 
         self.scheduler: BackgroundScheduler = BackgroundScheduler(
-            jobstores=jobstores,
-            job_defaults=job_defaults,
-            timezone=timezone
+            jobstores=jobstores, job_defaults=job_defaults, timezone=timezone
         )
 
     def _setup_jobstore(self) -> Dict[str, Any]:
@@ -65,21 +63,21 @@ class AICodeScheduler:
             包含 default JobStore 的字典，如果初始化失败则返回空字典
         """
         # 检查是否启用 JobStore 持久化
-        jobstore_config = self.config.get('scheduler', {}).get('jobstore')
+        jobstore_config = self.config.get("scheduler", {}).get("jobstore")
         if not jobstore_config:
             self.logger.info("未配置 JobStore，使用内存模式")
             return {}
 
-        jobstore_type = jobstore_config.get('type', 'sqlalchemy')
-        if jobstore_type != 'sqlalchemy':
-            self.logger.warning(f"不支持的 JobStore 类型: {jobstore_type}，使用内存模式")
+        jobstore_type = jobstore_config.get("type", "sqlalchemy")
+        if jobstore_type != "sqlalchemy":
+            self.logger.warning(
+                f"不支持的 JobStore 类型: {jobstore_type}，使用内存模式"
+            )
             return {}
 
         try:
             engine = self._get_engine_from_db()
-            jobstores = {
-                'default': SQLAlchemyJobStore(engine=engine)
-            }
+            jobstores = {"default": SQLAlchemyJobStore(engine=engine)}
             self.logger.info("JobStore 持久化已启用（SQLAlchemy）")
             return jobstores
         except Exception as e:
@@ -94,12 +92,14 @@ class AICodeScheduler:
             SQLAlchemy Engine 实例
         """
         # 首先尝试从 SchedulerDatabase 获取
-        if hasattr(self, 'scheduler_db') and self.scheduler_db:
+        if hasattr(self, "scheduler_db") and self.scheduler_db:
             return self.scheduler_db.engine
         # 备用：创建新的 BaseDatabase 实例获取 engine
         from core.database.base import BaseDatabase
+
         db = BaseDatabase()
         return db.engine
+
 
     def _setup_job_defaults(self) -> Dict[str, Any]:
         """
@@ -108,11 +108,10 @@ class AICodeScheduler:
         Returns:
             包含任务默认配置的字典
         """
-        defaults = self.config.get('scheduler', {}).get('job_defaults', {
-            'coalesce': True,
-            'max_instances': 1,
-            'misfire_grace_time': 300
-        })
+        defaults = self.config.get("scheduler", {}).get(
+            "job_defaults",
+            {"coalesce": True, "max_instances": 1, "misfire_grace_time": 300},
+        )
         return defaults
 
     def start(self) -> None:
@@ -231,10 +230,14 @@ class AICodeScheduler:
         # 检查是否有正在运行的任务
         running = self.scheduler_db.get_running_task_execution(job_id)
         if running:
-            timeout_minutes = self.config.get("scheduler", {})\
-                .get("jobs", {})\
-                .get("metrics_event_processor", {})\
-                .get("timeout_minutes", 10) * 60 * 1000
+            timeout_minutes = (
+                self.config.get("scheduler", {})
+                .get("jobs", {})
+                .get("metrics_event_processor", {})
+                .get("timeout_minutes", 10)
+                * 60
+                * 1000
+            )
             created_at = running.get("created_at") or 0
             now_ms = int(datetime.now().timestamp() * 1000)
             if created_at and now_ms - created_at > timeout_minutes:
