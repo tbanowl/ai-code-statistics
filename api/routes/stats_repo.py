@@ -3,7 +3,7 @@
 from flask import Blueprint, jsonify, request
 import logging
 
-stats_repo_bp = Blueprint('stats_repo', __name__, url_prefix='/worker/stats/repo')
+stats_repo_bp = Blueprint('stats_repo', __name__, url_prefix='/api/stats/repo')
 
 
 # 辅助函数：获取数据库实例

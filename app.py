@@ -9,11 +9,11 @@ import sys
 from core.config.loader import load_config_by_path
 from core.config.logging import init_logging, setup_flask_logging, Logger
 from api.routes.stats import stats_bp
+from api.routes.stats_repo import stats_repo_bp
 from api.routes.scheduler import scheduler_bp
 from api.routes.git_ai import git_ai_bp
 from api.routes.git_ai_worker import metrics_bp, cas_bp, oauth_bp, releases_bp
 from api.routes.notes import notes_rest_bp
-from api.routes.stats_repo import stats_repo_bp
 from core.config.swagger import swagger_setup
 
 try:
