@@ -19,6 +19,7 @@ from .models import (
 class StatsDatabase(BaseDatabase):
     def __init__(self):
         super().__init__()
+        self.init_db()
         self._ensure_stats_schema_compatibility()
 
     def _ensure_stats_schema_compatibility(self) -> None:
@@ -334,7 +335,15 @@ class StatsDatabase(BaseDatabase):
                             row.mixed_additions
                         ),
                         "human_additions": int(row.human_additions or 0),
-                        "ai_accepted_lines": self._metric_total(row.ai_accepted),
+                        "ai_accepted_lines": self._metric_total(
+                            row.ai_accepted
+                            if row.ai_accepted is not None
+                            else (
+                                row.ai_additions
+                                if row.ai_additions is not None
+                                else row.total_ai_additions
+                            )
+                        ),
                         "total_ai_additions_total": self._metric_total(
                             row.total_ai_additions
                         ),

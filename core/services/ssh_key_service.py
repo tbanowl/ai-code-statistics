@@ -1,4 +1,5 @@
 """SSH Key 管理服务"""
+
 import os
 import tempfile
 from typing import Dict, Optional
@@ -7,6 +8,7 @@ from cryptography.hazmat.backends import default_backend
 from base64 import b64encode, b64decode
 from core.config.logging import Logger
 from core.database.base import BaseDatabase, session_scope
+from core.database.models import gen_xid
 
 
 class SshKeyService:
@@ -19,7 +21,7 @@ class SshKeyService:
         Args:
             database: 数据库实例
         """
-        self.logger = Logger.get_logger('services.ssh_key')
+        self.logger = Logger.get_logger("services.ssh_key")
         self.database = BaseDatabase()
 
         # 获取加密密钥
@@ -32,13 +34,13 @@ class SshKeyService:
 
         优先从环境变量获取，如果没有则使用默认密钥
         """
-        env_key = os.environ.get('SSH_KEY_ENCRYPTION_KEY')
+        env_key = os.environ.get("SSH_KEY_ENCRYPTION_KEY")
         if env_key:
             # 确保值是 32 字节（URL 安全的 base64 编码）
             return env_key.encode()
         # 默认密钥（生产环境应该从配置文件获取）
         # 确保是 32 字节用于 Fernet
-        return b'kGg7mK8Pj3hNqV9wR2tYs5xCz6vL8mK3jP9hNqV9wR2='
+        return b"kGg7mK8Pj3hNqV9wR2tYs5xCz6vL8mK3jP9hNqV9wR2="
 
     def add_ssh_key(self, key_name: str, public_key: str, private_key: str) -> Dict:
         """
@@ -53,13 +55,12 @@ class SshKeyService:
             创建的 SSH Key 对象字典
         """
         from core.database.models import StatsSshKey
-        import xid
         import time
 
         # 加密私钥
         private_key_encrypted = self._encrypt_private_key(private_key)
 
-        key_id = xid.Xid().string()
+        key_id = gen_xid()
         now = int(time.time() * 1000)
 
         with session_scope(self.database.engine) as session:
@@ -69,16 +70,16 @@ class SshKeyService:
                 public_key=public_key,
                 private_key_encrypted=private_key_encrypted,
                 created_at=now,
-                updated_at=now
+                updated_at=now,
             )
             session.add(ssh_key)
             session.flush()
 
             return {
-                'id': ssh_key.id,
-                'key_name': ssh_key.key_name,
-                'public_key': ssh_key.public_key,
-                'created_at': ssh_key.created_at
+                "id": ssh_key.id,
+                "key_name": ssh_key.key_name,
+                "public_key": ssh_key.public_key,
+                "created_at": ssh_key.created_at,
             }
 
     def _encrypt_private_key(self, private_key: str) -> str:
@@ -92,11 +93,11 @@ class SshKeyService:
             加密后的私钥（base64 编码）
         """
         # 将字符串转换为字节
-        key_bytes = private_key.encode('utf-8')
+        key_bytes = private_key.encode("utf-8")
         # 使用 Fernet 加密
         encrypted = self.fernet.encrypt(key_bytes)
         # 返回 base64 编码的字符串
-        return b64encode(encrypted).decode('utf-8')
+        return b64encode(encrypted).decode("utf-8")
 
     def _decrypt_private_key(self, private_key_encrypted: str) -> str:
         """
@@ -109,11 +110,11 @@ class SshKeyService:
             明文私钥
         """
         # 将 base64 字符串转换为字节
-        encrypted_bytes = b64decode(private_key_encrypted.encode('utf-8'))
+        encrypted_bytes = b64decode(private_key_encrypted.encode("utf-8"))
         # 使用 Fernet 解密
         decrypted = self.fernet.decrypt(encrypted_bytes)
         # 返回字符串
-        return decrypted.decode('utf-8')
+        return decrypted.decode("utf-8")
 
     def get_ssh_key(self, key_id: str) -> Optional[Dict]:
         """
@@ -128,15 +129,17 @@ class SshKeyService:
         from core.database.models import StatsSshKey
 
         with session_scope(self.database.engine) as session:
-            ssh_key = session.query(StatsSshKey).filter(StatsSshKey.id == key_id).first()
+            ssh_key = (
+                session.query(StatsSshKey).filter(StatsSshKey.id == key_id).first()
+            )
             if not ssh_key:
                 return None
 
             return {
-                'id': ssh_key.id,
-                'key_name': ssh_key.key_name,
-                'public_key': ssh_key.public_key,
-                'created_at': ssh_key.created_at
+                "id": ssh_key.id,
+                "key_name": ssh_key.key_name,
+                "public_key": ssh_key.public_key,
+                "created_at": ssh_key.created_at,
             }
 
     def get_ssh_key_private(self, key_id: str) -> Optional[Dict]:
@@ -152,7 +155,9 @@ class SshKeyService:
         from core.database.models import StatsSshKey
 
         with session_scope(self.database.engine) as session:
-            ssh_key = session.query(StatsSshKey).filter(StatsSshKey.id == key_id).first()
+            ssh_key = (
+                session.query(StatsSshKey).filter(StatsSshKey.id == key_id).first()
+            )
             if not ssh_key:
                 return None
 
@@ -160,10 +165,10 @@ class SshKeyService:
             private_key = self._decrypt_private_key(ssh_key.private_key_encrypted)
 
             return {
-                'id': ssh_key.id,
-                'key_name': ssh_key.key_name,
-                'public_key': ssh_key.public_key,
-                'private_key': private_key
+                "id": ssh_key.id,
+                "key_name": ssh_key.key_name,
+                "public_key": ssh_key.public_key,
+                "private_key": private_key,
             }
 
     def list_ssh_keys(self) -> list:
@@ -179,10 +184,10 @@ class SshKeyService:
             ssh_keys = session.query(StatsSshKey).all()
             return [
                 {
-                    'id': key.id,
-                    'key_name': key.key_name,
-                    'public_key': key.public_key,
-                    'created_at': key.created_at
+                    "id": key.id,
+                    "key_name": key.key_name,
+                    "public_key": key.public_key,
+                    "created_at": key.created_at,
                 }
                 for key in ssh_keys
             ]
@@ -200,7 +205,9 @@ class SshKeyService:
         from core.database.models import StatsSshKey
 
         with session_scope(self.database.engine) as session:
-            ssh_key = session.query(StatsSshKey).filter(StatsSshKey.id == key_id).first()
+            ssh_key = (
+                session.query(StatsSshKey).filter(StatsSshKey.id == key_id).first()
+            )
             if not ssh_key:
                 return False
 
@@ -217,19 +224,19 @@ class SshKeyService:
         from core.config import load_config
 
         config = load_config()
-        blame_stats_config = config.get('blame_stats', {})
+        blame_stats_config = config.get("blame_stats", {})
 
-        key_name = blame_stats_config.get('default_ssh_key_name')
-        public_key = blame_stats_config.get('default_ssh_key_public')
-        private_key = blame_stats_config.get('default_ssh_key_private')
+        key_name = blame_stats_config.get("default_ssh_key_name")
+        public_key = blame_stats_config.get("default_ssh_key_public")
+        private_key = blame_stats_config.get("default_ssh_key_private")
 
         if not key_name or not public_key or not private_key:
             return None
 
         return {
-            'key_name': key_name,
-            'public_key': public_key,
-            'private_key': private_key
+            "key_name": key_name,
+            "public_key": public_key,
+            "private_key": private_key,
         }
 
     def get_ssh_key_for_repo(self, repo_ssh_key_id: Optional[str]) -> Optional[Dict]:
@@ -269,7 +276,7 @@ class SshKeyService:
 
         try:
             # 写入私钥
-            with os.fdopen(fd, 'w') as f:
+            with os.fdopen(fd, "w") as f:
                 f.write(private_key)
 
             # 设置文件权限为 600（仅所有者可读写）

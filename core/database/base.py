@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from core.config import load_config
 from core.config.logging import Logger
 
+
 class Base(DeclarativeBase):
     """SQLAlchemy 模型基类"""
 
@@ -56,12 +57,16 @@ class BaseDatabase:
 
     def __init__(self):
         self.config = load_config()
-        database_config = self.config.get('database')
+        database_config = self.config.get("database")
         if not database_config:
             raise Exception("数据库配置错误")
-        self.url = database_config.get('url')
-        self.echo = bool(database_config.get('echo', False))
-        self.logger = Logger.get_logger('database')
+        self.url = database_config.get("url")
+        echo_value = database_config.get("echo", False)
+        if isinstance(echo_value, str):
+            self.echo = echo_value.lower() in {"1", "true", "yes", "on"}
+        else:
+            self.echo = bool(echo_value)
+        self.logger = Logger.get_logger("database")
 
     @classmethod
     def get_shared_engine(cls, url: str, echo: bool = False) -> Engine:
@@ -88,14 +93,12 @@ class BaseDatabase:
         Base.metadata.create_all(self.engine)
         self.logger.info(f"数据库表结构初始化完成: {self.url}")
 
-
     def close(self) -> None:
         """关闭数据库连接（可选，通常应用关闭时调用）"""
         if BaseDatabase._shared_engine:
             BaseDatabase._shared_engine.dispose()
             BaseDatabase._shared_engine = None
             self.logger.info("数据库连接已关闭")
-    
 
     @contextmanager
     def session_scope(self):
@@ -118,5 +121,3 @@ class BaseDatabase:
             raise
         finally:
             session.close()
-
-

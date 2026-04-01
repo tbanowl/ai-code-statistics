@@ -6,11 +6,20 @@ SQLAlchemy ORM 模型定义
 """
 
 import time
-import uuid
+import secrets
 from typing import Any, Dict
-from sqlalchemy import String, BigInteger, Integer, Text, ForeignKey, JSON, Numeric, Index, UniqueConstraint
+from sqlalchemy import (
+    String,
+    BigInteger,
+    Integer,
+    Text,
+    ForeignKey,
+    JSON,
+    Numeric,
+    Index,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
-import xid
 from .base import Base
 
 
@@ -21,8 +30,7 @@ def now_ts() -> int:
 
 def gen_xid() -> str:
     """生成 XID 字符串"""
-    return xid.Xid().string()
-
+    return secrets.token_hex(10)
 
 
 class ModelBase(Base):
@@ -46,6 +54,7 @@ class MetricsEventsRaw(ModelBase):
     __tablename__ = "metrics_events_raw"
 
     id: Mapped[str] = mapped_column(String(20), primary_key=True, default=gen_xid)
+    batch_id: Mapped[str] = mapped_column(String(100), nullable=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
     event_count: Mapped[int] = mapped_column(Integer, nullable=False)
     payload_json: Mapped[str] = mapped_column(Text, nullable=False)
@@ -203,9 +212,7 @@ class MetricsEventErrors(ModelBase):
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
 
     # 添加索引
-    __table_args__ = (
-        Index("idx_raw_event_index", "raw_id", "event_index"),
-    )
+    __table_args__ = (Index("idx_raw_event_index", "raw_id", "event_index"),)
 
 
 # ============================================================================
@@ -412,9 +419,7 @@ class StatsSshKey(ModelBase):
 
     __tablename__ = "stats_ssh_keys"
 
-    __table_args__ = (
-        Index("idx_ssh_key_name", "key_name"),
-    )
+    __table_args__ = (Index("idx_ssh_key_name", "key_name"),)
 
     id: Mapped[str] = mapped_column(String(20), primary_key=True, default=gen_xid)
     key_name: Mapped[str] = mapped_column(Text, nullable=False, unique=True)

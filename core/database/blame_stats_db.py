@@ -1,8 +1,9 @@
 """Git Blame 统计数据库操作类"""
+
 import time
-import xid
 from core.config.logging import Logger
 from core.database.base import BaseDatabase, session_scope
+from core.database.models import gen_xid
 
 
 class BlameStatsDatabase(BaseDatabase):
@@ -16,7 +17,7 @@ class BlameStatsDatabase(BaseDatabase):
             database: 数据库实例
         """
         super().__init__()
-        self.logger = Logger.get_logger('database.blame_stats')
+        self.logger = Logger.get_logger("database.blame_stats")
 
     # ============================================================================
     # 仓库管理
@@ -36,9 +37,11 @@ class BlameStatsDatabase(BaseDatabase):
         from core.database.models import StatsRepository
 
         with self.session_scope() as session:
-            repo = session.query(StatsRepository).filter(
-                StatsRepository.id == repo_id
-            ).first()
+            repo = (
+                session.query(StatsRepository)
+                .filter(StatsRepository.id == repo_id)
+                .first()
+            )
 
             if not repo:
                 return False
@@ -61,9 +64,11 @@ class BlameStatsDatabase(BaseDatabase):
         from core.database.models import StatsRepository
 
         with self.session_scope() as session:
-            repo = session.query(StatsRepository).filter(
-                StatsRepository.id == repo_id
-            ).first()
+            repo = (
+                session.query(StatsRepository)
+                .filter(StatsRepository.id == repo_id)
+                .first()
+            )
 
             if not repo:
                 return False
@@ -82,16 +87,18 @@ class BlameStatsDatabase(BaseDatabase):
         from core.database.models import StatsRepository
 
         with self.session_scope() as session:
-            repos = session.query(StatsRepository).filter(
-                StatsRepository.repo_stats_flag == 1
-            ).all()
+            repos = (
+                session.query(StatsRepository)
+                .filter(StatsRepository.repo_stats_flag == 1)
+                .all()
+            )
 
             return [
                 {
-                    'id': repo.id,
-                    'repo_path': repo.repo_path,
-                    'repo_name': repo.repo_name,
-                    'ssh_key_id': repo.ssh_key_id
+                    "id": repo.id,
+                    "repo_path": repo.repo_path,
+                    "repo_name": repo.repo_name,
+                    "ssh_key_id": repo.ssh_key_id,
                 }
                 for repo in repos
             ]
@@ -109,9 +116,11 @@ class BlameStatsDatabase(BaseDatabase):
         from core.database.models import StatsRepository
 
         with self.session_scope() as session:
-            return session.query(StatsRepository).filter(
-                StatsRepository.id == repo_id
-            ).first()
+            return (
+                session.query(StatsRepository)
+                .filter(StatsRepository.id == repo_id)
+                .first()
+            )
 
     def get_repository_repo_url(self, repo_id: str) -> str:
         """
@@ -126,9 +135,11 @@ class BlameStatsDatabase(BaseDatabase):
         from core.database.models import StatsRepository
 
         with self.session_scope() as session:
-            repo = session.query(StatsRepository).filter(
-                StatsRepository.id == repo_id
-            ).first()
+            repo = (
+                session.query(StatsRepository)
+                .filter(StatsRepository.id == repo_id)
+                .first()
+            )
 
             if not repo:
                 return ""
@@ -151,8 +162,7 @@ class BlameStatsDatabase(BaseDatabase):
 
         with self.session_scope() as session:
             session.query(StatsBlameRepo).filter(
-                StatsBlameRepo.repo_id == repo_id,
-                StatsBlameRepo.stat_date == stat_date
+                StatsBlameRepo.repo_id == repo_id, StatsBlameRepo.stat_date == stat_date
             ).delete()
 
     def delete_daily_file_stats(self, repo_id: str, stat_date: int) -> None:
@@ -167,8 +177,7 @@ class BlameStatsDatabase(BaseDatabase):
 
         with self.session_scope() as session:
             session.query(StatsBlameFile).filter(
-                StatsBlameFile.repo_id == repo_id,
-                StatsBlameFile.stat_date == stat_date
+                StatsBlameFile.repo_id == repo_id, StatsBlameFile.stat_date == stat_date
             ).delete()
 
     def delete_daily_repo_contributor_stats(self, repo_id: str, stat_date: int) -> None:
@@ -184,7 +193,7 @@ class BlameStatsDatabase(BaseDatabase):
         with self.session_scope() as session:
             session.query(StatsBlameRepoContributor).filter(
                 StatsBlameRepoContributor.repo_id == repo_id,
-                StatsBlameRepoContributor.stat_date == stat_date
+                StatsBlameRepoContributor.stat_date == stat_date,
             ).delete()
 
     def delete_daily_file_contributor_stats(self, repo_id: str, stat_date: int) -> None:
@@ -200,7 +209,7 @@ class BlameStatsDatabase(BaseDatabase):
         with self.session_scope() as session:
             session.query(StatsBlameFileContributor).filter(
                 StatsBlameFileContributor.repo_id == repo_id,
-                StatsBlameFileContributor.stat_date == stat_date
+                StatsBlameFileContributor.stat_date == stat_date,
             ).delete()
 
     # ============================================================================
@@ -216,7 +225,7 @@ class BlameStatsDatabase(BaseDatabase):
         total_lines: int,
         ai_lines: int,
         non_ai_lines: int,
-        total_files: int
+        total_files: int,
     ) -> str:
         """
         保存仓库级 blame 统计结果
@@ -232,13 +241,12 @@ class BlameStatsDatabase(BaseDatabase):
         with self.session_scope() as session:
             # 先删除当天旧数据
             session.query(StatsBlameRepo).filter(
-                StatsBlameRepo.repo_id == repo_id,
-                StatsBlameRepo.stat_date == stat_date
+                StatsBlameRepo.repo_id == repo_id, StatsBlameRepo.stat_date == stat_date
             ).delete()
 
             # 插入新数据
             stats = StatsBlameRepo(
-                id=xid.Xid().string(),
+                id=gen_xid(),
                 repo_id=repo_id,
                 stat_date=stat_date,
                 commit_sha=commit_sha,
@@ -249,7 +257,7 @@ class BlameStatsDatabase(BaseDatabase):
                 ai_ratio=ai_ratio,
                 total_files=total_files,
                 created_at=now,
-                updated_at=now
+                updated_at=now,
             )
             session.add(stats)
             session.flush()
@@ -264,7 +272,7 @@ class BlameStatsDatabase(BaseDatabase):
         commit_sha: str,
         total_lines: int,
         ai_lines: int,
-        non_ai_lines: int
+        non_ai_lines: int,
     ) -> str:
         """
         保存文件级 blame 统计结果
@@ -282,12 +290,12 @@ class BlameStatsDatabase(BaseDatabase):
             session.query(StatsBlameFile).filter(
                 StatsBlameFile.repo_id == repo_id,
                 StatsBlameFile.stat_date == stat_date,
-                StatsBlameFile.file_path == file_path
+                StatsBlameFile.file_path == file_path,
             ).delete()
 
             # 插入新数据
             stats = StatsBlameFile(
-                id=xid.Xid().string(),
+                id=gen_xid(),
                 repo_id=repo_id,
                 stat_date=stat_date,
                 file_path=file_path,
@@ -297,7 +305,7 @@ class BlameStatsDatabase(BaseDatabase):
                 non_ai_lines=non_ai_lines,
                 ai_ratio=ai_ratio,
                 created_at=now,
-                updated_at=now
+                updated_at=now,
             )
             session.add(stats)
             session.flush()
@@ -313,7 +321,7 @@ class BlameStatsDatabase(BaseDatabase):
         contributor_email: str,
         ai_lines: int,
         non_ai_lines: int,
-        total_lines: int
+        total_lines: int,
     ) -> str:
         """
         保存仓库贡献者 blame 统计结果
@@ -330,12 +338,12 @@ class BlameStatsDatabase(BaseDatabase):
             session.query(StatsBlameRepoContributor).filter(
                 StatsBlameRepoContributor.repo_id == repo_id,
                 StatsBlameRepoContributor.stat_date == stat_date,
-                StatsBlameRepoContributor.contributor_id == contributor_id
+                StatsBlameRepoContributor.contributor_id == contributor_id,
             ).delete()
 
             # 插入新数据
             stats = StatsBlameRepoContributor(
-                id=xid.Xid().string(),
+                id=gen_xid(),
                 repo_id=repo_id,
                 stat_date=stat_date,
                 contributor_id=contributor_id,
@@ -345,7 +353,7 @@ class BlameStatsDatabase(BaseDatabase):
                 non_ai_lines=non_ai_lines,
                 total_lines=total_lines,
                 created_at=now,
-                updated_at=now
+                updated_at=now,
             )
             session.add(stats)
             session.flush()
@@ -363,7 +371,7 @@ class BlameStatsDatabase(BaseDatabase):
         contributor_email: str,
         ai_lines: int,
         non_ai_lines: int,
-        total_lines: int
+        total_lines: int,
     ) -> str:
         """
         保存文件贡献者 blame 统计结果
@@ -380,12 +388,12 @@ class BlameStatsDatabase(BaseDatabase):
             session.query(StatsBlameFileContributor).filter(
                 StatsBlameFileContributor.file_id == file_id,
                 StatsBlameFileContributor.stat_date == stat_date,
-                StatsBlameFileContributor.contributor_id == contributor_id
+                StatsBlameFileContributor.contributor_id == contributor_id,
             ).delete()
 
             # 插入新数据
             stats = StatsBlameFileContributor(
-                id=xid.Xid().string(),
+                id=gen_xid(),
                 file_id=file_id,
                 stat_date=stat_date,
                 repo_id=repo_id,
@@ -397,7 +405,7 @@ class BlameStatsDatabase(BaseDatabase):
                 non_ai_lines=non_ai_lines,
                 total_lines=total_lines,
                 created_at=now,
-                updated_at=now
+                updated_at=now,
             )
             session.add(stats)
             session.flush()
@@ -423,26 +431,26 @@ class BlameStatsDatabase(BaseDatabase):
             for stats in stats_list:
                 # 先删除当天旧数据
                 session.query(StatsBlameFileContributor).filter(
-                    StatsBlameFileContributor.file_id == stats['file_id'],
-                    StatsBlameFileContributor.stat_date == stats['stat_date'],
-                    StatsBlameFileContributor.contributor_id == stats['contributor_id']
+                    StatsBlameFileContributor.file_id == stats["file_id"],
+                    StatsBlameFileContributor.stat_date == stats["stat_date"],
+                    StatsBlameFileContributor.contributor_id == stats["contributor_id"],
                 ).delete()
 
                 # 插入新数据
                 stat = StatsBlameFileContributor(
-                    id=xid.Xid().string(),
-                    file_id=stats['file_id'],
-                    stat_date=stats['stat_date'],
-                    repo_id=stats['repo_id'],
-                    file_path=stats['file_path'],
-                    contributor_id=stats['contributor_id'],
-                    contributor_name=stats['contributor_name'],
-                    contributor_email=stats['contributor_email'],
-                    ai_lines=stats['ai_lines'],
-                    non_ai_lines=stats['non_ai_lines'],
-                    total_lines=stats['total_lines'],
+                    id=gen_xid(),
+                    file_id=stats["file_id"],
+                    stat_date=stats["stat_date"],
+                    repo_id=stats["repo_id"],
+                    file_path=stats["file_path"],
+                    contributor_id=stats["contributor_id"],
+                    contributor_name=stats["contributor_name"],
+                    contributor_email=stats["contributor_email"],
+                    ai_lines=stats["ai_lines"],
+                    non_ai_lines=stats["non_ai_lines"],
+                    total_lines=stats["total_lines"],
                     created_at=now,
-                    updated_at=now
+                    updated_at=now,
                 )
                 session.add(stat)
                 count += 1
@@ -469,18 +477,22 @@ class BlameStatsDatabase(BaseDatabase):
         # 通过 email 查找
         if email:
             with self.session_scope() as session:
-                contrib = session.query(StatsContributor).filter(
-                    StatsContributor.email == email
-                ).first()
+                contrib = (
+                    session.query(StatsContributor)
+                    .filter(StatsContributor.email == email)
+                    .first()
+                )
                 if contrib:
                     return contrib.id
 
         # 通过 name 和 email 组合查找
         contrib_uid = f"{name}:{email}" if email else name
         with self.session_scope() as session:
-            contrib = session.query(StatsContributor).filter(
-                StatsContributor.contributor_uid == contrib_uid
-            ).first()
+            contrib = (
+                session.query(StatsContributor)
+                .filter(StatsContributor.contributor_uid == contrib_uid)
+                .first()
+            )
             if contrib:
                 return contrib.id
 
@@ -488,12 +500,12 @@ class BlameStatsDatabase(BaseDatabase):
         now = int(time.time() * 1000)
         with self.session_scope() as session:
             contrib = StatsContributor(
-                id=xid.Xid().string(),
+                id=gen_xid(),
                 contributor_uid=contrib_uid,
                 name=name,
                 email=email,
                 created_at=now,
-                updated_at=now
+                updated_at=now,
             )
             session.add(contrib)
             session.flush()
@@ -504,7 +516,9 @@ class BlameStatsDatabase(BaseDatabase):
     # 查询方法
     # ============================================================================
 
-    def get_repo_blame_stats(self, repo_id: str, start_date: int | None, end_date: int | None) -> list:
+    def get_repo_blame_stats(
+        self, repo_id: str, start_date: int | None, end_date: int | None
+    ) -> list:
         """
         查询仓库归因统计数据
 
@@ -534,18 +548,18 @@ class BlameStatsDatabase(BaseDatabase):
 
             return [
                 {
-                    'id': s.id,
-                    'repo_id': s.repo_id,
-                    'stat_date': s.stat_date,
-                    'commit_sha': s.commit_sha,
-                    'branch': s.branch,
-                    'total_lines': s.total_lines,
-                    'ai_lines': s.ai_lines,
-                    'non_ai_lines': s.non_ai_lines,
-                    'ai_ratio': float(s.ai_ratio) if s.ai_ratio else 0.0,
-                    'total_files': s.total_files,
-                    'created_at': s.created_at,
-                    'updated_at': s.updated_at
+                    "id": s.id,
+                    "repo_id": s.repo_id,
+                    "stat_date": s.stat_date,
+                    "commit_sha": s.commit_sha,
+                    "branch": s.branch,
+                    "total_lines": s.total_lines,
+                    "ai_lines": s.ai_lines,
+                    "non_ai_lines": s.non_ai_lines,
+                    "ai_ratio": float(s.ai_ratio) if s.ai_ratio else 0.0,
+                    "total_files": s.total_files,
+                    "created_at": s.created_at,
+                    "updated_at": s.updated_at,
                 }
                 for s in stats
             ]
@@ -577,20 +591,35 @@ class BlameStatsDatabase(BaseDatabase):
 
             return [
                 {
-                    'id': s.id,
-                    'repo_id': s.repo_id,
-                    'stat_date': s.stat_date,
-                    'file_path': s.file_path,
-                    'commit_sha': s.commit_sha,
-                    'total_lines': s.total_lines,
-                    'ai_lines': s.ai_lines,
-                    'non_ai_lines': s.non_ai_lines,
-                    'ai_ratio': float(s.ai_ratio) if s.ai_ratio else 0.0,
-                    'created_at': s.created_at,
-                    'updated_at': s.updated_at
+                    "id": s.id,
+                    "repo_id": s.repo_id,
+                    "stat_date": s.stat_date,
+                    "file_path": s.file_path,
+                    "commit_sha": s.commit_sha,
+                    "total_lines": s.total_lines,
+                    "ai_lines": s.ai_lines,
+                    "non_ai_lines": s.non_ai_lines,
+                    "ai_ratio": float(s.ai_ratio) if s.ai_ratio else 0.0,
+                    "created_at": s.created_at,
+                    "updated_at": s.updated_at,
                 }
                 for s in stats
             ]
+
+    def get_git_notes_batch(self, commit_shas: list[str]) -> dict[str, str]:
+        if not commit_shas:
+            return {}
+
+        from core.database.models import AuthorshipNotes
+
+        with self.session_scope() as session:
+            notes = (
+                session.query(AuthorshipNotes)
+                .filter(AuthorshipNotes.commit_sha.in_(commit_shas))
+                .all()
+            )
+
+            return {note.commit_sha: note.note_content for note in notes}
 
     def get_repo_contributor_stats(self, repo_id: str, stat_date: int | None) -> list:
         """
@@ -619,17 +648,17 @@ class BlameStatsDatabase(BaseDatabase):
 
             return [
                 {
-                    'id': s.id,
-                    'repo_id': s.repo_id,
-                    'stat_date': s.stat_date,
-                    'contributor_id': s.contributor_id,
-                    'contributor_name': s.contributor_name,
-                    'contributor_email': s.contributor_email,
-                    'ai_lines': s.ai_lines,
-                    'non_ai_lines': s.non_ai_lines,
-                    'total_lines': s.total_lines,
-                    'created_at': s.created_at,
-                    'updated_at': s.updated_at
+                    "id": s.id,
+                    "repo_id": s.repo_id,
+                    "stat_date": s.stat_date,
+                    "contributor_id": s.contributor_id,
+                    "contributor_name": s.contributor_name,
+                    "contributor_email": s.contributor_email,
+                    "ai_lines": s.ai_lines,
+                    "non_ai_lines": s.non_ai_lines,
+                    "total_lines": s.total_lines,
+                    "created_at": s.created_at,
+                    "updated_at": s.updated_at,
                 }
                 for s in stats
             ]

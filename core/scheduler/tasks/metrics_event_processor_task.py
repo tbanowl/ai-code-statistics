@@ -17,25 +17,34 @@ class MetricsEventProcessorTask(BaseTask):
         self.logger.info("开始执行 Metrics 事件处理任务")
 
         # 获取配置
-        batch_size = self.config.get("scheduler", {})\
-            .get("jobs", {})\
-            .get("metrics_event_processor", {})\
+        batch_size = (
+            self.config.get("scheduler", {})
+            .get("jobs", {})
+            .get("metrics_event_processor", {})
             .get("batch_size", 100)
+        )
 
-        # timeout_minutes = self.config.get("scheduler", {})\
-        #     .get("jobs", {})\
-        #     .get("metrics_event_processor", {})\
-        #     .get("timeout_minutes", 10)
+        timeout_minutes = (
+            self.config.get("scheduler", {})
+            .get("jobs", {})
+            .get("metrics_event_processor", {})
+            .get("timeout_minutes", 10)
+        )
 
         # 并发安全检查
         from core.database import SchedulerDatabase, MetricsDatabase
-        # scheduler_db = SchedulerDatabase()
 
-        # running_task = scheduler_db.has_running_task("metrics_event_processor", timeout_minutes)
+        scheduler_db = SchedulerDatabase()
 
-        # if running_task:
-        #     self.logger.info(f"已有任务在处理中（id={running_task['id']}），跳过本次执行")
-        #     return {"success": True, "skipped": True, "skip_reason": "running_task"}
+        running_task = scheduler_db.has_running_task(
+            "metrics_event_processor", timeout_minutes
+        )
+
+        if running_task:
+            self.logger.info(
+                f"已有任务在处理中（id={running_task['id']}），跳过本次执行"
+            )
+            return {"success": True, "skipped": True, "skip_reason": "running_task"}
 
         # # 检查是否有超时任务需要恢复
         # pending_or_running_task = scheduler_db.get_running_task_execution("metrics_event_processor")
@@ -61,14 +70,16 @@ class MetricsEventProcessorTask(BaseTask):
             "failed": 0,
             "total_events": 0,
             "error_events": 0,
-            "batches": 0
+            "batches": 0,
         }
 
         service = MetricsService()
 
         while True:
             # 获取下一批记录
-            pending_records = db.get_pending_raw_records(limit=batch_size, last_id=last_id)
+            pending_records = db.get_pending_raw_records(
+                limit=batch_size, last_id=last_id
+            )
 
             if not pending_records:
                 break
@@ -78,9 +89,9 @@ class MetricsEventProcessorTask(BaseTask):
 
             # 处理这批记录
             for record in pending_records:
-                raw_id = record['id']
-                payload_json = record['payload_json']
-                event_count = record['event_count']
+                raw_id = record["id"]
+                payload_json = record["payload_json"]
+                event_count = record["event_count"]
 
                 # 标记为处理中
                 if not db.mark_raw_extracting(raw_id):
@@ -100,12 +111,16 @@ class MetricsEventProcessorTask(BaseTask):
                     else:
                         db.mark_raw_extracted(raw_id, success=False)
                         stats["failed"] += 1
-                        self.logger.error(f"处理失败: raw_id={raw_id}, error={result.get('error')}")
+                        self.logger.error(
+                            f"处理失败: raw_id={raw_id}, error={result.get('error')}"
+                        )
 
                 except Exception as e:
                     db.mark_raw_extracted(raw_id, success=False)
                     stats["failed"] += 1
-                    self.logger.error(f"处理异常: raw_id={raw_id}, error={str(e)}", exc_info=True)
+                    self.logger.error(
+                        f"处理异常: raw_id={raw_id}, error={str(e)}", exc_info=True
+                    )
 
                 # 更新 last_id 游标
                 last_id = raw_id
@@ -130,5 +145,5 @@ class MetricsEventProcessorTask(BaseTask):
             "failed": stats["failed"],
             "total_events": stats["total_events"],
             "error_events": stats["error_events"],
-            "batches": stats["batches"]
+            "batches": stats["batches"],
         }

@@ -61,12 +61,18 @@ app.register_blueprint(notes_rest_bp)
 # 初始化 Swagger（如果配置启用）
 swagger_setup(app, config, main_logger)
 
+
+def _running_under_pytest() -> bool:
+    return "pytest" in sys.modules
+
+
 # 启动调度器（如果配置启用）
 if config.get("scheduler", {}).get("enabled", False):
     from core.scheduler import AICodeScheduler
 
     scheduler = AICodeScheduler(config)
-    scheduler.start()
+    if not _running_under_pytest():
+        scheduler.start()
     # 将 scheduler 实例存储到 app config 中，供 API 路由使用
     app.config["_scheduler"] = scheduler
 else:
@@ -111,4 +117,3 @@ elif __name__ == "app":
     host = web_config.get("host", "0.0.0.0")
     main_logger.info(f"访问地址: http://{host}:{port}")
     main_logger.info(f"健康检查: http://{host}:{port}/health")
-

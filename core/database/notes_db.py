@@ -14,15 +14,19 @@ from .models import AuthorshipNotes, gen_xid
 class NotesDatabase(BaseDatabase):
     """Authorship Notes 数据库操作类"""
 
+    def __init__(self):
+        super().__init__()
+        self.init_db()
+
     def create_or_update_note(
         self,
         repo_url: str,
         branch: str,
         commit_sha: str,
-        note_blob_oid: str,
+        note_blob_oid: str | None,
         content: str,
         author_name: str,
-        author_email: str
+        author_email: str,
     ) -> AuthorshipNotes:
         """创建或更新单个 note
 
@@ -41,14 +45,14 @@ class NotesDatabase(BaseDatabase):
         with session_scope(self.engine) as session:
             stmt = select(AuthorshipNotes).where(
                 AuthorshipNotes.repo_url == repo_url,
-                AuthorshipNotes.commit_sha == commit_sha
+                AuthorshipNotes.commit_sha == commit_sha,
             )
             result = session.execute(stmt).scalar_one_or_none()
 
             if result:
                 # 更新现有记录
                 result.branch = branch
-                result.note_blob_oid = note_blob_oid
+                setattr(result, "note_blob_oid", note_blob_oid)
                 result.note_content = content
                 result.author_name = author_name
                 result.author_email = author_email
@@ -62,18 +66,14 @@ class NotesDatabase(BaseDatabase):
                     note_blob_oid=note_blob_oid,
                     note_content=content,
                     author_name=author_name,
-                    author_email=author_email
+                    author_email=author_email,
                 )
                 session.add(note)
 
             session.flush()
             return session.execute(stmt).scalar_one()
 
-    def get_note(
-        self,
-        repo_url: str,
-        commit_sha: str
-    ) -> Optional[AuthorshipNotes]:
+    def get_note(self, repo_url: str, commit_sha: str) -> Optional[AuthorshipNotes]:
         """获取单个 note
 
         Args:
@@ -86,15 +86,11 @@ class NotesDatabase(BaseDatabase):
         with session_scope(self.engine) as session:
             stmt = select(AuthorshipNotes).where(
                 AuthorshipNotes.repo_url == repo_url,
-                AuthorshipNotes.commit_sha == commit_sha
+                AuthorshipNotes.commit_sha == commit_sha,
             )
             return session.execute(stmt).scalar_one_or_none()
 
-    def batch_get_notes(
-        self,
-        repo_url: str,
-        commit_shas: List[str]
-    ) -> Dict[str, List]:
+    def batch_get_notes(self, repo_url: str, commit_shas: List[str]) -> Dict[str, List]:
         """批量获取 notes
 
         Args:
@@ -110,27 +106,20 @@ class NotesDatabase(BaseDatabase):
         with session_scope(self.engine) as session:
             stmt = select(AuthorshipNotes).where(
                 AuthorshipNotes.repo_url == repo_url,
-                AuthorshipNotes.commit_sha.in_(commit_shas)
+                AuthorshipNotes.commit_sha.in_(commit_shas),
             )
             results = session.execute(stmt).scalars().all()
 
             found_shas = set(note.commit_sha for note in results)
             notes = [
-                {
-                    "commit_sha": note.commit_sha,
-                    "content": note.note_content
-                }
+                {"commit_sha": note.commit_sha, "content": note.note_content}
                 for note in results
             ]
             missing = [sha for sha in commit_shas if sha not in found_shas]
 
         return {"notes": notes, "missing": missing}
 
-    def batch_push_notes(
-        self,
-        repo_url: str,
-        notes_data: List[Dict]
-    ) -> Dict[str, int]:
+    def batch_push_notes(self, repo_url: str, notes_data: List[Dict]) -> Dict[str, int]:
         """批量推送（创建/更新）notes
 
         Args:
@@ -156,11 +145,17 @@ class NotesDatabase(BaseDatabase):
                     # 更新
                     stmt = select(AuthorshipNotes).where(
                         AuthorshipNotes.repo_url == repo_url,
-                        AuthorshipNotes.commit_sha == commit_sha
+                        AuthorshipNotes.commit_sha == commit_sha,
                     )
                     note = session.execute(stmt).scalar_one()
                     note.branch = note_data["branch"]
-                    note.note_blob_oid = note_data["note_blob_oid"]
+                    setattr(
+                        note,
+                        "note_blob_oid",
+                        note_data.get(
+                            "original_commit_sha", note_data.get("note_blob_oid")
+                        ),
+                    )
                     note.note_content = note_data["content"]
                     note.author_name = note_data["author_name"]
                     note.author_email = note_data["author_email"]
@@ -172,10 +167,12 @@ class NotesDatabase(BaseDatabase):
                         repo_url=repo_url,
                         branch=note_data["branch"],
                         commit_sha=commit_sha,
-                        note_blob_oid=note_data.get("note_blob_oid"),
+                        note_blob_oid=note_data.get(
+                            "original_commit_sha", note_data.get("note_blob_oid")
+                        ),
                         note_content=note_data["content"],
                         author_name=note_data["author_name"],
-                        author_email=note_data["author_email"]
+                        author_email=note_data["author_email"],
                     )
                     session.add(note)
                     existing_shas.add(commit_sha)
@@ -193,9 +190,11 @@ class NotesDatabase(BaseDatabase):
             list: 提交 SHA 列表
         """
         with session_scope(self.engine) as session:
-            stmt = select(AuthorshipNotes.commit_sha).where(
-                AuthorshipNotes.repo_url == repo_url
-            ).order_by(AuthorshipNotes.commit_sha)
+            stmt = (
+                select(AuthorshipNotes.commit_sha)
+                .where(AuthorshipNotes.repo_url == repo_url)
+                .order_by(AuthorshipNotes.commit_sha)
+            )
             return list(session.execute(stmt).scalars().all())
 
     def search_notes(self, repo_url: str, pattern: str) -> List[str]:
@@ -211,6 +210,6 @@ class NotesDatabase(BaseDatabase):
         with session_scope(self.engine) as session:
             stmt = select(AuthorshipNotes.commit_sha).where(
                 AuthorshipNotes.repo_url == repo_url,
-                AuthorshipNotes.note_content.like(f"%{pattern}%")
+                AuthorshipNotes.note_content.like(f"%{pattern}%"),
             )
             return list(session.execute(stmt).scalars().all())

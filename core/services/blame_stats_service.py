@@ -1,4 +1,6 @@
 """Git Blame 统计服务"""
+
+import json
 import os
 import subprocess
 import re
@@ -10,6 +12,7 @@ from core.config.logging import Logger
 @dataclass
 class BlameLineResult:
     """单行 blame 分析结果"""
+
     line_num: int
     commit_sha: str
     author: str
@@ -19,18 +22,22 @@ class BlameLineResult:
 @dataclass
 class FileBlameResult:
     """文件 blame 分析结果"""
+
     file_path: str
     total_lines: int
     ai_lines: int
     non_ai_lines: int
     commit_sha: str
     # 按贡献者统计
-    contributor_stats: Dict[str, Dict[str, int]]  # {contributor_id: {ai: n, non_ai: m, total: t}}
+    contributor_stats: Dict[
+        str, Dict[str, int]
+    ]  # {contributor_id: {ai: n, non_ai: m, total: t}}
 
 
 @dataclass
 class RepoBlameResult:
     """仓库 blame 分析结果"""
+
     stat_date: int
     commit_sha: str
     branch: str
@@ -48,13 +55,44 @@ class BlameStatsService:
 
     # 默认代码文件扩展名
     CODE_EXTENSIONS = [
-        '.py', '.js', '.ts', '.jsx', '.tsx',
-        '.java', '.go', '.rs', '.c', '.cpp', '.h', '.hpp',
-        '.cs', '.php', '.rb', '.swift', '.kt', '.scala',
-        '.sh', '.bash', '.zsh', '.ps1',
-        '.sql', '.json', '.yaml', '.yml', '.toml', '.xml',
-        '.html', '.css', '.scss', '.less', '.vue', '.svelte',
-        '.md', '.txt', '.rst', '.asciidoc'
+        ".py",
+        ".js",
+        ".ts",
+        ".jsx",
+        ".tsx",
+        ".java",
+        ".go",
+        ".rs",
+        ".c",
+        ".cpp",
+        ".h",
+        ".hpp",
+        ".cs",
+        ".php",
+        ".rb",
+        ".swift",
+        ".kt",
+        ".scala",
+        ".sh",
+        ".bash",
+        ".zsh",
+        ".ps1",
+        ".sql",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".toml",
+        ".xml",
+        ".html",
+        ".css",
+        ".scss",
+        ".less",
+        ".vue",
+        ".svelte",
+        ".md",
+        ".txt",
+        ".rst",
+        ".asciidoc",
     ]
 
     def __init__(self, database):
@@ -64,7 +102,7 @@ class BlameStatsService:
         Args:
             database: 数据库实例
         """
-        self.logger = Logger.get_logger('services.blame_stats')
+        self.logger = Logger.get_logger("services.blame_stats")
         self.database = database
 
     def analyze_repository(
@@ -72,7 +110,7 @@ class BlameStatsService:
         repo_url: str,
         repo_dir: str,
         stat_date: int,
-        file_filter: Optional[Dict] = None
+        file_filter: Optional[Dict] = None,
     ) -> Optional[RepoBlameResult]:
         """
         分析整个仓库
@@ -89,6 +127,7 @@ class BlameStatsService:
         try:
             # 获取当前提交 SHA 和分支
             from core.services.git_clone_service import GitCloneService
+
             git_service = GitCloneService()
 
             commit_sha = git_service.get_current_commit_sha(repo_dir)
@@ -112,16 +151,12 @@ class BlameStatsService:
             files_results = []
             contributor_stats = {}
 
-            # 批量查询 notes 缓存
-            notes_cache = self._preload_notes(repo_url, commit_sha, files)
-
             for idx, file_path in enumerate(files, 1):
                 if idx % 100 == 0:
                     self.logger.info(f"处理进度: {idx}/{len(files)}")
 
                 result = self.analyze_file_blame(
-                    repo_url, file_path, repo_dir,
-                    commit_sha, notes_cache.get(file_path, {})
+                    repo_url, file_path, repo_dir, commit_sha
                 )
 
                 if result:
@@ -134,17 +169,23 @@ class BlameStatsService:
                     for contrib_id, stats in result.contributor_stats.items():
                         if contrib_id not in contributor_stats:
                             contributor_stats[contrib_id] = {
-                                'ai_lines': 0,
-                                'non_ai_lines': 0,
-                                'total_lines': 0
+                                "ai_lines": 0,
+                                "non_ai_lines": 0,
+                                "total_lines": 0,
                             }
-                        contributor_stats[contrib_id]['ai_lines'] += stats['ai_lines']
-                        contributor_stats[contrib_id]['non_ai_lines'] += stats['non_ai_lines']
-                        contributor_stats[contrib_id]['total_lines'] += stats['total_lines']
+                        contributor_stats[contrib_id]["ai_lines"] += stats["ai_lines"]
+                        contributor_stats[contrib_id]["non_ai_lines"] += stats[
+                            "non_ai_lines"
+                        ]
+                        contributor_stats[contrib_id]["total_lines"] += stats[
+                            "total_lines"
+                        ]
 
             ai_ratio = (total_ai_lines / total_lines * 100) if total_lines > 0 else 0.0
 
-            self.logger.info(f"统计完成: 总行数 {total_lines}, AI 行数 {total_ai_lines}, 非 AI 行数 {total_non_ai_lines}")
+            self.logger.info(
+                f"统计完成: 总行数 {total_lines}, AI 行数 {total_ai_lines}, 非 AI 行数 {total_non_ai_lines}"
+            )
 
             return RepoBlameResult(
                 stat_date=stat_date,
@@ -155,7 +196,7 @@ class BlameStatsService:
                 non_ai_lines=total_non_ai_lines,
                 total_files=len(files_results),
                 files_results=files_results,
-                contributor_stats=contributor_stats
+                contributor_stats=contributor_stats,
             )
 
         except Exception as e:
@@ -178,10 +219,14 @@ class BlameStatsService:
 
         # 从 notes 表加载当前提交的 notes
         with self.database.session_scope() as session:
-            notes_list = session.query(AuthorshipNotes).filter(
-                AuthorshipNotes.repo_url == repo_url,
-                AuthorshipNotes.commit_sha == commit_sha
-            ).all()
+            notes_list = (
+                session.query(AuthorshipNotes)
+                .filter(
+                    AuthorshipNotes.repo_url == repo_url,
+                    AuthorshipNotes.commit_sha == commit_sha,
+                )
+                .all()
+            )
 
             # 解析 notes 内容，构建缓存
             cache = {}
@@ -208,16 +253,16 @@ class BlameStatsService:
 
         result = {}
         try:
-            lines = content.strip().split('\n')
+            lines = content.strip().split("\n")
             for line in lines:
-                if not line or line.startswith('#'):
+                if not line or line.startswith("#"):
                     continue
 
-                parts = line.split(',')
+                parts = line.split(",")
                 if len(parts) >= 3:
                     file_path = parts[0].strip()
                     line_num = int(parts[1].strip())
-                    is_ai = parts[2].strip().lower() == 'true'
+                    is_ai = parts[2].strip().lower() == "true"
 
                     if file_path not in result:
                         result[file_path] = {}
@@ -228,7 +273,87 @@ class BlameStatsService:
 
         return result
 
-    def _filter_files(self, repo_dir: str, file_filter: Optional[Dict] = None) -> List[str]:
+    def _parse_line_ranges(self, ranges_str: str) -> List[Tuple[int, int]]:
+        ranges = []
+        for part in ranges_str.split(","):
+            part = part.strip()
+            if not part:
+                continue
+
+            if "-" in part:
+                start, end = map(int, part.split("-", 1))
+                ranges.append((start, end))
+            else:
+                line_num = int(part)
+                ranges.append((line_num, line_num))
+
+        return ranges
+
+    def _parse_git_note_content(self, note_content: str) -> Tuple[Dict, Dict]:
+        lines = note_content.split("\n")
+
+        try:
+            divider_index = lines.index("---")
+        except ValueError as exc:
+            raise ValueError("Invalid AuthorshipLog: missing '---'") from exc
+
+        file_attestations = {}
+        current_file = None
+
+        for line in lines[:divider_index]:
+            if not line.strip():
+                continue
+
+            if not line.startswith("  "):
+                current_file = line.strip().strip('"')
+                file_attestations[current_file] = {}
+                continue
+
+            if current_file is None:
+                continue
+
+            parts = line.strip().split(" ", 1)
+            if len(parts) != 2:
+                continue
+
+            prompt_hash, range_text = parts
+            file_attestations[current_file][prompt_hash] = self._parse_line_ranges(
+                range_text
+            )
+
+        json_content = "\n".join(lines[divider_index + 1 :]).strip()
+        metadata = json.loads(json_content) if json_content else {}
+
+        return file_attestations, metadata.get("prompts", {})
+
+    def _is_ai_line(
+        self,
+        line_num: int,
+        file_path: str,
+        commit_sha: str,
+        notes_cache: Dict[str, Tuple[Dict, Dict]],
+    ) -> Tuple[bool, Optional[str]]:
+        note_data = notes_cache.get(commit_sha)
+        if not note_data:
+            return False, None
+
+        attestations, prompts = note_data
+        file_attestations = attestations.get(file_path)
+        if not file_attestations:
+            return False, None
+
+        for prompt_hash, ranges in file_attestations.items():
+            for start, end in ranges:
+                if start <= line_num <= end:
+                    prompt_info = prompts.get(prompt_hash, {})
+                    agent_id = prompt_info.get("agent_id", {})
+                    return True, agent_id.get("tool", "unknown")
+
+        return False, None
+
+    def _filter_files(
+        self, repo_dir: str, file_filter: Optional[Dict] = None
+    ) -> List[str]:
         """
         根据配置过滤文件
 
@@ -245,21 +370,25 @@ class BlameStatsService:
         all_files = git_service.list_files(repo_dir)
 
         if not file_filter:
-            file_filter = {'enabled': False, 'mode': 'code_only', 'extensions': []}
+            file_filter = {"enabled": False, "mode": "code_only", "extensions": []}
 
-        if not file_filter.get('enabled', False):
+        if not file_filter.get("enabled", False):
             # 默认只统计代码文件
             return [f for f in all_files if self._is_code_file(f)]
 
-        mode = file_filter.get('mode', 'code_only')
+        mode = file_filter.get("mode", "code_only")
 
-        if mode == 'all':
+        if mode == "all":
             return all_files
-        elif mode == 'code_only':
+        elif mode == "code_only":
             return [f for f in all_files if self._is_code_file(f)]
-        elif mode == 'custom':
-            custom_extensions = file_filter.get('extensions', [])
-            return [f for f in all_files if any(f.endswith(ext) for ext in custom_extensions)]
+        elif mode == "custom":
+            custom_extensions = file_filter.get("extensions", [])
+            return [
+                f
+                for f in all_files
+                if any(f.endswith(ext) for ext in custom_extensions)
+            ]
         else:
             return [f for f in all_files if self._is_code_file(f)]
 
@@ -281,8 +410,8 @@ class BlameStatsService:
         file_path: str,
         repo_dir: str,
         commit_sha: str,
-        notes_cache: Dict[int, bool],
-        rel_path: Optional[str] = None
+        notes_cache: Optional[Dict[str, Tuple[Dict, Dict]]] = None,
+        rel_path: Optional[str] = None,
     ) -> Optional[FileBlameResult]:
         """
         分析单个文件
@@ -302,57 +431,59 @@ class BlameStatsService:
             if rel_path is None:
                 rel_path = os.path.relpath(file_path, repo_dir)
 
-            # 执行 git blame --line-porcelain
-            result = subprocess.run(
-                ['git', 'blame', '--line-porcelain', rel_path],
-                cwd=repo_dir,
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
+            blame_output = self._run_git_blame(repo_dir, rel_path)
+            blame_data = self._parse_blame_porcelain(blame_output)
 
-            if result.returncode != 0:
-                self.logger.warning(f"执行 git blame 失败: {rel_path}")
+            if not blame_data:
                 return None
 
-            # 解析 blame 输出
-            blame_output = result.stdout
-            line_results = self._parse_blame_output(blame_output)
+            if notes_cache is None:
+                notes_cache = {}
+                notes_dict = {}
+                if self.database and hasattr(self.database, "get_git_notes_batch"):
+                    unique_commits = list(
+                        {line["commit"] for line in blame_data.values()}
+                    )
+                    notes_dict = self.database.get_git_notes_batch(unique_commits)
 
-            if not line_results:
-                return None
+                for blamed_commit, note_content in notes_dict.items():
+                    try:
+                        notes_cache[blamed_commit] = self._parse_git_note_content(
+                            note_content
+                        )
+                    except Exception as exc:
+                        self.logger.warning(
+                            f"Failed to parse note for {blamed_commit}: {exc}"
+                        )
 
-            # 判断每行是否为 AI 代码
-            total_lines = len(line_results)
+            total_lines = len(blame_data)
             ai_lines = 0
             non_ai_lines = 0
             contributor_stats = {}
 
-            for line_result in line_results:
-                # 检查 notes 缓存
-                is_ai = notes_cache.get(line_result.line_num, False)
+            for line_num, line_info in blame_data.items():
+                is_ai, ai_author = self._is_ai_line(
+                    line_num, rel_path, line_info["commit"], notes_cache
+                )
+                author = ai_author if is_ai else line_info["author"]
 
                 if is_ai:
                     ai_lines += 1
                 else:
                     non_ai_lines += 1
 
-                # 按贡献者统计
-                contrib_id = line_result.commit_sha
-                if contrib_id not in contributor_stats:
-                    contributor_stats[contrib_id] = {
-                        'ai_lines': 0,
-                        'non_ai_lines': 0,
-                        'total_lines': 0
+                if author not in contributor_stats:
+                    contributor_stats[author] = {
+                        "ai_lines": 0,
+                        "non_ai_lines": 0,
+                        "total_lines": 0,
                     }
 
                 if is_ai:
-                    contributor_stats[contrib_id]['ai_lines'] += 1
+                    contributor_stats[author]["ai_lines"] += 1
                 else:
-                    contributor_stats[contrib_id]['non_ai_lines'] += 1
-                contributor_stats[contrib_id]['total_lines'] += 1
-
-            ai_ratio = (ai_lines / total_lines * 100) if total_lines > 0 else 0.0
+                    contributor_stats[author]["non_ai_lines"] += 1
+                contributor_stats[author]["total_lines"] += 1
 
             return FileBlameResult(
                 file_path=rel_path,
@@ -360,7 +491,7 @@ class BlameStatsService:
                 ai_lines=ai_lines,
                 non_ai_lines=non_ai_lines,
                 commit_sha=commit_sha,
-                contributor_stats=contributor_stats
+                contributor_stats=contributor_stats,
             )
 
         except subprocess.TimeoutExpired:
@@ -369,6 +500,51 @@ class BlameStatsService:
         except Exception as e:
             self.logger.error(f"分析文件失败: {rel_path}, 错误: {e}")
             return None
+
+    def _run_git_blame(self, repo_dir: str, rel_path: str) -> str:
+        result = subprocess.run(
+            ["git", "blame", "--line-porcelain", rel_path],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"执行 git blame 失败: {rel_path}")
+        return result.stdout
+
+    def _parse_blame_porcelain(self, blame_output: str) -> Dict[int, Dict[str, str]]:
+        lines = blame_output.split("\n")
+        result = {}
+        i = 0
+
+        while i < len(lines):
+            line = lines[i].strip()
+            if not line:
+                i += 1
+                continue
+
+            parts = line.split()
+            if len(parts) >= 3 and re.fullmatch(r"[0-9a-f]{6,40}", parts[0]):
+                commit_sha = parts[0]
+                final_line = int(parts[2])
+                author = "Unknown"
+                i += 1
+
+                while i < len(lines) and not lines[i].startswith("\t"):
+                    if lines[i].startswith("author "):
+                        author = lines[i][7:]
+                    i += 1
+
+                if i < len(lines) and lines[i].startswith("\t"):
+                    i += 1
+
+                result[final_line] = {"commit": commit_sha, "author": author}
+                continue
+
+            i += 1
+
+        return result
 
     def _parse_blame_output(self, output: str) -> List[BlameLineResult]:
         """
@@ -381,7 +557,7 @@ class BlameStatsService:
             行分析结果列表
         """
         results = []
-        lines = output.split('\n')
+        lines = output.split("\n")
 
         i = 0
         line_num = 1
@@ -397,7 +573,7 @@ class BlameStatsService:
             # ...
             # tab followed by the actual line
 
-            if '\t' in line:
+            if "\t" in line:
                 # 实际代码行（以 tab 开头）
                 # 跳过这一行并准备处理下一个 blame 块
                 i += 1
@@ -405,38 +581,36 @@ class BlameStatsService:
                 continue
 
             # 解析 SHA（40 个十六进制字符）
-            sha_match = re.match(r'^([0-9a-f]{40})', line)
+            sha_match = re.match(r"^([0-9a-f]{40})", line)
             if sha_match:
                 commit_sha = sha_match.group(1)
 
                 # 查找 author 行
-                author = 'Unknown'
+                author = "Unknown"
                 j = i + 1
                 while j < len(lines):
-                    if lines[j].startswith('author '):
+                    if lines[j].startswith("author "):
                         author = lines[j][7:]  # 去掉 'author ' 前缀
                         break
-                    if '\t' in lines[j]:
+                    if "\t" in lines[j]:
                         break
                     j += 1
 
-                results.append(BlameLineResult(
-                    line_num=line_num,
-                    commit_sha=commit_sha,
-                    author=author,
-                    is_ai=False  # 稍后根据 notes 判断
-                ))
+                results.append(
+                    BlameLineResult(
+                        line_num=line_num,
+                        commit_sha=commit_sha,
+                        author=author,
+                        is_ai=False,  # 稍后根据 notes 判断
+                    )
+                )
 
             i += 1
 
         return results
 
     def query_ai_lines_from_notes(
-        self,
-        repo_url: str,
-        commit_sha: str,
-        file_path: str,
-        line_nums: List[int]
+        self, repo_url: str, commit_sha: str, file_path: str, line_nums: List[int]
     ) -> List[bool]:
         """
         从 notes 查询多行的 AI 归属
@@ -453,10 +627,14 @@ class BlameStatsService:
         from core.database.models import AuthorshipNotes
 
         with self.database.session_scope() as session:
-            notes = session.query(AuthorshipNotes).filter(
-                AuthorshipNotes.repo_url == repo_url,
-                AuthorshipNotes.commit_sha == commit_sha
-            ).first()
+            notes = (
+                session.query(AuthorshipNotes)
+                .filter(
+                    AuthorshipNotes.repo_url == repo_url,
+                    AuthorshipNotes.commit_sha == commit_sha,
+                )
+                .first()
+            )
 
             if not notes:
                 return [False] * len(line_nums)

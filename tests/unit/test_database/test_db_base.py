@@ -1,8 +1,11 @@
-import pytest
-from core.database.base import Database
+import core.config.loader as loader
+
+from core.database.base import BaseDatabase
 
 
-def test_database_is_abstract():
-    """Database 应该是抽象类，不能直接实例化"""
-    with pytest.raises(TypeError):
-        Database({})
+def test_base_database_uses_configured_database_url():
+    loader.config_data = {"database": {"url": "sqlite:///:memory:", "echo": False}}
+
+    db = BaseDatabase()
+
+    assert str(db.engine.url) == "sqlite:///:memory:"
