@@ -4,6 +4,7 @@ from typing import Dict, Any, Optional
 
 config_data: Dict[str, Any] = {}
 
+
 def load_config() -> Dict[str, Any]:
     return load_config_by_path(None)
 
@@ -14,10 +15,12 @@ def load_config_by_path(config_path: Optional[str]) -> Dict[str, Any]:
         return config_data
     if not config_path:
         config_path = "config.yaml"
-    with open(config_path, 'r', encoding='utf-8') as f:
+    with open(config_path, "r", encoding="utf-8") as f:
         config_data = yaml.safe_load(f)
-    
-    print('----------------------------- load config data -----------------------------')
+
+    print(
+        "----------------------------- load config data -----------------------------"
+    )
     # 递归处理环境变量替换
     _replace_env_vars(config_data)
 
@@ -26,11 +29,16 @@ def load_config_by_path(config_path: Optional[str]) -> Dict[str, Any]:
 
     return config_data
 
+
 def _validate_config(config) -> None:
     """验证配置完整性"""
-    db_url = config.get('database', {}).get('url')
+    db_url = config.get("database", {}).get("url")
     if not db_url:
         raise ValueError("No database url")
+
+    git_type = config.get("git", {}).get("type")
+    if git_type and git_type not in {"gitlab", "github"}:
+        raise ValueError(f"Unsupported git type: {git_type}")
 
 
 def _replace_env_vars(obj: Any) -> Any:
@@ -48,4 +56,3 @@ def _replace_env_vars(obj: Any) -> Any:
             env_var, default_value = env_var.split(":", 1)
         return os.getenv(env_var, default_value)
     return obj
-

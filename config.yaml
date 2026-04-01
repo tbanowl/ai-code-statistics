@@ -1,8 +1,8 @@
 # 数据库配置
 database:
   # url: postgresql://gitai:${DB_PASSWORD}@postgres:5432/gitai_stats
-  url: ${DB_URL}
-  echo: ${DB_ECHO}  # 生产环境关闭 SQL 回显
+  url: ${DB_URL:sqlite:///./data/ai_stats.db}
+  echo: ${DB_ECHO:false}  # 生产环境关闭 SQL 回显
 
 # 定时任务配置
 scheduler:

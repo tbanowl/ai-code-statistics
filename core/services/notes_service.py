@@ -4,6 +4,7 @@ REST Notes Store 服务
 提供 Authorship Notes 数据的 CRUD 业务逻辑。
 """
 
+import core.config.loader as loader
 from core.config.logging import Logger
 from core.database.notes_db import NotesDatabase
 
@@ -11,9 +12,11 @@ from core.database.notes_db import NotesDatabase
 class NotesRestService:
     """REST Notes Store 服务"""
 
-    def __init__(self):
+    def __init__(self, db_url: str | None = None):
         """初始化 NotesRestService"""
-        self.logger = Logger.get_logger('services.notes')
+        if db_url:
+            loader.config_data = {"database": {"url": db_url, "echo": False}}
+        self.logger = Logger.get_logger("services.notes")
         self.database = NotesDatabase()
 
     def create_or_update_note(
@@ -21,20 +24,25 @@ class NotesRestService:
         repo_url: str,
         branch: str,
         commit_sha: str,
-        note_blob_oid: str,
         content: str,
         author_name: str,
-        author_email: str
+        author_email: str,
+        note_blob_oid: str | None = None,
+        original_commit_sha: str | None = None,
     ):
         """创建或更新单个 note"""
         return self.database.create_or_update_note(
             repo_url=repo_url,
             branch=branch,
             commit_sha=commit_sha,
-            note_blob_oid=note_blob_oid,
+            note_blob_oid=(
+                original_commit_sha
+                if original_commit_sha is not None
+                else note_blob_oid
+            ),
             content=content,
             author_name=author_name,
-            author_email=author_email
+            author_email=author_email,
         )
 
     def get_note(self, repo_url: str, commit_sha: str):
@@ -56,3 +64,6 @@ class NotesRestService:
     def search_notes(self, repo_url: str, pattern: str):
         """在注释内容中搜索"""
         return self.database.search_notes(repo_url=repo_url, pattern=pattern)
+
+    def close(self):
+        self.database.close()

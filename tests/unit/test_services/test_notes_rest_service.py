@@ -11,9 +11,9 @@ from core.services.notes_service import NotesRestService
 @pytest.fixture
 def temp_db():
     """Create temporary database for testing"""
-    fd, path = tempfile.mkstemp(suffix='.db')
+    fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
-    yield f'sqlite:///{path}'
+    yield f"sqlite:///{path}"
     # Windows 需要先关闭数据库连接才能删除文件
     try:
         os.unlink(path)
@@ -25,7 +25,7 @@ def temp_db():
 @pytest.fixture
 def service(temp_db):
     """Create service instance with temp database"""
-    return NotesRestService(db_url=temp_db)
+    return NotesRestService()
 
 
 def test_create_note(service):
@@ -37,7 +37,7 @@ def test_create_note(service):
         original_commit_sha=None,
         content="test content",
         author_name="Test User",
-        author_email="test@example.com"
+        author_email="test@example.com",
     )
 
     assert result.id is not None
@@ -59,7 +59,7 @@ def test_update_note(service):
         original_commit_sha=None,
         content="original content",
         author_name="Test User",
-        author_email="test@example.com"
+        author_email="test@example.com",
     )
 
     # Update the note
@@ -70,11 +70,11 @@ def test_update_note(service):
         original_commit_sha="original123",
         content="updated content",
         author_name="Updated User",
-        author_email="updated@example.com"
+        author_email="updated@example.com",
     )
 
     assert result.note_content == "updated content"
-    assert result.original_commit_sha == "original123"
+    assert result.note_blob_oid == "original123"
     assert result.author_name == "Updated User"
 
 
@@ -88,13 +88,13 @@ def test_get_note(service):
         original_commit_sha=None,
         content="test content",
         author_name="Test User",
-        author_email="test@example.com"
+        author_email="test@example.com",
     )
 
     # Get the note
     result = service.get_note(
         repo_url="https://github.com/test/repo.git",
-        commit_sha="abc123def4567890123456789012345678901234"
+        commit_sha="abc123def4567890123456789012345678901234",
     )
 
     assert result is not None
@@ -104,8 +104,7 @@ def test_get_note(service):
 def test_get_note_not_found(service):
     """Test getting a non-existent note"""
     result = service.get_note(
-        repo_url="https://github.com/test/repo.git",
-        commit_sha="nonexistent"
+        repo_url="https://github.com/test/repo.git", commit_sha="nonexistent"
     )
 
     assert result is None
@@ -122,13 +121,13 @@ def test_batch_get_notes(service):
             original_commit_sha=None,
             content=f"content {sha}",
             author_name="Test",
-            author_email="test@test.com"
+            author_email="test@test.com",
         )
 
     # Batch get
     result = service.batch_get_notes(
         repo_url="https://github.com/test/repo.git",
-        commit_shas=["sha1", "sha2", "nonexistent"]
+        commit_shas=["sha1", "sha2", "nonexistent"],
     )
 
     assert len(result["notes"]) == 2
@@ -147,7 +146,7 @@ def test_batch_push_notes(service):
                 "original_commit_sha": None,
                 "author_name": "User1",
                 "author_email": "user1@test.com",
-                "content": "content1"
+                "content": "content1",
             },
             {
                 "branch": "main",
@@ -155,9 +154,9 @@ def test_batch_push_notes(service):
                 "original_commit_sha": None,
                 "author_name": "User2",
                 "author_email": "user2@test.com",
-                "content": "content2"
-            }
-        ]
+                "content": "content2",
+            },
+        ],
     )
 
     assert result["created"] == 2
@@ -174,7 +173,7 @@ def test_batch_push_with_updates(service):
         original_commit_sha=None,
         content="old content",
         author_name="User1",
-        author_email="user1@test.com"
+        author_email="user1@test.com",
     )
 
     # Batch push including the existing one and a new one
@@ -187,7 +186,7 @@ def test_batch_push_with_updates(service):
                 "original_commit_sha": None,
                 "author_name": "User1 Updated",
                 "author_email": "user1@test.com",
-                "content": "new content"
+                "content": "new content",
             },
             {
                 "branch": "main",
@@ -195,9 +194,9 @@ def test_batch_push_with_updates(service):
                 "original_commit_sha": None,
                 "author_name": "User2",
                 "author_email": "user2@test.com",
-                "content": "content2"
-            }
-        ]
+                "content": "content2",
+            },
+        ],
     )
 
     assert result["created"] == 1
@@ -215,7 +214,7 @@ def test_list_notes(service):
             original_commit_sha=None,
             content="content",
             author_name="Test",
-            author_email="test@test.com"
+            author_email="test@test.com",
         )
 
     result = service.list_notes(repo_url="https://github.com/test/repo.git")
@@ -234,7 +233,7 @@ def test_search_notes(service):
         original_commit_sha=None,
         content="cursor position",
         author_name="Test",
-        author_email="test@test.com"
+        author_email="test@test.com",
     )
 
     service.create_or_update_note(
@@ -244,12 +243,11 @@ def test_search_notes(service):
         original_commit_sha=None,
         content="buffer size",
         author_name="Test",
-        author_email="test@test.com"
+        author_email="test@test.com",
     )
 
     result = service.search_notes(
-        repo_url="https://github.com/test/repo.git",
-        pattern="cursor"
+        repo_url="https://github.com/test/repo.git", pattern="cursor"
     )
 
     assert "sha1" in result

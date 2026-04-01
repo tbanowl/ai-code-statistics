@@ -11,11 +11,21 @@ def test_authorship_notes_model_columns():
     columns = {c.name for c in AuthorshipNotes.__table__.columns}
 
     expected_columns = {
-        'id', 'repo_url', 'branch', 'commit_sha', 'original_commit_sha',
-        'author_name', 'author_email', 'note_content', 'created_at', 'updated_at'
+        "id",
+        "repo_url",
+        "branch",
+        "commit_sha",
+        "note_blob_oid",
+        "author_name",
+        "author_email",
+        "note_content",
+        "created_at",
+        "updated_at",
     }
 
-    assert expected_columns.issubset(columns), f"Missing columns: {expected_columns - columns}"
+    assert expected_columns.issubset(columns), (
+        f"Missing columns: {expected_columns - columns}"
+    )
 
 
 def test_authorship_notes_unique_constraint():
@@ -24,22 +34,22 @@ def test_authorship_notes_unique_constraint():
     table_args = AuthorshipNotes.__table_args__
 
     # Check for UniqueConstraint
-    unique_constraints = [c for c in table_args if hasattr(c, 'columns')]
+    unique_constraints = [c for c in table_args if hasattr(c, "columns")]
 
     assert len(unique_constraints) > 0, "UniqueConstraint not found"
 
     # Verify the constraint includes repo_url and commit_sha
     constraint = unique_constraints[0]
     constraint_columns = {col.name for col in constraint.columns}
-    assert constraint_columns == {'repo_url', 'commit_sha'}
+    assert constraint_columns == {"repo_url", "commit_sha"}
 
 
 def test_authorship_notes_indexes():
     """Test AuthorshipNotes has required indexes"""
-    indexes = {i.name for i in AuthorshipNotes.__table__.indexes}
+    indexes = {i.name for i in getattr(AuthorshipNotes.__table__, "indexes", set())}
 
-    assert 'idx_authorship_notes_repo_url' in indexes, "Missing repo_url index"
-    assert 'idx_authorship_notes_repo_commit' in indexes, "Missing repo_commit index"
+    assert "idx_authorship_notes_repo_url" in indexes, "Missing repo_url index"
+    assert "idx_authorship_notes_repo_commit" in indexes, "Missing repo_commit index"
 
 
 def test_authorship_notes_defaults():
@@ -50,7 +60,7 @@ def test_authorship_notes_defaults():
         commit_sha="abc123def4567890123456789012345678901234",
         author_name="Test User",
         author_email="test@example.com",
-        note_content="test content"
+        note_content="test content",
     )
 
     data = note.to_dict()
