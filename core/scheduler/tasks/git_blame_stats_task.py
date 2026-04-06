@@ -84,10 +84,7 @@ class GitBlameStatsTask(BaseTask):
                     success_repos += 1
                     self.logger.info(
                         f"仓库 {repo_name} 统计完成: "
-                        f"总行数={result['total_lines']}, "
-                        f"AI 行数={result['ai_lines']}, "
-                        f"非 AI 行数={result['non_ai_lines']}, "
-                        f"AI 占比={result['ai_ratio']}%"
+                        f"成功分支 {result.get('success_branches', 0)}/{result.get('total_branches', 0)}"
                     )
                 else:
                     failed_repos += 1
