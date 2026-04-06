@@ -3,6 +3,7 @@ import os
 import subprocess
 import tempfile
 import shutil
+import fnmatch
 from typing import Optional
 from core.config.logging import Logger
 
@@ -249,8 +250,8 @@ class GitCloneService:
             branches = result.stdout.strip().split('\n')
             branches = [b.strip() for b in branches if b.strip()]
 
-            # 去除 origin/ 前缀
-            branches = [b.replace('origin/', '') for b in branches if b.startswith('origin/')]
+            # 去除 origin/ 前缀（只移除前缀，不是替换所有出现）
+            branches = [b.removeprefix('origin/') for b in branches if b.startswith('origin/')]
 
             # 过滤 HEAD
             branches = [b for b in branches if b != 'HEAD']
@@ -263,7 +264,7 @@ class GitCloneService:
 
     def checkout_branch(self, repo_dir: str, branch: str) -> bool:
         """
-        切换到指定分支
+        切换到指定分支（支持浅克隆场景）
 
         Args:
             repo_dir: 仓库目录
@@ -273,8 +274,23 @@ class GitCloneService:
             是否成功切换
         """
         try:
+            # 先尝试直接切换（如果本地分支已存在）
             result = subprocess.run(
                 ['git', 'checkout', branch],
+                cwd=repo_dir,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+
+            if result.returncode == 0:
+                self.logger.info(f"成功切换到分支: {branch}")
+                return True
+
+            # 如果失败，尝试从远程分支创建本地分支（浅克隆场景）
+            self.logger.debug(f"直接切换失败，尝试从远程分支创建: {branch}")
+            result = subprocess.run(
+                ['git', 'checkout', '-b', branch, f'origin/{branch}'],
                 cwd=repo_dir,
                 capture_output=True,
                 text=True,
@@ -305,20 +321,26 @@ class GitCloneService:
             branch_configs: 分支配置列表
 
         Returns:
-            匹配的分支列表
+            匹配的分支列表（已排序）
         """
-        import fnmatch
-
         matched = set()
 
         for config in branch_configs:
+            # 输入验证：检查必需的键是否存在
+            if 'branch_pattern' not in config:
+                self.logger.warning(f"分支配置缺少 'branch_pattern' 键，跳过: {config}")
+                continue
+            if 'pattern_type' not in config:
+                self.logger.warning(f"分支配置缺少 'pattern_type' 键，跳过: {config}")
+                continue
+
             pattern = config['branch_pattern']
             pattern_type = config['pattern_type']
 
             if pattern_type == 'special':
                 if pattern == 'all':
-                    # 返回所有分支
-                    return all_branches
+                    # 返回所有分支（已排序）
+                    return sorted(all_branches)
             elif pattern_type == 'exact':
                 # 精确匹配
                 if pattern in all_branches:
@@ -328,8 +350,11 @@ class GitCloneService:
                 for branch in all_branches:
                     if fnmatch.fnmatch(branch, pattern):
                         matched.add(branch)
+            else:
+                # 未知的 pattern_type
+                self.logger.warning(f"未知的 pattern_type: {pattern_type}，跳过配置: {config}")
 
-        return list(matched)
+        return sorted(list(matched))
 
     def cleanup_temp_dir(self, temp_dir: str) -> None:
         """
