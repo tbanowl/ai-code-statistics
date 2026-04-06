@@ -99,25 +99,3 @@ class BaseDatabase:
             BaseDatabase._shared_engine.dispose()
             BaseDatabase._shared_engine = None
             self.logger.info("数据库连接已关闭")
-
-    @contextmanager
-    def session_scope(self):
-        """
-        Session 上下文管理器，自动处理提交和回滚。
-
-        使用方式:
-            with session_scope(engine) as session:
-                # 执行数据库操作
-                session.add(model)
-            # 自动提交或回滚
-        """
-        SessionLocal = sessionmaker(bind=self.engine, expire_on_commit=False)
-        session = SessionLocal()
-        try:
-            yield session
-            session.commit()
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()

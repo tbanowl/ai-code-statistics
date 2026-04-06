@@ -36,7 +36,7 @@ class BlameStatsDatabase(BaseDatabase):
         """
         from core.database.models import StatsRepository
 
-        with self.session_scope() as session:
+        with session_scope(self.engine) as session:
             repo = (
                 session.query(StatsRepository)
                 .filter(StatsRepository.id == repo_id)
@@ -63,7 +63,7 @@ class BlameStatsDatabase(BaseDatabase):
         """
         from core.database.models import StatsRepository
 
-        with self.session_scope() as session:
+        with session_scope(self.engine) as session:
             repo = (
                 session.query(StatsRepository)
                 .filter(StatsRepository.id == repo_id)
@@ -86,7 +86,7 @@ class BlameStatsDatabase(BaseDatabase):
         """
         from core.database.models import StatsRepository
 
-        with self.session_scope() as session:
+        with session_scope(self.engine) as session:
             repos = (
                 session.query(StatsRepository)
                 .filter(StatsRepository.repo_stats_flag == 1)
@@ -115,7 +115,7 @@ class BlameStatsDatabase(BaseDatabase):
         """
         from core.database.models import StatsRepository
 
-        with self.session_scope() as session:
+        with session_scope(self.engine) as session:
             return (
                 session.query(StatsRepository)
                 .filter(StatsRepository.id == repo_id)
@@ -134,7 +134,7 @@ class BlameStatsDatabase(BaseDatabase):
         """
         from core.database.models import StatsRepository
 
-        with self.session_scope() as session:
+        with session_scope(self.engine) as session:
             repo = (
                 session.query(StatsRepository)
                 .filter(StatsRepository.id == repo_id)
@@ -158,7 +158,7 @@ class BlameStatsDatabase(BaseDatabase):
         """
         from core.database.models import StatsRepoBranchConfig
 
-        with self.session_scope() as session:
+        with session_scope(self.engine) as session:
             configs = (
                 session.query(StatsRepoBranchConfig)
                 .filter(
@@ -201,7 +201,7 @@ class BlameStatsDatabase(BaseDatabase):
 
         now = int(time.time() * 1000)
 
-        with self.session_scope() as session:
+        with session_scope(self.engine) as session:
             # 检查是否存在相同的 (repo_id, branch_pattern)
             existing = (
                 session.query(StatsRepoBranchConfig)
@@ -243,7 +243,7 @@ class BlameStatsDatabase(BaseDatabase):
         """
         from core.database.models import StatsRepoBranchConfig
 
-        with self.session_scope() as session:
+        with session_scope(self.engine) as session:
             session.query(StatsRepoBranchConfig).filter(
                 StatsRepoBranchConfig.repo_id == repo_id
             ).delete()
@@ -262,7 +262,7 @@ class BlameStatsDatabase(BaseDatabase):
         """
         from core.database.models import StatsBlameRepo
 
-        with self.session_scope() as session:
+        with session_scope(self.engine) as session:
             session.query(StatsBlameRepo).filter(
                 StatsBlameRepo.repo_id == repo_id, StatsBlameRepo.stat_date == stat_date
             ).delete()
@@ -277,7 +277,7 @@ class BlameStatsDatabase(BaseDatabase):
         """
         from core.database.models import StatsBlameFile
 
-        with self.session_scope() as session:
+        with session_scope(self.engine) as session:
             session.query(StatsBlameFile).filter(
                 StatsBlameFile.repo_id == repo_id, StatsBlameFile.stat_date == stat_date
             ).delete()
@@ -292,7 +292,7 @@ class BlameStatsDatabase(BaseDatabase):
         """
         from core.database.models import StatsBlameRepoContributor
 
-        with self.session_scope() as session:
+        with session_scope(self.engine) as session:
             session.query(StatsBlameRepoContributor).filter(
                 StatsBlameRepoContributor.repo_id == repo_id,
                 StatsBlameRepoContributor.stat_date == stat_date,
@@ -308,7 +308,7 @@ class BlameStatsDatabase(BaseDatabase):
         """
         from core.database.models import StatsBlameFileContributor
 
-        with self.session_scope() as session:
+        with session_scope(self.engine) as session:
             session.query(StatsBlameFileContributor).filter(
                 StatsBlameFileContributor.repo_id == repo_id,
                 StatsBlameFileContributor.stat_date == stat_date,
@@ -340,7 +340,7 @@ class BlameStatsDatabase(BaseDatabase):
         ai_ratio = (ai_lines / total_lines * 100) if total_lines > 0 else 0.0
         now = int(time.time() * 1000)
 
-        with self.session_scope() as session:
+        with session_scope(self.engine) as session:
             # 先删除当天旧数据
             session.query(StatsBlameRepo).filter(
                 StatsBlameRepo.repo_id == repo_id, StatsBlameRepo.stat_date == stat_date
@@ -387,7 +387,7 @@ class BlameStatsDatabase(BaseDatabase):
         ai_ratio = (ai_lines / total_lines * 100) if total_lines > 0 else 0.0
         now = int(time.time() * 1000)
 
-        with self.session_scope() as session:
+        with session_scope(self.engine) as session:
             # 先删除当天旧数据
             session.query(StatsBlameFile).filter(
                 StatsBlameFile.repo_id == repo_id,
@@ -435,7 +435,7 @@ class BlameStatsDatabase(BaseDatabase):
 
         now = int(time.time() * 1000)
 
-        with self.session_scope() as session:
+        with session_scope(self.engine) as session:
             # 先删除当天旧数据
             session.query(StatsBlameRepoContributor).filter(
                 StatsBlameRepoContributor.repo_id == repo_id,
@@ -485,7 +485,7 @@ class BlameStatsDatabase(BaseDatabase):
 
         now = int(time.time() * 1000)
 
-        with self.session_scope() as session:
+        with session_scope(self.engine) as session:
             # 先删除当天旧数据
             session.query(StatsBlameFileContributor).filter(
                 StatsBlameFileContributor.file_id == file_id,
@@ -528,7 +528,7 @@ class BlameStatsDatabase(BaseDatabase):
 
         now = int(time.time() * 1000)
 
-        with self.session_scope() as session:
+        with session_scope(self.engine) as session:
             count = 0
             for stats in stats_list:
                 # 先删除当天旧数据
@@ -578,7 +578,7 @@ class BlameStatsDatabase(BaseDatabase):
 
         # 通过 email 查找
         if email:
-            with self.session_scope() as session:
+            with session_scope(self.engine) as session:
                 contrib = (
                     session.query(StatsContributor)
                     .filter(StatsContributor.email == email)
@@ -589,7 +589,7 @@ class BlameStatsDatabase(BaseDatabase):
 
         # 通过 name 和 email 组合查找
         contrib_uid = f"{name}:{email}" if email else name
-        with self.session_scope() as session:
+        with session_scope(self.engine) as session:
             contrib = (
                 session.query(StatsContributor)
                 .filter(StatsContributor.contributor_uid == contrib_uid)
@@ -600,7 +600,7 @@ class BlameStatsDatabase(BaseDatabase):
 
         # 创建新的贡献者
         now = int(time.time() * 1000)
-        with self.session_scope() as session:
+        with session_scope(self.engine) as session:
             contrib = StatsContributor(
                 id=gen_xid(),
                 contributor_uid=contrib_uid,
@@ -634,7 +634,7 @@ class BlameStatsDatabase(BaseDatabase):
         """
         from core.database.models import StatsBlameRepo
 
-        with self.session_scope() as session:
+        with session_scope(self.engine) as session:
             query = session.query(StatsBlameRepo).filter(
                 StatsBlameRepo.repo_id == repo_id
             )
@@ -679,7 +679,7 @@ class BlameStatsDatabase(BaseDatabase):
         """
         from core.database.models import StatsBlameFile
 
-        with self.session_scope() as session:
+        with session_scope(self.engine) as session:
             query = session.query(StatsBlameFile).filter(
                 StatsBlameFile.repo_id == repo_id
             )
@@ -714,7 +714,7 @@ class BlameStatsDatabase(BaseDatabase):
 
         from core.database.models import AuthorshipNotes
 
-        with self.session_scope() as session:
+        with session_scope(self.engine) as session:
             notes = (
                 session.query(AuthorshipNotes)
                 .filter(AuthorshipNotes.commit_sha.in_(commit_shas))
@@ -736,7 +736,7 @@ class BlameStatsDatabase(BaseDatabase):
         """
         from core.database.models import StatsBlameRepoContributor
 
-        with self.session_scope() as session:
+        with session_scope(self.engine) as session:
             query = session.query(StatsBlameRepoContributor).filter(
                 StatsBlameRepoContributor.repo_id == repo_id
             )
