@@ -2,7 +2,6 @@ import os
 
 from flask import Blueprint, request, jsonify
 from core.config.logging import Logger
-from core.middleware.auth import auth_required
 from core.services.notes_service import NotesRestService
 
 notes_rest_bp = Blueprint("notes_rest", __name__, url_prefix="/worker/notes")
@@ -24,7 +23,7 @@ def error_response(message, status_code=400):
 
 
 @notes_rest_bp.route("", methods=["PUT"])
-@auth_required
+# @auth_required
 def create_or_update_note():
     """创建或更新单个注释 (PUT /worker/notes)
 
@@ -82,7 +81,7 @@ def create_or_update_note():
 
 
 @notes_rest_bp.route("/get", methods=["POST"])
-@auth_required
+# @auth_required
 def get_note():
     """获取单个注释 (POST /worker/notes/get)
 
@@ -147,7 +146,7 @@ def get_note():
 
 
 @notes_rest_bp.route("/batch", methods=["POST"])
-@auth_required
+# @auth_required
 def batch_get_notes():
     """批量获取注释 (POST /worker/notes/batch)
 
@@ -195,7 +194,7 @@ def batch_get_notes():
 
 
 @notes_rest_bp.route("/push", methods=["POST"])
-@auth_required
+# @auth_required
 def batch_push_notes():
     """批量推送（创建/更新）注释 (POST /worker/notes/push)
 
@@ -240,7 +239,7 @@ def batch_push_notes():
 
 
 @notes_rest_bp.route("/list", methods=["POST"])
-@auth_required
+# @auth_required
 def list_notes():
     """列出仓库中所有有注释的提交 SHA (POST /worker/notes/list)
 
@@ -275,7 +274,7 @@ def list_notes():
 
 
 @notes_rest_bp.route("/search", methods=["POST"])
-@auth_required
+# @auth_required
 def search_notes():
     """在注释内容中搜索 (POST /worker/notes/search)
 

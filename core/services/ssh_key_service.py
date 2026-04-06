@@ -4,7 +4,6 @@ import os
 import tempfile
 from typing import Dict, Optional
 from cryptography.fernet import Fernet
-from cryptography.hazmat.backends import default_backend
 from base64 import b64encode, b64decode
 from core.config.logging import Logger
 from core.database.base import BaseDatabase, session_scope

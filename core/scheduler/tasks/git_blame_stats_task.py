@@ -1,6 +1,5 @@
 """Git Blame 统计定时任务"""
 
-import tempfile
 import os
 from datetime import datetime, timedelta
 from typing import Dict, Optional
@@ -9,7 +8,6 @@ from core.scheduler.scheduled import scheduled
 from core.database import BlameStatsDatabase
 from core.services import SshKeyService, GitCloneService, BlameStatsService
 from core.config import load_config
-from core.config.logging import Logger
 
 
 @scheduled(cron="0 2 * * *", job_id="git_blame_stats", name="Git代码归因统计")
@@ -142,7 +140,7 @@ class GitBlameStatsTask(BaseTask):
                 repo_path,
                 ssh_key_info['private_key'],
                 temp_dir,
-                shallow_since='30 days ago'
+                shallow_since='2026-03-28'
             ):
                 self.logger.error("仓库克隆失败")
                 return None

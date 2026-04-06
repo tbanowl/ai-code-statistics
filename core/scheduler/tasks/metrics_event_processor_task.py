@@ -1,16 +1,63 @@
 """Metrics 事件处理定时任务"""
 
+import json
+import re
 from typing import Dict, Optional
 from core.scheduler.tasks.base import BaseTask
 from core.scheduler.scheduled import scheduled
-from core.database import MetricsDatabase
 from core.services.metrics_service import MetricsService
-from core.config.logging import Logger
+from core.database import MetricsDatabase, StatsDatabase
 
 
 @scheduled(cron="*/2 * * * *", job_id="metrics_event_processor", name="Metrics事件处理")
 class MetricsEventProcessorTask(BaseTask):
     """Metrics 事件处理任务 - 从原始数据表提取事件到各事件表"""
+
+    @staticmethod
+    def _parse_author(author: Optional[str]) -> tuple[str, Optional[str]]:
+        raw = (author or "").strip()
+        if not raw:
+            return "unknown", None
+
+        match = re.match(r"^\s*([^<]+?)\s*<([^>]+)>\s*$", raw)
+        if match:
+            name = match.group(1).strip() or "unknown"
+            email = match.group(2).strip() or None
+            return name, email
+
+        return raw, None
+
+    @staticmethod
+    def _sync_stats_dimensions(stats_db: StatsDatabase, payload_json: str) -> None:
+        """从原始 payload 中补写仓库、贡献者及其关联维度。"""
+        payload = json.loads(payload_json)
+        events = payload.get("events", [])
+        seen_pairs = set()
+
+        for event in events:
+            if event.get("e") not in {1, 2, 4}:
+                continue
+
+            attrs = event.get("a", {}) or {}
+            repo_path = attrs.get("1") or ""
+            author_raw = attrs.get("2")
+            author_name, author_email = MetricsEventProcessorTask._parse_author(
+                author_raw
+            )
+            author_uid = (author_raw or author_name or "unknown").strip() or "unknown"
+            pair_key = (repo_path, author_uid)
+
+            if pair_key in seen_pairs:
+                continue
+
+            repo_id = stats_db.get_or_create_repository(repo_path)
+            contributor_id = stats_db.get_or_create_contributor(
+                author_name,
+                author_email,
+                contributor_uid=author_uid,
+            )
+            stats_db.ensure_repo_contributor_link(repo_id, contributor_id)
+            seen_pairs.add(pair_key)
 
     def execute(self, context: Optional[Dict] = None) -> Dict:
         self.logger.info("开始执行 Metrics 事件处理任务")
@@ -23,27 +70,26 @@ class MetricsEventProcessorTask(BaseTask):
             .get("batch_size", 100)
         )
 
-        timeout_minutes = (
-            self.config.get("scheduler", {})
-            .get("jobs", {})
-            .get("metrics_event_processor", {})
-            .get("timeout_minutes", 10)
-        )
+        # timeout_minutes = (
+        #     self.config.get("scheduler", {})
+        #     .get("jobs", {})
+        #     .get("metrics_event_processor", {})
+        #     .get("timeout_minutes", 10)
+        # )
 
-        # 并发安全检查
-        from core.database import SchedulerDatabase, MetricsDatabase
+        # # 并发安全检查
 
-        scheduler_db = SchedulerDatabase()
+        # scheduler_db = SchedulerDatabase()
 
-        running_task = scheduler_db.has_running_task(
-            "metrics_event_processor", timeout_minutes
-        )
+        # running_task = scheduler_db.has_running_task(
+        #     "metrics_event_processor", timeout_minutes
+        # )
 
-        if running_task:
-            self.logger.info(
-                f"已有任务在处理中（id={running_task['id']}），跳过本次执行"
-            )
-            return {"success": True, "skipped": True, "skip_reason": "running_task"}
+        # if running_task:
+        #     self.logger.info(
+        #         f"已有任务在处理中（id={running_task['id']}），跳过本次执行"
+        #     )
+        #     return {"success": True, "skipped": True, "skip_reason": "running_task"}
 
         # # 检查是否有超时任务需要恢复
         # pending_or_running_task = scheduler_db.get_running_task_execution("metrics_event_processor")
@@ -57,6 +103,7 @@ class MetricsEventProcessorTask(BaseTask):
         #     scheduler_db.update_task_execution_status(pending_or_running_task['id'], "failed")
 
         db = MetricsDatabase()
+        stats_db = StatsDatabase()
 
         # 循环批处理
         last_id = None
@@ -90,7 +137,7 @@ class MetricsEventProcessorTask(BaseTask):
             for record in pending_records:
                 raw_id = record["id"]
                 payload_json = record["payload_json"]
-                event_count = record["event_count"]
+                # event_count = record["event_count"]
 
                 # 标记为处理中
                 if not db.mark_raw_extracting(raw_id):
@@ -103,6 +150,7 @@ class MetricsEventProcessorTask(BaseTask):
 
                     # 根据结果更新状态
                     if result.get("success"):
+                        self._sync_stats_dimensions(stats_db, payload_json)
                         db.mark_raw_extracted(raw_id, success=True)
                         stats["successful"] += 1
                         stats["total_events"] += result.get("events_processed", 0)

@@ -22,17 +22,14 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .base import Base
 
-guid = XID()
-
 
 def now_ts() -> int:
     """返回当前时间戳（毫秒）"""
     return int(time.time() * 1000)
 
-
 def gen_xid() -> str:
     """生成 XID 字符串"""
-    return guid.string()
+    return XID().string()
 
 
 class ModelBase(Base):
