@@ -270,13 +270,17 @@ class StatsRepoBranchConfig(ModelBase):
 
     __tablename__ = "stats_repo_branch_config"
 
+    __table_args__ = (UniqueConstraint("repo_id", "branch_pattern"),)
+
     id: Mapped[str] = mapped_column(String(20), primary_key=True, default=gen_xid)
     repo_id: Mapped[str] = mapped_column(
         String(20),
         ForeignKey("stats_repositories.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
     )
     branch_pattern: Mapped[str] = mapped_column(Text, nullable=False)
+    # pattern_type 有效值: 'exact' (精确匹配), 'wildcard' (通配符), 'special' (特殊规则)
     pattern_type: Mapped[str] = mapped_column(String(20), nullable=False, default="exact")
     enabled: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
