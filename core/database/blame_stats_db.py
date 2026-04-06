@@ -146,6 +146,90 @@ class BlameStatsDatabase(BaseDatabase):
 
             return repo.repo_path
 
+    def get_repo_branch_configs(self, repo_id: str) -> list:
+        """
+        获取仓库的分支配置
+
+        Args:
+            repo_id: 仓库 ID
+
+        Returns:
+            分支配置列表
+        """
+        from core.database.models import StatsRepoBranchConfig
+
+        with self.session_scope() as session:
+            configs = (
+                session.query(StatsRepoBranchConfig)
+                .filter(
+                    StatsRepoBranchConfig.repo_id == repo_id,
+                    StatsRepoBranchConfig.enabled == 1
+                )
+                .all()
+            )
+
+            return [
+                {
+                    'id': c.id,
+                    'branch_pattern': c.branch_pattern,
+                    'pattern_type': c.pattern_type,
+                    'enabled': c.enabled
+                }
+                for c in configs
+            ]
+
+    def save_repo_branch_config(
+        self,
+        repo_id: str,
+        branch_pattern: str,
+        pattern_type: str = 'exact',
+        enabled: int = 1
+    ) -> str:
+        """
+        保存分支配置
+
+        Args:
+            repo_id: 仓库 ID
+            branch_pattern: 分支模式
+            pattern_type: 模式类型
+            enabled: 是否启用
+
+        Returns:
+            配置 ID
+        """
+        from core.database.models import StatsRepoBranchConfig
+
+        now = int(time.time() * 1000)
+
+        with self.session_scope() as session:
+            config = StatsRepoBranchConfig(
+                id=gen_xid(),
+                repo_id=repo_id,
+                branch_pattern=branch_pattern,
+                pattern_type=pattern_type,
+                enabled=enabled,
+                created_at=now,
+                updated_at=now
+            )
+            session.add(config)
+            session.flush()
+
+            return config.id
+
+    def delete_repo_branch_configs(self, repo_id: str) -> None:
+        """
+        删除仓库的所有分支配置
+
+        Args:
+            repo_id: 仓库 ID
+        """
+        from core.database.models import StatsRepoBranchConfig
+
+        with self.session_scope() as session:
+            session.query(StatsRepoBranchConfig).filter(
+                StatsRepoBranchConfig.repo_id == repo_id
+            ).delete()
+
     # ============================================================================
     # 删除当天统计结果
     # ============================================================================
