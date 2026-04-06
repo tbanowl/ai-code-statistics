@@ -142,16 +142,18 @@ class PureHttp {
         const $error = error;
         $error.isCancelRequest = Axios.isCancel($error);
 
-        // 统一错误处理
-        if (error.response) {
-          const status = error.response.status;
-          if (status === 404) {
-            message("API 接口不存在", { type: "error" });
-          } else if (status === 500) {
-            message("服务器错误", { type: "error" });
+        if (!$error.isCancelRequest) {
+          // 统一错误处理
+          if (error.response) {
+            const status = error.response.status;
+            if (status === 404) {
+              message("API 接口不存在", { type: "error" });
+            } else if (status === 500) {
+              message("服务器错误", { type: "error" });
+            }
+          } else if (error.request) {
+            message("网络连接失败，请检查后端服务是否启动", { type: "error" });
           }
-        } else if (error.request) {
-          message("网络连接失败，请检查后端服务是否启动", { type: "error" });
         }
 
         // 所有的响应异常 区分来源为取消请求/非取消请求
