@@ -1,4 +1,3 @@
-import os
 
 from flask import Blueprint, request, jsonify
 from core.config.logging import Logger
@@ -7,10 +6,7 @@ from core.services.notes_service import NotesRestService
 notes_rest_bp = Blueprint("notes_rest", __name__, url_prefix="/worker/notes")
 logger = Logger.get_logger("api.notes")
 
-
-def get_notes_service() -> NotesRestService:
-    return NotesRestService(db_url=os.environ.get("DB_URL"))
-
+notes_service = NotesRestService()
 
 def ok_response(data):
     """成功响应"""
@@ -62,7 +58,7 @@ def create_or_update_note():
             if field not in payload:
                 return error_response(f"缺少必需字段: {field}", 400)
 
-        note = get_notes_service().create_or_update_note(
+        note = notes_service.create_or_update_note(
             repo_url=payload["repo_url"],
             branch=payload["branch"],
             commit_sha=payload["commit_sha"],
@@ -120,7 +116,7 @@ def get_note():
         if "repo_url" not in payload or "commit_sha" not in payload:
             return error_response("缺少必需字段: repo_url 和 commit_sha", 400)
 
-        note = get_notes_service().get_note(
+        note = notes_service.get_note(
             repo_url=payload["repo_url"], commit_sha=payload["commit_sha"]
         )
 
@@ -182,7 +178,7 @@ def batch_get_notes():
         if "repo_url" not in payload or "commit_shas" not in payload:
             return error_response("缺少必需字段: repo_url 和 commit_shas", 400)
 
-        result = get_notes_service().batch_get_notes(
+        result = notes_service.batch_get_notes(
             repo_url=payload["repo_url"], commit_shas=payload["commit_shas"]
         )
 
@@ -227,7 +223,7 @@ def batch_push_notes():
         if "repo_url" not in payload or "notes" not in payload:
             return error_response("缺少必需字段: repo_url 和 notes", 400)
 
-        result = get_notes_service().batch_push_notes(
+        result = notes_service.batch_push_notes(
             repo_url=payload["repo_url"], notes_data=payload["notes"]
         )
 
@@ -264,7 +260,7 @@ def list_notes():
         if "repo_url" not in payload:
             return error_response("缺少必需字段: repo_url", 400)
 
-        commit_shas = get_notes_service().list_notes(repo_url=payload["repo_url"])
+        commit_shas = notes_service.list_notes(repo_url=payload["repo_url"])
 
         return ok_response({"commit_shas": commit_shas})
 
@@ -300,7 +296,7 @@ def search_notes():
         if "repo_url" not in payload or "pattern" not in payload:
             return error_response("缺少必需字段: repo_url 和 pattern", 400)
 
-        commit_shas = get_notes_service().search_notes(
+        commit_shas = notes_service.search_notes(
             repo_url=payload["repo_url"], pattern=payload["pattern"]
         )
 
