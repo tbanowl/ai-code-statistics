@@ -6,7 +6,7 @@ SQLAlchemy ORM 模型定义
 """
 
 import time
-import secrets
+from xid import XID
 from typing import Any, Dict
 from sqlalchemy import (
     String,
@@ -22,6 +22,8 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .base import Base
 
+guid = XID()
+
 
 def now_ts() -> int:
     """返回当前时间戳（毫秒）"""
@@ -30,7 +32,7 @@ def now_ts() -> int:
 
 def gen_xid() -> str:
     """生成 XID 字符串"""
-    return secrets.token_hex(10)
+    return guid.string()
 
 
 class ModelBase(Base):
