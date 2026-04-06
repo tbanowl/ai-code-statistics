@@ -273,6 +273,31 @@ COMMENT ON COLUMN stats_repositories.updated_at IS '更新时间戳（毫秒）'
 
 CREATE INDEX IF NOT EXISTS idx_stats_repositories_name ON stats_repositories(repo_name);
 
+
+CREATE TABLE IF NOT EXISTS stats_repo_branch_config (
+    id VARCHAR(20) PRIMARY KEY,
+    repo_id VARCHAR(20) NOT NULL,
+    branch_pattern TEXT NOT NULL,
+    pattern_type VARCHAR(20) NOT NULL DEFAULT 'exact',
+    enabled BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (pattern_type IN ('exact', 'wildcard', 'special'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_repo_branch_config_repo ON stats_repo_branch_config(repo_id);
+CREATE INDEX IF NOT EXISTS idx_repo_branch_config_enabled ON stats_repo_branch_config(repo_id, enabled);
+
+COMMENT ON TABLE stats_repo_branch_config IS '仓库分支配置表';
+comment ON COLUMN stats_repo_branch_config.id IS '主键，使用 XID';
+comment ON COLUMN stats_repo_branch_config.repo_id IS '关联的仓库 ID';
+comment ON COLUMN stats_repo_branch_config.branch_pattern IS '分支匹配模式';
+comment ON COLUMN stats_repo_branch_config.pattern_type IS '匹配模式类型：exact-精确匹配、wildcard-通配符匹配、special-特殊模式';
+comment ON COLUMN stats_repo_branch_config.enabled IS '是否启用该配置';
+comment ON COLUMN stats_repo_branch_config.created_at IS '创建时间';
+comment ON COLUMN stats_repo_branch_config.updated_at IS '更新时间';
+
+
 CREATE TABLE IF NOT EXISTS stats_contributors (
     id VARCHAR(20) PRIMARY KEY,
     contributor_uid TEXT NOT NULL UNIQUE,
