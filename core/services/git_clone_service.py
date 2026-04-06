@@ -223,6 +223,114 @@ class GitCloneService:
             self.logger.error(f"列出文件时出错: {e}")
             return []
 
+    def list_branches(self, repo_dir: str) -> list:
+        """
+        列出仓库所有远程分支
+
+        Args:
+            repo_dir: 仓库目录
+
+        Returns:
+            分支名称列表（去除 origin/ 前缀）
+        """
+        try:
+            result = subprocess.run(
+                ['git', 'branch', '-r', '--format=%(refname:short)'],
+                cwd=repo_dir,
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+
+            if result.returncode != 0:
+                self.logger.error(f"列出分支失败: {result.stderr}")
+                return []
+
+            branches = result.stdout.strip().split('\n')
+            branches = [b.strip() for b in branches if b.strip()]
+
+            # 去除 origin/ 前缀
+            branches = [b.replace('origin/', '') for b in branches if b.startswith('origin/')]
+
+            # 过滤 HEAD
+            branches = [b for b in branches if b != 'HEAD']
+
+            return branches
+
+        except Exception as e:
+            self.logger.error(f"列出分支时出错: {e}")
+            return []
+
+    def checkout_branch(self, repo_dir: str, branch: str) -> bool:
+        """
+        切换到指定分支
+
+        Args:
+            repo_dir: 仓库目录
+            branch: 分支名称
+
+        Returns:
+            是否成功切换
+        """
+        try:
+            result = subprocess.run(
+                ['git', 'checkout', branch],
+                cwd=repo_dir,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+
+            if result.returncode != 0:
+                self.logger.error(f"切换分支失败: {result.stderr}")
+                return False
+
+            self.logger.info(f"成功切换到分支: {branch}")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"切换分支时出错: {e}")
+            return False
+
+    def match_branches(
+        self,
+        all_branches: list,
+        branch_configs: list
+    ) -> list:
+        """
+        根据配置匹配分支
+
+        Args:
+            all_branches: 所有分支列表
+            branch_configs: 分支配置列表
+
+        Returns:
+            匹配的分支列表
+        """
+        import fnmatch
+
+        matched = set()
+
+        for config in branch_configs:
+            pattern = config['branch_pattern']
+            pattern_type = config['pattern_type']
+
+            if pattern_type == 'special':
+                if pattern == 'all':
+                    # 返回所有分支
+                    return all_branches
+            elif pattern_type == 'exact':
+                # 精确匹配
+                if pattern in all_branches:
+                    matched.add(pattern)
+            elif pattern_type == 'wildcard':
+                # 通配符匹配
+                for branch in all_branches:
+                    if fnmatch.fnmatch(branch, pattern):
+                        matched.add(branch)
+
+        return list(matched)
+
     def cleanup_temp_dir(self, temp_dir: str) -> None:
         """
         清理临时目录
