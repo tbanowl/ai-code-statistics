@@ -19,7 +19,7 @@ from sqlalchemy import (
     Index,
     UniqueConstraint,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .base import Base
 
 
@@ -258,6 +258,34 @@ class StatsRepository(ModelBase):
     updated_at: Mapped[int] = mapped_column(
         BigInteger, nullable=False, default=now_ts, onupdate=now_ts
     )
+
+    # 关系
+    branch_configs = relationship(
+        "StatsRepoBranchConfig", back_populates="repository", cascade="all, delete-orphan"
+    )
+
+
+class StatsRepoBranchConfig(ModelBase):
+    """仓库分支配置表"""
+
+    __tablename__ = "stats_repo_branch_config"
+
+    id: Mapped[str] = mapped_column(String(20), primary_key=True, default=gen_xid)
+    repo_id: Mapped[str] = mapped_column(
+        String(20),
+        ForeignKey("stats_repositories.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    branch_pattern: Mapped[str] = mapped_column(Text, nullable=False)
+    pattern_type: Mapped[str] = mapped_column(String(20), nullable=False, default="exact")
+    enabled: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
+    updated_at: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=now_ts, onupdate=now_ts
+    )
+
+    # 关系
+    repository = relationship("StatsRepository", back_populates="branch_configs")
 
 
 class StatsContributor(ModelBase):
