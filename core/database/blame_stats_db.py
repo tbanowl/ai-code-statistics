@@ -148,13 +148,13 @@ class BlameStatsDatabase(BaseDatabase):
 
     def get_repo_branch_configs(self, repo_id: str) -> list:
         """
-        获取仓库的分支配置
+        获取仓库的分支配置（仅返回已启用的配置）
 
         Args:
             repo_id: 仓库 ID
 
         Returns:
-            分支配置列表
+            分支配置列表（仅包含 enabled=1 的配置）
         """
         from core.database.models import StatsRepoBranchConfig
 
@@ -186,7 +186,7 @@ class BlameStatsDatabase(BaseDatabase):
         enabled: int = 1
     ) -> str:
         """
-        保存分支配置
+        保存分支配置（如果已存在相同的 repo_id + branch_pattern，则更新现有记录）
 
         Args:
             repo_id: 仓库 ID
@@ -202,19 +202,37 @@ class BlameStatsDatabase(BaseDatabase):
         now = int(time.time() * 1000)
 
         with self.session_scope() as session:
-            config = StatsRepoBranchConfig(
-                id=gen_xid(),
-                repo_id=repo_id,
-                branch_pattern=branch_pattern,
-                pattern_type=pattern_type,
-                enabled=enabled,
-                created_at=now,
-                updated_at=now
+            # 检查是否存在相同的 (repo_id, branch_pattern)
+            existing = (
+                session.query(StatsRepoBranchConfig)
+                .filter(
+                    StatsRepoBranchConfig.repo_id == repo_id,
+                    StatsRepoBranchConfig.branch_pattern == branch_pattern
+                )
+                .first()
             )
-            session.add(config)
-            session.flush()
 
-            return config.id
+            if existing:
+                # 更新现有记录
+                existing.pattern_type = pattern_type
+                existing.enabled = enabled
+                existing.updated_at = now
+                session.flush()
+                return existing.id
+            else:
+                # 创建新记录
+                config = StatsRepoBranchConfig(
+                    id=gen_xid(),
+                    repo_id=repo_id,
+                    branch_pattern=branch_pattern,
+                    pattern_type=pattern_type,
+                    enabled=enabled,
+                    created_at=now,
+                    updated_at=now
+                )
+                session.add(config)
+                session.flush()
+                return config.id
 
     def delete_repo_branch_configs(self, repo_id: str) -> None:
         """
