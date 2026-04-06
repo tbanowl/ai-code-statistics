@@ -19,7 +19,9 @@ class GitCloneService:
         repo_url: str,
         private_key: str,
         target_dir: str,
-        shallow_since: str = '2026-03-20'
+        # 使用 30 天作为默认值，平衡了数据完整性和克隆速度
+        # 对于大多数统计场景，30 天的历史记录足够进行有意义的分析
+        shallow_since: str = '30 days ago'
     ) -> bool:
         """
         使用指定 SSH Key 克隆仓库
@@ -28,7 +30,10 @@ class GitCloneService:
             repo_url: Git 仓库 URL
             private_key: SSH 私钥内容
             target_dir: 目标目录
-            shallow_since: 浅克隆起始日期（默认 2026-03-20）
+            shallow_since: 浅克隆起始日期，支持以下格式：
+                - 相对日期（推荐）: '30 days ago', '1 month ago', '2 weeks ago'
+                - 绝对日期: '2026-03-20', '2026-01-01'
+                默认为 '30 days ago'，自动适应时间推移
 
         Returns:
             是否成功克隆
