@@ -7,7 +7,6 @@ Metrics 原始数据操作类
 from typing import Dict, List, Optional
 from datetime import datetime
 
-from polars import first
 
 from .base import BaseDatabase, session_scope
 from .models import (
@@ -42,7 +41,6 @@ class MetricsDatabase(BaseDatabase):
         """保存原始 metrics batch，返回 raw_id"""
         with session_scope(self.engine) as session:
             record = MetricsEventsRaw(
-                batch_id=batch_id,
                 version=version,
                 event_count=event_count,
                 payload_json=payload_json,

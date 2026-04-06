@@ -54,7 +54,6 @@ class MetricsEventsRaw(ModelBase):
     __tablename__ = "metrics_events_raw"
 
     id: Mapped[str] = mapped_column(String(20), primary_key=True, default=gen_xid)
-    batch_id: Mapped[str] = mapped_column(String(100), nullable=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
     event_count: Mapped[int] = mapped_column(Integer, nullable=False)
     payload_json: Mapped[str] = mapped_column(Text, nullable=False)
@@ -97,16 +96,16 @@ class MetricsEventsCommitted(ModelBase):
     time_waiting_for_ai: Mapped[dict] = mapped_column(JSON, nullable=True)
 
     # 事件属性
-    git_ai_version: Mapped[str] = mapped_column(String, nullable=True)
-    repo_url: Mapped[str] = mapped_column(String, nullable=True, index=True)
-    author: Mapped[str] = mapped_column(String, nullable=True, index=True)
-    commit_sha: Mapped[str] = mapped_column(String, nullable=True, index=True)
-    base_commit_sha: Mapped[str] = mapped_column(String, nullable=True)
-    branch: Mapped[str] = mapped_column(String, nullable=True)
-    tool: Mapped[str] = mapped_column(String, nullable=True)
-    model: Mapped[str] = mapped_column(String, nullable=True)
-    prompt_id: Mapped[str] = mapped_column(String, nullable=True)
-    external_prompt_id: Mapped[str] = mapped_column(String, nullable=True)
+    git_ai_version: Mapped[str] = mapped_column(String(20), nullable=True)
+    repo_url: Mapped[str] = mapped_column(String(200), nullable=True, index=True)
+    author: Mapped[str] = mapped_column(String(100), nullable=True, index=True)
+    commit_sha: Mapped[str] = mapped_column(String(40), nullable=True, index=True)
+    base_commit_sha: Mapped[str] = mapped_column(String(40), nullable=True)
+    branch: Mapped[str] = mapped_column(String(100), nullable=True)
+    tool: Mapped[str] = mapped_column(String(100), nullable=True)
+    model: Mapped[str] = mapped_column(String(100), nullable=True)
+    prompt_id: Mapped[str] = mapped_column(String(100), nullable=True)
+    external_prompt_id: Mapped[str] = mapped_column(String(100), nullable=True)
     custom_attributes: Mapped[dict] = mapped_column(JSON, nullable=True)
 
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
