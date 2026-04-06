@@ -175,109 +175,63 @@ class GitBlameStatsTask(BaseTask):
             # 获取统计配置
             config = load_config()
             file_filter = config.get('blame_stats', {}).get('file_filter', {})
-
-            # 分析仓库
             repo_url = self.blame_stats_db.get_repository_repo_url(repo_id)
-            result = self.blame_stats_service.analyze_repository(
-                repo_url,
-                temp_dir,
-                stat_date,
-                file_filter
-            )
 
-            if not result:
-                self.logger.error("仓库分析失败")
-                return None
+            # 遍历每个分支进行统计
+            branch_results = {}
+            success_count = 0
+            failed_count = 0
 
-            # 保存仓库级统计结果
-            self.blame_stats_db.save_repo_blame_stats(
-                repo_id=repo_id,
-                stat_date=stat_date,
-                commit_sha=result.commit_sha,
-                branch=result.branch,
-                total_lines=result.total_lines,
-                ai_lines=result.ai_lines,
-                non_ai_lines=result.non_ai_lines,
-                total_files=result.total_files
-            )
+            for branch in target_branches:
+                self.logger.info(f"开始统计分支: {branch}")
 
-            # 保存文件级统计结果
-            for file_result in result.files_results:
-                self.blame_stats_db.save_file_blame_stats(
-                    repo_id=repo_id,
-                    stat_date=stat_date,
-                    file_path=file_result.file_path,
-                    commit_sha=file_result.commit_sha,
-                    total_lines=file_result.total_lines,
-                    ai_lines=file_result.ai_lines,
-                    non_ai_lines=file_result.non_ai_lines
-                )
-
-            # 保存仓库贡献者统计结果
-            contributor_ids = {}
-            for contrib_key, stats in result.contributor_stats.items():
-                contrib_id = self.blame_stats_db.get_or_create_contributor(
-                    'Unknown',  # 实际应该从 git blame 获取贡献者信息
-                    None
-                )
-                contributor_ids[contrib_key] = contrib_id
-
-                # 需要获取实际的贡献者名称和邮箱
-                # 这里简化处理，实际应该从 git blame 解析
-                contrib_name = f'Contributor_{contrib_key[:8]}'
-                contrib_email = ""
-
-                self.blame_stats_db.save_repo_contributor_stats(
-                    repo_id=repo_id,
-                    stat_date=stat_date,
-                    contributor_id=contrib_id,
-                    contributor_name=contrib_name,
-                    contributor_email=contrib_email,
-                    ai_lines=stats['ai_lines'],
-                    non_ai_lines=stats['non_ai_lines'],
-                    total_lines=stats['total_lines']
-                )
-
-            # 获取文件记录用于保存文件贡献者统计
-            file_records = self.blame_stats_db.get_file_blame_stats(repo_id, stat_date)
-            file_id_map = {r['file_path']: r['id'] for r in file_records}
-
-            # 保存文件贡献者统计（批量）
-            file_contributor_stats = []
-            for file_result in result.files_results:
-                file_id = file_id_map.get(file_result.file_path)
-                if not file_id:
+                # 切换分支
+                if not self.git_clone_service.checkout_branch(temp_dir, branch):
+                    self.logger.warning(f"分支 {branch} 切换失败，跳过")
+                    failed_count += 1
                     continue
 
-                for contrib_key, stats in file_result.contributor_stats.items():
-                    contrib_id = contributor_ids.get(contrib_key)
-
-                    file_contributor_stats.append({
-                        'file_id': file_id,
-                        'stat_date': stat_date,
-                        'repo_id': repo_id,
-                        'file_path': file_result.file_path,
-                        'contributor_id': contrib_id,
-                        'contributor_name': f'Contributor_{contrib_key[:8]}',
-                        'contributor_email': None,
-                        'ai_lines': stats['ai_lines'],
-                        'non_ai_lines': stats['non_ai_lines'],
-                        'total_lines': stats['total_lines']
-                    })
-
-            if file_contributor_stats:
-                self.blame_stats_db.save_batch_file_contributor_stats(
-                    file_contributor_stats
+                # 统计该分支
+                result = self.blame_stats_service.analyze_repository(
+                    repo_url,
+                    temp_dir,
+                    stat_date,
+                    file_filter
                 )
 
+                if not result:
+                    self.logger.error(f"分支 {branch} 分析失败")
+                    failed_count += 1
+                    continue
+
+                # 保存该分支的统计结果
+                self._save_branch_stats(repo_id, stat_date, result)
+
+                branch_results[branch] = {
+                    'total_lines': result.total_lines,
+                    'ai_lines': result.ai_lines,
+                    'non_ai_lines': result.non_ai_lines,
+                    'ai_ratio': round(
+                        (result.ai_lines / result.total_lines * 100) if result.total_lines > 0 else 0.0,
+                        2
+                    )
+                }
+                success_count += 1
+
+                self.logger.info(
+                    f"分支 {branch} 统计完成: "
+                    f"总行数={result.total_lines}, "
+                    f"AI 行数={result.ai_lines}, "
+                    f"AI 占比={branch_results[branch]['ai_ratio']}%"
+                )
+
+            # 返回汇总信息
             return {
-                'total_lines': result.total_lines,
-                'ai_lines': result.ai_lines,
-                'non_ai_lines': result.non_ai_lines,
-                'ai_ratio': round(
-                    (result.ai_lines / result.total_lines * 100) if result.total_lines > 0 else 0.0,
-                    2
-                )
+                'success': failed_count == 0,
+                'total_branches': len(target_branches),
+                'success_branches': success_count,
+                'failed_branches': failed_count,
+                'branch_results': branch_results
             }
 
         except Exception as e:
