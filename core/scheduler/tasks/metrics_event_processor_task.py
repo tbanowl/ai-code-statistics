@@ -1,6 +1,5 @@
 """Metrics 事件处理定时任务"""
 
-import json
 from typing import Dict, Optional
 from core.scheduler.tasks.base import BaseTask
 from core.scheduler.scheduled import scheduled
