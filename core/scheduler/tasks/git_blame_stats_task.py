@@ -242,3 +242,95 @@ class GitBlameStatsTask(BaseTask):
             # 清理临时目录
             if temp_dir and os.path.exists(temp_dir):
                 self.git_clone_service.cleanup_temp_dir(temp_dir)
+
+    def _save_branch_stats(
+        self,
+        repo_id: str,
+        stat_date: int,
+        result
+    ) -> None:
+        """
+        保存分支统计结果
+
+        Args:
+            repo_id: 仓库 ID
+            stat_date: 统计日期
+            result: 分析结果
+        """
+        # 保存仓库级统计结果
+        self.blame_stats_db.save_repo_blame_stats(
+            repo_id=repo_id,
+            stat_date=stat_date,
+            commit_sha=result.commit_sha,
+            branch=result.branch,
+            total_lines=result.total_lines,
+            ai_lines=result.ai_lines,
+            non_ai_lines=result.non_ai_lines,
+            total_files=result.total_files
+        )
+
+        # 保存文件级统计结果
+        for file_result in result.files_results:
+            self.blame_stats_db.save_file_blame_stats(
+                repo_id=repo_id,
+                stat_date=stat_date,
+                file_path=file_result.file_path,
+                commit_sha=file_result.commit_sha,
+                total_lines=file_result.total_lines,
+                ai_lines=file_result.ai_lines,
+                non_ai_lines=file_result.non_ai_lines
+            )
+
+        # 保存仓库贡献者统计结果
+        contributor_ids = {}
+        for contrib_key, stats in result.contributor_stats.items():
+            contrib_id = self.blame_stats_db.get_or_create_contributor(
+                'Unknown',
+                None
+            )
+            contributor_ids[contrib_key] = contrib_id
+
+            contrib_name = f'Contributor_{contrib_key[:8]}'
+            contrib_email = ""
+
+            self.blame_stats_db.save_repo_contributor_stats(
+                repo_id=repo_id,
+                stat_date=stat_date,
+                contributor_id=contrib_id,
+                contributor_name=contrib_name,
+                contributor_email=contrib_email,
+                ai_lines=stats['ai_lines'],
+                non_ai_lines=stats['non_ai_lines'],
+                total_lines=stats['total_lines']
+            )
+
+        # 保存文件贡献者统计
+        file_records = self.blame_stats_db.get_file_blame_stats(repo_id, stat_date)
+        file_id_map = {r['file_path']: r['id'] for r in file_records}
+
+        file_contributor_stats = []
+        for file_result in result.files_results:
+            file_id = file_id_map.get(file_result.file_path)
+            if not file_id:
+                continue
+
+            for contrib_key, stats in file_result.contributor_stats.items():
+                contrib_id = contributor_ids.get(contrib_key)
+
+                file_contributor_stats.append({
+                    'file_id': file_id,
+                    'stat_date': stat_date,
+                    'repo_id': repo_id,
+                    'file_path': file_result.file_path,
+                    'contributor_id': contrib_id,
+                    'contributor_name': f'Contributor_{contrib_key[:8]}',
+                    'contributor_email': None,
+                    'ai_lines': stats['ai_lines'],
+                    'non_ai_lines': stats['non_ai_lines'],
+                    'total_lines': stats['total_lines']
+                })
+
+        if file_contributor_stats:
+            self.blame_stats_db.save_batch_file_contributor_stats(
+                file_contributor_stats
+            )
