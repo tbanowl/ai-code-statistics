@@ -32,6 +32,7 @@ def gen_xid() -> str:
     """生成 XID 字符串"""
     return XID().string()
 
+
 class ModelBase(Base):
     """模型基类，提供通用字段和方法"""
 
@@ -267,12 +268,15 @@ class StatsRepoBranchConfig(ModelBase):
     repo_id: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     branch_pattern: Mapped[str] = mapped_column(String(400), nullable=False)
     # pattern_type 有效值: 'exact' (精确匹配), 'wildcard' (通配符), 'special' (特殊规则)
-    pattern_type: Mapped[str] = mapped_column(String(20), nullable=False, default="exact")
+    pattern_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="exact"
+    )
     enabled: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
     updated_at: Mapped[int] = mapped_column(
         BigInteger, nullable=False, default=now_ts, onupdate=now_ts
     )
+
 
 class StatsContributor(ModelBase):
     """贡献者表"""
@@ -552,3 +556,78 @@ class StatsBlameFileContributor(ModelBase):
     updated_at: Mapped[int] = mapped_column(
         BigInteger, nullable=False, default=now_ts, onupdate=now_ts
     )
+
+
+# ============================================================================
+# 系统管理表
+# ============================================================================
+
+
+class SysDept(ModelBase):
+    __tablename__ = "sys_dept"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_id: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    sort: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
+
+
+class SysMenu(ModelBase):
+    __tablename__ = "sys_menu"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_id: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    title: Mapped[str] = mapped_column(String(100), nullable=False)
+    path: Mapped[str] = mapped_column(String(200), nullable=True)
+    component: Mapped[str] = mapped_column(String(200), nullable=True)
+    icon: Mapped[str] = mapped_column(String(100), nullable=True)
+    rank: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    menu_type: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    show_link: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    keep_alive: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
+
+
+class SysRole(ModelBase):
+    __tablename__ = "sys_role"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    code: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    status: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    remark: Mapped[str] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
+
+
+class SysUser(ModelBase):
+    __tablename__ = "sys_user"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    username: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    password: Mapped[str] = mapped_column(String(200), nullable=False)
+    nickname: Mapped[str] = mapped_column(String(100), nullable=True)
+    phone: Mapped[str] = mapped_column(String(20), nullable=True)
+    email: Mapped[str] = mapped_column(String(200), nullable=True)
+    dept_id: Mapped[int] = mapped_column(Integer, nullable=True)
+    avatar: Mapped[str] = mapped_column(String(500), nullable=True)
+    status: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
+
+
+class SysUserRole(ModelBase):
+    __tablename__ = "sys_user_role"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    role_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+
+
+class SysRoleMenu(ModelBase):
+    __tablename__ = "sys_role_menu"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    role_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    menu_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)

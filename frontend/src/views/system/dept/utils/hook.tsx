@@ -2,7 +2,7 @@ import dayjs from "dayjs";
 import editForm from "../form.vue";
 import { handleTree } from "@/utils/tree";
 import { message } from "@/utils/message";
-import { getDeptList } from "@/api/system";
+import { getDeptList, addDept, updateDept, deleteDept } from "@/api/system";
 import { usePublicHooks } from "../../hooks";
 import { addDialog } from "@/components/ReDialog";
 import { reactive, ref, onMounted, h } from "vue";
@@ -63,7 +63,7 @@ export function useDept() {
   ];
 
   function handleSelectionChange(val) {
-    console.log("handleSelectionChange", val);
+    return val;
   }
 
   function resetForm(formEl) {
@@ -110,6 +110,7 @@ export function useDept() {
       title: `${title}部门`,
       props: {
         formInline: {
+          id: row?.id,
           higherDeptOptions: formatHigherDeptOptions(cloneDeep(dataList.value)),
           parentId: row?.parentId ?? 0,
           name: row?.name ?? "",
@@ -139,14 +140,11 @@ export function useDept() {
         }
         FormRef.validate(valid => {
           if (valid) {
-            console.log("curData", curData);
             // 表单规则校验通过
             if (title === "新增") {
-              // 实际开发先调用新增接口，再进行下面操作
-              chores();
+              addDept(curData).then(() => chores());
             } else {
-              // 实际开发先调用修改接口，再进行下面操作
-              chores();
+              updateDept(curData.id, curData).then(() => chores());
             }
           }
         });
@@ -155,8 +153,10 @@ export function useDept() {
   }
 
   function handleDelete(row) {
-    message(`您删除了部门名称为${row.name}的这条数据`, { type: "success" });
-    onSearch();
+    deleteDept(row.id).then(() => {
+      message(`已删除部门 ${row.name}`, { type: "success" });
+      onSearch();
+    });
   }
 
   onMounted(() => {

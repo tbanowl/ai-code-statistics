@@ -163,17 +163,17 @@ class BlameStatsDatabase(BaseDatabase):
                 session.query(StatsRepoBranchConfig)
                 .filter(
                     StatsRepoBranchConfig.repo_id == repo_id,
-                    StatsRepoBranchConfig.enabled == 1
+                    StatsRepoBranchConfig.enabled == 1,
                 )
                 .all()
             )
 
             return [
                 {
-                    'id': c.id,
-                    'branch_pattern': c.branch_pattern,
-                    'pattern_type': c.pattern_type,
-                    'enabled': c.enabled
+                    "id": c.id,
+                    "branch_pattern": c.branch_pattern,
+                    "pattern_type": c.pattern_type,
+                    "enabled": c.enabled,
                 }
                 for c in configs
             ]
@@ -182,8 +182,8 @@ class BlameStatsDatabase(BaseDatabase):
         self,
         repo_id: str,
         branch_pattern: str,
-        pattern_type: str = 'exact',
-        enabled: int = 1
+        pattern_type: str = "exact",
+        enabled: int = 1,
     ) -> str:
         """
         保存分支配置（如果已存在相同的 repo_id + branch_pattern，则更新现有记录）
@@ -207,7 +207,7 @@ class BlameStatsDatabase(BaseDatabase):
                 session.query(StatsRepoBranchConfig)
                 .filter(
                     StatsRepoBranchConfig.repo_id == repo_id,
-                    StatsRepoBranchConfig.branch_pattern == branch_pattern
+                    StatsRepoBranchConfig.branch_pattern == branch_pattern,
                 )
                 .first()
             )
@@ -228,7 +228,7 @@ class BlameStatsDatabase(BaseDatabase):
                     pattern_type=pattern_type,
                     enabled=enabled,
                     created_at=now,
-                    updated_at=now
+                    updated_at=now,
                 )
                 session.add(config)
                 session.flush()
@@ -777,3 +777,54 @@ class BlameStatsDatabase(BaseDatabase):
                 }
                 for s in stats
             ]
+
+    def get_blame_repo_stats_paginated(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+        start_date: int | None = None,
+        end_date: int | None = None,
+        repo_id: str | None = None,
+    ) -> dict:
+        from core.database.models import StatsBlameRepo, StatsRepository
+
+        with session_scope(self.engine) as session:
+            query = session.query(StatsBlameRepo)
+            if start_date is not None:
+                query = query.filter(StatsBlameRepo.stat_date >= start_date)
+            if end_date is not None:
+                query = query.filter(StatsBlameRepo.stat_date <= end_date)
+            if repo_id:
+                query = query.filter(StatsBlameRepo.repo_id == repo_id)
+
+            total = query.count()
+            rows = (
+                query.join(
+                    StatsRepository, StatsRepository.id == StatsBlameRepo.repo_id
+                )
+                .with_entities(StatsBlameRepo, StatsRepository.repo_name)
+                .order_by(StatsBlameRepo.stat_date.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+                .all()
+            )
+
+            return {
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+                "items": [
+                    {
+                        "id": s.id,
+                        "repo_id": s.repo_id,
+                        "repo_name": repo_name or "未知仓库",
+                        "stat_date": s.stat_date,
+                        "branch": s.branch,
+                        "ai_lines": s.ai_lines,
+                        "non_ai_lines": s.non_ai_lines,
+                        "total_lines": s.total_lines,
+                        "ai_ratio": float(s.ai_ratio) if s.ai_ratio else 0.0,
+                    }
+                    for s, repo_name in rows
+                ],
+            }

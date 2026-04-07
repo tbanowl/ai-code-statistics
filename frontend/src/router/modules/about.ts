@@ -7,7 +7,8 @@ export default {
   meta: {
     icon: "ri/file-info-line",
     title: $t("menus.pureAbout"),
-    rank: about
+    rank: about,
+    showLink: false
   },
   children: [
     {

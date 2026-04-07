@@ -9,7 +9,7 @@ import { addDialog } from "@/components/ReDialog";
 import type { FormItemProps } from "../utils/types";
 import type { PaginationProps } from "@pureadmin/table";
 import { getKeyList, deviceDetection } from "@pureadmin/utils";
-import { getRoleList, getRoleMenu, getRoleMenuIds } from "@/api/system";
+import { getRoleList, getRoleMenu, getRoleMenuIds, addRole, updateRole, deleteRole, setRoleMenus } from "@/api/system";
 import { type Ref, reactive, ref, onMounted, h, toRaw, watch } from "vue";
 
 export function useRole(treeRef: Ref) {
@@ -127,16 +127,25 @@ export function useRole(treeRef: Ref) {
           }
         );
         setTimeout(() => {
-          switchLoadMap.value[index] = Object.assign(
-            {},
-            switchLoadMap.value[index],
-            {
-              loading: false
-            }
-          );
-          message(`已${row.status === 0 ? "停用" : "启用"}${row.name}`, {
-            type: "success"
-          });
+          updateRole(row.id, { status: row.status })
+            .then(() => {
+              message(`已${row.status === 0 ? "停用" : "启用"}${row.name}`, {
+                type: "success"
+              });
+              onSearch();
+            })
+            .catch(() => {
+              row.status === 0 ? (row.status = 1) : (row.status = 0);
+            })
+            .finally(() => {
+              switchLoadMap.value[index] = Object.assign(
+                {},
+                switchLoadMap.value[index],
+                {
+                  loading: false
+                }
+              );
+            });
         }, 300);
       })
       .catch(() => {
@@ -145,25 +154,34 @@ export function useRole(treeRef: Ref) {
   }
 
   function handleDelete(row) {
-    message(`您删除了角色名称为${row.name}的这条数据`, { type: "success" });
-    onSearch();
+    deleteRole(row.id).then(() => {
+      message(`已删除角色 ${row.name}`, { type: "success" });
+      onSearch();
+    });
   }
 
   function handleSizeChange(val: number) {
-    console.log(`${val} items per page`);
+    pagination.pageSize = val;
+    pagination.currentPage = 1;
+    onSearch();
   }
 
   function handleCurrentChange(val: number) {
-    console.log(`current page: ${val}`);
+    pagination.currentPage = val;
+    onSearch();
   }
 
   function handleSelectionChange(val) {
-    console.log("handleSelectionChange", val);
+    return val;
   }
 
   async function onSearch() {
     loading.value = true;
-    const { code, data } = await getRoleList(toRaw(form));
+    const { code, data } = await getRoleList({
+      ...toRaw(form),
+      currentPage: pagination.currentPage,
+      pageSize: pagination.pageSize
+    });
     if (code === 0) {
       dataList.value = data.list;
       pagination.total = data.total;
@@ -187,6 +205,7 @@ export function useRole(treeRef: Ref) {
       title: `${title}角色`,
       props: {
         formInline: {
+          id: row?.id,
           name: row?.name ?? "",
           code: row?.code ?? "",
           remark: row?.remark ?? ""
@@ -210,14 +229,11 @@ export function useRole(treeRef: Ref) {
         }
         FormRef.validate(valid => {
           if (valid) {
-            console.log("curData", curData);
             // 表单规则校验通过
             if (title === "新增") {
-              // 实际开发先调用新增接口，再进行下面操作
-              chores();
+              addRole(curData).then(() => chores());
             } else {
-              // 实际开发先调用修改接口，再进行下面操作
-              chores();
+              updateRole(curData.id, curData).then(() => chores());
             }
           }
         });
@@ -231,7 +247,7 @@ export function useRole(treeRef: Ref) {
     if (id) {
       curRow.value = row;
       isShow.value = true;
-      const { code, data } = await getRoleMenuIds({ id });
+      const { code, data } = await getRoleMenuIds({ roleId: id });
       if (code === 0) {
         treeRef.value.setCheckedKeys(data);
       }
@@ -252,10 +268,8 @@ export function useRole(treeRef: Ref) {
   /** 菜单权限-保存 */
   function handleSave() {
     const { id, name } = curRow.value;
-    // 根据用户 id 调用实际项目中菜单权限修改接口
-    console.log(id, treeRef.value.getCheckedKeys());
-    message(`角色名称为${name}的菜单权限修改成功`, {
-      type: "success"
+    setRoleMenus({ roleId: id, menuIds: treeRef.value.getCheckedKeys() }).then(() => {
+      message(`角色名称为${name}的菜单权限修改成功`, { type: "success" });
     });
   }
 

@@ -555,3 +555,65 @@ CREATE TABLE IF NOT EXISTS apscheduler_jobs (
     job_state LONGBLOB NOT NULL,
     INDEX idx_apscheduler_jobs_next_run_time (next_run_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='APScheduler JobStore 表';
+
+CREATE TABLE IF NOT EXISTS sys_dept (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    parent_id INT NOT NULL DEFAULT 0,
+    name VARCHAR(100) NOT NULL,
+    sort INT NOT NULL DEFAULT 0,
+    status INT NOT NULL DEFAULT 1,
+    created_at BIGINT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sys_menu (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    parent_id INT NOT NULL DEFAULT 0,
+    title VARCHAR(100) NOT NULL,
+    path VARCHAR(200),
+    component VARCHAR(200),
+    icon VARCHAR(100),
+    `rank` INT NOT NULL DEFAULT 0,
+    menu_type INT NOT NULL DEFAULT 0,
+    status INT NOT NULL DEFAULT 1,
+    show_link INT NOT NULL DEFAULT 1,
+    keep_alive INT NOT NULL DEFAULT 0,
+    created_at BIGINT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sys_role (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    name VARCHAR(100) NOT NULL,
+    code VARCHAR(100) NOT NULL UNIQUE,
+    status INT NOT NULL DEFAULT 1,
+    remark VARCHAR(500),
+    created_at BIGINT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sys_user (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    username VARCHAR(100) NOT NULL UNIQUE,
+    password VARCHAR(200) NOT NULL,
+    nickname VARCHAR(100),
+    phone VARCHAR(20),
+    email VARCHAR(200),
+    dept_id INT,
+    avatar VARCHAR(500),
+    status INT NOT NULL DEFAULT 1,
+    created_at BIGINT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sys_user_role (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    user_id INT NOT NULL,
+    role_id INT NOT NULL,
+    INDEX idx_user_role_user (user_id),
+    INDEX idx_user_role_role (role_id)
+);
+
+CREATE TABLE IF NOT EXISTS sys_role_menu (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    role_id INT NOT NULL,
+    menu_id INT NOT NULL,
+    INDEX idx_role_menu_role (role_id),
+    INDEX idx_role_menu_menu (menu_id)
+);

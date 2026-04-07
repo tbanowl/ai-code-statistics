@@ -11,8 +11,11 @@ export type ApiResponse<T> = {
   };
 };
 
+export type PaginationData = NonNullable<ApiResponse<unknown>["pagination"]>;
+
 // 统计项类型
 export type StatItem = {
+  stat_date: number;
   ai_generated_lines: number;
   ai_accepted_lines: number;
   human_lines: number;
@@ -44,18 +47,58 @@ export type StatsData = {
 
 // 仓库统计项类型
 export type RepoStatItem = {
+  id: string;
   repo_path: string;
-  ai_accepted_lines: number;
-  human_lines: number;
-  ai_percentage: number;
+  repo_name: string | null;
+  repo_stats_flag?: number;
+  ssh_key_id?: string | null;
+  created_at: number;
+  updated_at: number;
 };
 
 // 贡献者统计项类型
 export type ContributorStatItem = {
-  contributor: string;
+  id: string;
+  contributor_uid: string;
+  name: string;
+  email: string | null;
+  created_at: number;
+  updated_at: number;
+};
+
+export type DailyStatItem = {
+  id: string;
+  stat_date: number;
+  repo_id: string;
+  repo_name: string | null;
+  contributor_id: string;
+  contributor_name: string | null;
+  ai_generated_lines: number;
+  ai_generated_lines_total: number;
   ai_accepted_lines: number;
   human_lines: number;
-  ai_percentage: number;
+  ai_percentage: number | string;
+  git_ai_version?: string | null;
+  created_at: number;
+  updated_at: number;
+};
+
+export type TriggerAggregateData = {
+  execution_id: string;
+  status: string;
+  message: string;
+};
+
+export type BlameRepoStatItem = {
+  id: string;
+  repo_id: string;
+  repo_name: string;
+  stat_date: number;
+  branch: string;
+  ai_lines: number;
+  non_ai_lines: number;
+  total_lines: number;
+  ai_ratio: number;
 };
 
 /** 获取整体统计数据 */
@@ -75,9 +118,13 @@ export const getRepoStats = (params?: {
   page_size?: number;
   keyword?: string;
 }) => {
-  return http.request<ApiResponse<RepoStatItem[]>>("get", "/api/stats/repositories", {
-    params,
-  });
+  return http.request<ApiResponse<RepoStatItem[]>>(
+    "get",
+    "/api/stats/repositories",
+    {
+      params
+    }
+  );
 };
 
 /** 获取贡献者统计列表 */
@@ -88,7 +135,49 @@ export const getContributorStats = (params?: {
 }) => {
   return http.request<ApiResponse<ContributorStatItem[]>>(
     "get",
-    "/api/stats/stats/contributors",
+    "/api/stats/contributors",
+    { params }
+  );
+};
+
+export const getDailyStats = (params?: {
+  page?: number;
+  page_size?: number;
+  start_date?: number;
+  end_date?: number;
+  repo_id?: string;
+  contributor_id?: string;
+}) => {
+  return http.request<ApiResponse<DailyStatItem[]>>("get", "/api/stats/daily", {
+    params
+  });
+};
+
+export const triggerStatsAggregate = (payload?: {
+  start_date?: number;
+  end_date?: number;
+  repo_id?: string;
+  contributor_id?: string;
+}) => {
+  return http.request<ApiResponse<TriggerAggregateData>>(
+    "post",
+    "/api/stats/stats/aggregate",
+    {
+      data: payload ?? {}
+    }
+  );
+};
+
+export const getBlameRepoStats = (params?: {
+  page?: number;
+  page_size?: number;
+  start_date?: number;
+  end_date?: number;
+  repo_id?: string;
+}) => {
+  return http.request<ApiResponse<BlameRepoStatItem[]>>(
+    "get",
+    "/api/stats-repo/blame/repos",
     { params }
   );
 };

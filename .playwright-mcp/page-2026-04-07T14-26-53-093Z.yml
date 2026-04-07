@@ -1,0 +1,64 @@
+- generic [active] [ref=e1]:
+  - img
+  - generic [ref=e3]:
+    - img [ref=e4]
+    - generic [ref=e5]:
+      - generic [ref=e6]:
+        - switch
+        - img [ref=e11] [cursor=pointer]
+      - button [ref=e16] [cursor=pointer]
+    - generic [ref=e18]:
+      - img [ref=e20]
+      - generic [ref=e59]:
+        - img [ref=e60]
+        - heading [level=2] [ref=e65]
+        - generic [ref=e67]:
+          - generic [ref=e72]:
+            - img [ref=e75]
+            - textbox "账号" [ref=e77]: admin
+          - generic [ref=e82]:
+            - img [ref=e85]
+            - textbox "密码" [ref=e87]: admin123
+            - img [ref=e90] [cursor=pointer]
+          - generic [ref=e97]:
+            - img [ref=e100]
+            - textbox "验证码" [ref=e102]
+          - generic [ref=e107]:
+            - generic [ref=e108]:
+              - generic [ref=e109] [cursor=pointer]:
+                - generic [ref=e110]:
+                  - checkbox "7 天内免登录"
+                - generic [ref=e113]:
+                  - combobox [ref=e114]:
+                    - option "1"
+                    - option "7" [selected]
+                    - option "30"
+                  - text: 天内免登录
+                  - img [ref=e115]
+              - button "忘记密码?" [ref=e117] [cursor=pointer]:
+                - generic [ref=e118]: 忘记密码?
+            - button "登录" [ref=e119] [cursor=pointer]:
+              - generic [ref=e120]: 登录
+          - generic [ref=e124]:
+            - button "手机登录" [ref=e125] [cursor=pointer]:
+              - generic [ref=e126]: 手机登录
+            - button "二维码登录" [ref=e127] [cursor=pointer]:
+              - generic [ref=e128]: 二维码登录
+            - button "注册" [ref=e129] [cursor=pointer]:
+              - generic [ref=e130]: 注册
+        - generic [ref=e133]:
+          - separator [ref=e134]:
+            - paragraph [ref=e136]: 第三方登录
+          - generic [ref=e137]:
+            - generic "微信登录" [ref=e138]:
+              - img [ref=e139] [cursor=pointer]
+            - generic "支付宝登录" [ref=e141]:
+              - img [ref=e142] [cursor=pointer]
+            - generic "QQ登录" [ref=e144]:
+              - img [ref=e145] [cursor=pointer]
+            - generic "微博登录" [ref=e147]:
+              - img [ref=e148] [cursor=pointer]
+    - generic [ref=e150]:
+      - text: Copyright © 2020-present
+      - link "PureAdmin" [ref=e151] [cursor=pointer]:
+        - /url: https://github.com/pure-admin

@@ -12,6 +12,27 @@ from core.config import load_config
 from core.config.logging import Logger
 
 
+config = load_config()
+database_config = config.get("database")
+if not database_config:
+    raise Exception("数据库配置错误")
+url = database_config.get("url")
+echo_value = database_config.get("echo", False)
+if isinstance(echo_value, str):
+    echo = echo_value.lower() in {"1", "true", "yes", "on"}
+else:
+    echo = bool(echo_value)
+
+global_engine = create_engine(
+    database_config.get("url"),
+    echo=echo,
+    pool_pre_ping=True,
+    pool_size=5,
+    max_overflow=10,
+    pool_timeout=30,
+    pool_recycle=1800,
+)
+
 class Base(DeclarativeBase):
     """SQLAlchemy 模型基类"""
 
@@ -80,13 +101,17 @@ class BaseDatabase:
                 url,
                 echo=echo,
                 pool_pre_ping=True,
+                pool_size=5,
+                max_overflow=10,
+                pool_timeout=30,
+                pool_recycle=1800,
             )
         return cls._shared_engine
 
     @property
     def engine(self) -> Engine:
         """获取引擎实例"""
-        return self.get_shared_engine(self.url, self.echo)
+        return global_engine
 
 
     def close(self) -> None:

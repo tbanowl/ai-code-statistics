@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useNav } from "@/layout/hooks/useNav";
 import LaySearch from "../lay-search/index.vue";
-import LayNotice from "../lay-notice/index.vue";
+// import LayNotice from "../lay-notice/index.vue";
 import LayNavMix from "../lay-sidebar/NavMix.vue";
 import { useTranslationLang } from "@/layout/hooks/useTranslationLang";
 import LaySidebarFullScreen from "../lay-sidebar/components/SidebarFullScreen.vue";
@@ -50,9 +50,9 @@ const { t, locale, translationCh, translationEn } = useTranslationLang();
 
     <div v-if="layout === 'vertical'" class="vertical-header-right">
       <!-- 菜单搜索 -->
-      <LaySearch id="header-search" />
+      <!-- <LaySearch id="header-search" /> -->
       <!-- 国际化 -->
-      <el-dropdown id="header-translation" trigger="click">
+      <!-- <el-dropdown id="header-translation" trigger="click">
         <div
           class="globalization-icon navbar-bg-hover hover:[&>svg]:animate-scale-bounce"
         >
@@ -84,11 +84,11 @@ const { t, locale, translationCh, translationEn } = useTranslationLang();
             </el-dropdown-item>
           </el-dropdown-menu>
         </template>
-      </el-dropdown>
+      </el-dropdown> -->
       <!-- 全屏 -->
       <LaySidebarFullScreen id="full-screen" />
       <!-- 消息通知 -->
-      <LayNotice id="header-notice" />
+      <!-- <LayNotice id="header-notice" /> -->
       <!-- 退出登录 -->
       <el-dropdown trigger="click">
         <span class="el-dropdown-link navbar-bg-hover select-none">

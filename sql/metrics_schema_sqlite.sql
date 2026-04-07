@@ -570,3 +570,65 @@ CREATE TABLE IF NOT EXISTS apscheduler_jobs (
     -- 序列化任务状态
     job_state BLOB NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS sys_dept (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    parent_id INTEGER NOT NULL DEFAULT 0,
+    name VARCHAR(100) NOT NULL,
+    sort INTEGER NOT NULL DEFAULT 0,
+    status INTEGER NOT NULL DEFAULT 1,
+    created_at BIGINT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sys_menu (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    parent_id INTEGER NOT NULL DEFAULT 0,
+    title VARCHAR(100) NOT NULL,
+    path VARCHAR(200),
+    component VARCHAR(200),
+    icon VARCHAR(100),
+    rank INTEGER NOT NULL DEFAULT 0,
+    menu_type INTEGER NOT NULL DEFAULT 0,
+    status INTEGER NOT NULL DEFAULT 1,
+    show_link INTEGER NOT NULL DEFAULT 1,
+    keep_alive INTEGER NOT NULL DEFAULT 0,
+    created_at BIGINT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sys_role (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name VARCHAR(100) NOT NULL,
+    code VARCHAR(100) NOT NULL UNIQUE,
+    status INTEGER NOT NULL DEFAULT 1,
+    remark VARCHAR(500),
+    created_at BIGINT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sys_user (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username VARCHAR(100) NOT NULL UNIQUE,
+    password VARCHAR(200) NOT NULL,
+    nickname VARCHAR(100),
+    phone VARCHAR(20),
+    email VARCHAR(200),
+    dept_id INTEGER,
+    avatar VARCHAR(500),
+    status INTEGER NOT NULL DEFAULT 1,
+    created_at BIGINT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sys_user_role (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    role_id INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_user_role_user ON sys_user_role(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_role_role ON sys_user_role(role_id);
+
+CREATE TABLE IF NOT EXISTS sys_role_menu (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    role_id INTEGER NOT NULL,
+    menu_id INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_role_menu_role ON sys_role_menu(role_id);
+CREATE INDEX IF NOT EXISTS idx_role_menu_menu ON sys_role_menu(menu_id);

@@ -21,7 +21,11 @@ import {
   getRoleIds,
   getDeptList,
   getUserList,
-  getAllRoleList
+  getAllRoleList,
+  addUser,
+  updateUser,
+  deleteUser,
+  resetUserPassword
 } from "@/api/system";
 import {
   ElForm,
@@ -210,16 +214,25 @@ export function useUser(tableRef: Ref, treeRef: Ref) {
           }
         );
         setTimeout(() => {
-          switchLoadMap.value[index] = Object.assign(
-            {},
-            switchLoadMap.value[index],
-            {
-              loading: false
-            }
-          );
-          message("已成功修改用户状态", {
-            type: "success"
-          });
+          updateUser(row.id, { status: row.status })
+            .then(() => {
+              message("已成功修改用户状态", {
+                type: "success"
+              });
+              onSearch();
+            })
+            .catch(() => {
+              row.status === 0 ? (row.status = 1) : (row.status = 0);
+            })
+            .finally(() => {
+              switchLoadMap.value[index] = Object.assign(
+                {},
+                switchLoadMap.value[index],
+                {
+                  loading: false
+                }
+              );
+            });
         }, 300);
       })
       .catch(() => {
@@ -228,20 +241,25 @@ export function useUser(tableRef: Ref, treeRef: Ref) {
   }
 
   function handleUpdate(row) {
-    console.log(row);
+    return row;
   }
 
   function handleDelete(row) {
-    message(`您删除了用户编号为${row.id}的这条数据`, { type: "success" });
-    onSearch();
+    deleteUser(row.id).then(() => {
+      message(`已删除用户 ${row.username}`, { type: "success" });
+      onSearch();
+    });
   }
 
   function handleSizeChange(val: number) {
-    console.log(`${val} items per page`);
+    pagination.pageSize = val;
+    pagination.currentPage = 1;
+    onSearch();
   }
 
   function handleCurrentChange(val: number) {
-    console.log(`current page: ${val}`);
+    pagination.currentPage = val;
+    onSearch();
   }
 
   /** 当CheckBox选择项发生变化时会触发该事件 */
@@ -260,19 +278,24 @@ export function useUser(tableRef: Ref, treeRef: Ref) {
 
   /** 批量删除 */
   function onbatchDel() {
-    // 返回当前选中的行
     const curSelected = tableRef.value.getTableRef().getSelectionRows();
-    // 接下来根据实际业务，通过选中行的某项数据，比如下面的id，调用接口进行批量删除
-    message(`已删除用户编号为 ${getKeyList(curSelected, "id")} 的数据`, {
-      type: "success"
+    Promise.all(curSelected.map(item => deleteUser(item.id))).then(() => {
+      message(`已删除用户编号为 ${getKeyList(curSelected, "id")} 的数据`, {
+        type: "success"
+      });
+      tableRef.value.getTableRef().clearSelection();
+      selectedNum.value = 0;
+      onSearch();
     });
-    tableRef.value.getTableRef().clearSelection();
-    onSearch();
   }
 
   async function onSearch() {
     loading.value = true;
-    const { code, data } = await getUserList(toRaw(form));
+    const { code, data } = await getUserList({
+      ...toRaw(form),
+      currentPage: pagination.currentPage,
+      pageSize: pagination.pageSize
+    });
     if (code === 0) {
       dataList.value = data.list;
       pagination.total = data.total;
@@ -315,9 +338,10 @@ export function useUser(tableRef: Ref, treeRef: Ref) {
       title: `${title}用户`,
       props: {
         formInline: {
+          id: row?.id,
           title,
           higherDeptOptions: formatHigherDeptOptions(higherDeptOptions.value),
-          parentId: row?.dept.id ?? 0,
+          parentId: row?.dept?.id ?? row?.deptId ?? 0,
           nickname: row?.nickname ?? "",
           username: row?.username ?? "",
           password: row?.password ?? "",
@@ -346,14 +370,11 @@ export function useUser(tableRef: Ref, treeRef: Ref) {
         }
         FormRef.validate(valid => {
           if (valid) {
-            console.log("curData", curData);
             // 表单规则校验通过
             if (title === "新增") {
-              // 实际开发先调用新增接口，再进行下面操作
-              chores();
+              addUser(curData).then(() => chores());
             } else {
-              // 实际开发先调用修改接口，再进行下面操作
-              chores();
+              updateUser(curData.id, curData).then(() => chores());
             }
           }
         });
@@ -376,7 +397,6 @@ export function useUser(tableRef: Ref, treeRef: Ref) {
           onCropper: info => (avatarInfo.value = info)
         }),
       beforeSure: done => {
-        console.log("裁剪后的图片信息：", avatarInfo.value);
         // 根据实际业务使用avatarInfo.value和row里的某些字段去调用上传头像接口即可
         done(); // 关闭弹框
         onSearch(); // 刷新表格数据
@@ -451,14 +471,13 @@ export function useUser(tableRef: Ref, treeRef: Ref) {
       beforeSure: done => {
         ruleFormRef.value.validate(valid => {
           if (valid) {
-            // 表单规则校验通过
             message(`已成功重置 ${row.username} 用户的密码`, {
               type: "success"
             });
-            console.log(pwdForm.newPwd);
-            // 根据实际业务使用pwdForm.newPwd和row里的某些字段去调用重置用户密码接口即可
-            done(); // 关闭弹框
-            onSearch(); // 刷新表格数据
+            resetUserPassword({ id: row.id, password: pwdForm.newPwd }).then(() => {
+              done();
+              onSearch();
+            });
           }
         });
       }
@@ -487,9 +506,10 @@ export function useUser(tableRef: Ref, treeRef: Ref) {
       contentRenderer: () => h(roleForm),
       beforeSure: (done, { options }) => {
         const curData = options.props.formInline as RoleFormItemProps;
-        console.log("curIds", curData.ids);
-        // 根据实际业务使用curData.ids和row里的某些字段去调用修改角色接口即可
-        done(); // 关闭弹框
+        updateUser(row.id, { roleIds: curData.ids }).then(() => {
+          done();
+          onSearch();
+        });
       }
     });
   }
