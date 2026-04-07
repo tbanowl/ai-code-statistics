@@ -10,7 +10,7 @@ from .metrics_db import MetricsDatabase
 from .stats_db import StatsDatabase
 from .scheduler_db import SchedulerDatabase
 from .blame_stats_db import BlameStatsDatabase
-from .notes_db import NotesDatabase
+from .authorship_notes_db import AuthorshipNotesDatabase
 
 __all__ = [
     "Base",
@@ -20,7 +20,7 @@ __all__ = [
     "StatsDatabase",
     "SchedulerDatabase",
     "BlameStatsDatabase",
-    "NotesDatabase",
+    "AuthorshipNotesDatabase",
 ]
 
 # 模型在需要时按需导入，避免循环依赖

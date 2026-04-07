@@ -17,43 +17,6 @@ from .models import (
 
 
 class StatsDatabase(BaseDatabase):
-    def __init__(self):
-        super().__init__()
-        self.init_db()
-        self._ensure_stats_schema_compatibility()
-
-    def _ensure_stats_schema_compatibility(self) -> None:
-        if self.engine.dialect.name != "sqlite":
-            return
-
-        with self.engine.begin() as conn:
-            exists = conn.execute(
-                text(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name='stats_daily_stats'"
-                )
-            ).fetchone()
-            if not exists:
-                return
-
-            cols = {
-                row[1]
-                for row in conn.execute(
-                    text("PRAGMA table_info(stats_daily_stats)")
-                ).fetchall()
-            }
-            patch_columns = {
-                "repo_name": "ALTER TABLE stats_daily_stats ADD COLUMN repo_name VARCHAR",
-                "contributor_name": "ALTER TABLE stats_daily_stats ADD COLUMN contributor_name VARCHAR",
-                "ai_generated_lines": "ALTER TABLE stats_daily_stats ADD COLUMN ai_generated_lines INTEGER DEFAULT 0",
-                "ai_generated_lines_total": "ALTER TABLE stats_daily_stats ADD COLUMN ai_generated_lines_total INTEGER DEFAULT 0",
-                "ai_accepted_lines": "ALTER TABLE stats_daily_stats ADD COLUMN ai_accepted_lines INTEGER DEFAULT 0",
-                "human_lines": "ALTER TABLE stats_daily_stats ADD COLUMN human_lines INTEGER DEFAULT 0",
-                "ai_percentage": "ALTER TABLE stats_daily_stats ADD COLUMN ai_percentage NUMERIC DEFAULT 0.0",
-                "git_ai_version": "ALTER TABLE stats_daily_stats ADD COLUMN git_ai_version VARCHAR(50)",
-            }
-            for column, ddl in patch_columns.items():
-                if column not in cols:
-                    conn.execute(text(ddl))
 
     @staticmethod
     def _metric_total(value: object) -> int:
@@ -328,28 +291,13 @@ class StatsDatabase(BaseDatabase):
                         "author": author_name,
                         "author_uid": (row.author or "").strip() or author_name,
                         "author_email": author_email,
-                        "tool_model_pairs_total": self._metric_total(
-                            row.tool_model_pairs
-                        ),
-                        "mixed_additions_total": self._metric_total(
-                            row.mixed_additions
-                        ),
+                        "tool_model_pairs_total": self._metric_total(row.tool_model_pairs),
+                        "mixed_additions_total": self._metric_total(row.mixed_additions),
                         "human_additions": int(row.human_additions or 0),
-                        "ai_accepted_lines": self._metric_total(
-                            row.ai_accepted
-                            if row.ai_accepted is not None
-                            else (
-                                row.ai_additions
-                                if row.ai_additions is not None
-                                else row.total_ai_additions
-                            )
-                        ),
-                        "total_ai_additions_total": self._metric_total(
-                            row.total_ai_additions
-                        ),
-                        "total_ai_deletions_total": self._metric_total(
-                            row.total_ai_deletions
-                        ),
+                        "ai_additions": self._metric_total(row.ai_additions),
+                        "ai_accepted_lines": self._metric_total(row.ai_accepted),
+                        "total_ai_additions_total": self._metric_total(row.total_ai_additions),
+                        "total_ai_deletions_total": self._metric_total(row.total_ai_deletions),
                         "git_ai_version": row.git_ai_version,
                     }
                 )

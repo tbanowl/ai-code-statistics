@@ -24,13 +24,13 @@ def app():
     if 'api.routes.notes_rest' in sys.modules:
         importlib.reload(sys.modules['api.routes.notes_rest'])
 
-    from api.routes.notes import notes_rest_bp
+    from api.routes.authorship_notes import git_notes_rest_bp
     from flask import Flask
 
     app = Flask(__name__)
     app.config['TESTING'] = True
     app.config['DEBUG'] = True
-    app.register_blueprint(notes_rest_bp)
+    app.register_blueprint(git_notes_rest_bp)
 
     # 关闭引擎以允许删除文件
     from core.services.notes_service import NotesRestService

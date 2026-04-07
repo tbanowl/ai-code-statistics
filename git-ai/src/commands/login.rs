@@ -1,6 +1,4 @@
 use crate::auth::{CredentialStore, OAuthClient};
-use crate::commands::flush_metrics_db::spawn_background_metrics_db_flush;
-use crate::metrics::db::MetricsDatabase;
 
 /// Handle the `git-ai login` command
 pub fn handle_login(_args: &[String]) {
@@ -28,26 +26,24 @@ pub fn handle_login(_args: &[String]) {
     };
 
     // Build the display URL
-    if std::env::var("GIT_AI_DEVICE_VERIFY").unwrap_or_default() == "1" {
-        let display_url = auth_response
-            .verification_uri_complete
-            .as_ref()
-            .unwrap_or(&auth_response.verification_uri);
+    let display_url = auth_response
+        .verification_uri_complete
+        .as_ref()
+        .unwrap_or(&auth_response.verification_uri);
 
-        // Display instructions
-        eprintln!("To authorize this device:");
-        eprintln!("  1. Open this URL in your browser:");
-        eprintln!("     {}", display_url);
-        eprintln!();
-        eprintln!("  2. Enter this code when prompted:");
-        eprintln!("     {}", auth_response.user_code);
-        eprintln!();
+    // Display instructions
+    eprintln!("To authorize this device:");
+    eprintln!("  1. Open this URL in your browser:");
+    eprintln!("     {}", display_url);
+    eprintln!();
+    eprintln!("  2. Enter this code when prompted:");
+    eprintln!("     {}", auth_response.user_code);
+    eprintln!();
 
-        // Try to open browser automatically
-        if open_browser(display_url).is_err() {
-            eprintln!("  (Could not open browser automatically)");
-            eprintln!();
-        }
+    // Try to open browser automatically
+    if open_browser(display_url).is_err() {
+        eprintln!("  (Could not open browser automatically)");
+        eprintln!();
     }
 
     eprintln!("Waiting for authorization...");
@@ -66,18 +62,6 @@ pub fn handle_login(_args: &[String]) {
             }
 
             eprintln!("\nSuccessfully logged in!");
-
-            // Check if there's queued metrics data to sync
-            if let Ok(db) = MetricsDatabase::global()
-                && let Ok(db_lock) = db.lock()
-                && let Ok(count) = db_lock.count()
-                && count > 0
-            {
-                // Spawn background metrics flush now that we're logged in
-                spawn_background_metrics_db_flush();
-                // Inform the user
-                eprintln!("Syncing your Git AI dashboard in the background...");
-            }
         }
         Err(e) => {
             eprintln!("\nAuthorization failed: {}", e);

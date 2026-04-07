@@ -1,6 +1,7 @@
+use crate::daemon::daemon_log_file_path;
 use crate::daemon::{
-    ControlRequest, DaemonConfig, daemon_log_file_path, local_socket_connects_with_timeout,
-    read_daemon_pid, send_control_request,
+    ControlRequest, DaemonConfig, local_socket_connects_with_timeout, read_daemon_pid,
+    send_control_request,
 };
 use crate::utils::LockFile;
 #[cfg(windows)]
@@ -293,6 +294,10 @@ fn spawn_daemon_run_detached(config: &DaemonConfig) -> Result<(), String> {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+        // Remove git environment variables that must not leak into the daemon.
+        for var in crate::daemon::GIT_ENV_VARS_TO_SANITIZE {
+            child.env_remove(var);
+        }
 
         let preferred_flags =
             CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB;
@@ -325,6 +330,12 @@ fn spawn_daemon_run_detached(config: &DaemonConfig) -> Result<(), String> {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+        // Remove git environment variables that must not leak into the daemon.
+        // The daemon is repository-agnostic; variables like GIT_DIR override
+        // the -C flag and cause repository resolution failures.
+        for var in crate::daemon::GIT_ENV_VARS_TO_SANITIZE {
+            child.env_remove(var);
+        }
         child.spawn().map(|_| ()).map_err(|e| e.to_string())
     }
 }
@@ -343,6 +354,10 @@ fn spawn_daemon_run_with_piped_stderr(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
+    // Remove git environment variables that must not leak into the daemon.
+    for var in crate::daemon::GIT_ENV_VARS_TO_SANITIZE {
+        child.env_remove(var);
+    }
 
     #[cfg(windows)]
     {
@@ -551,7 +566,7 @@ fn hard_kill_daemon(config: &DaemonConfig) -> Result<(), String> {
 fn hard_kill_daemon(config: &DaemonConfig) -> Result<(), String> {
     let pid = read_daemon_pid(config).map_err(|e| format!("cannot read daemon pid: {}", e))?;
     let output = Command::new("taskkill")
-        .args(["/F", "/PID", &pid.to_string()])
+        .args(["/F", "/T", "/PID", &pid.to_string()])
         .output()
         .map_err(|e| format!("failed to run taskkill: {}", e))?;
     if !output.status.success() {
@@ -559,7 +574,7 @@ fn hard_kill_daemon(config: &DaemonConfig) -> Result<(), String> {
         // Process already dead is not an error.
         if !stderr.contains("not found") {
             return Err(format!(
-                "taskkill /F /PID {} failed: {}",
+                "taskkill /F /T /PID {} failed: {}",
                 pid,
                 stderr.trim()
             ));

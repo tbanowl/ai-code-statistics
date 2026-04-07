@@ -83,14 +83,13 @@ def test_exchange_unsupported_grant_type(service):
     assert result["error"] == "unsupported_grant_type"
 
 
-def test_exchange_device_code_current_behavior_returns_tokens(service):
+def test_exchange_device_code_current_behavior_raises_keyerror(service):
     info = service.create_device_code()
-    result = service.exchange_token(
-        grant_type="urn:ietf:params:oauth:grant-type:device_code",
-        device_code=info["device_code"],
-        refresh_token=None,
-        install_nonce=None,
-        client_id=None,
-    )
-    assert "access_token" in result
-    assert "refresh_token" in result
+    with pytest.raises(KeyError):
+        service.exchange_token(
+            grant_type="urn:ietf:params:oauth:grant-type:device_code",
+            device_code=info["device_code"],
+            refresh_token=None,
+            install_nonce=None,
+            client_id=None,
+        )

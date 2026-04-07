@@ -35,7 +35,7 @@ def merge_with_route(route_info: RouteInfo, doc_data: Dict[str, Any]) -> Dict[st
             break
     
     merged = {
-        'path': route_info.path,
+        'path': route_info.path.replace('<', '{').replace('>', '}'),
         'methods': list(route_info.methods),
         'function_name': route_info.function_name,
         'blueprint': route_info.blueprint,

@@ -6,7 +6,7 @@ REST Notes Store 服务
 
 import core.config.loader as loader
 from core.config.logging import Logger
-from core.database.notes_db import NotesDatabase
+from core.database.authorship_notes_db import AuthorshipNotesDatabase
 
 
 class NotesRestService:
@@ -17,7 +17,7 @@ class NotesRestService:
         if db_url:
             loader.config_data = {"database": {"url": db_url, "echo": False}}
         self.logger = Logger.get_logger("services.notes")
-        self.database = NotesDatabase()
+        self.database = AuthorshipNotesDatabase()
 
     def create_or_update_note(
         self,

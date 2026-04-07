@@ -3,7 +3,7 @@
 from flask import Blueprint, jsonify, request
 import logging
 
-stats_repo_bp = Blueprint('stats_repo', __name__, url_prefix='/api/stats/repo')
+stats_repo_bp = Blueprint('stats_repo', __name__, url_prefix='/api/stats-repo')
 
 
 # 辅助函数：获取数据库实例
@@ -40,8 +40,6 @@ def add_ssh_key():
         # 验证必填字段
         if not key_name:
             return jsonify({'success': False, 'error': 'key_name 不能为空'}), 400
-        if not public_key:
-            return jsonify({'success': False, 'error': 'public_key 不能为空'}), 400
         if not private_key:
             return jsonify({'success': False, 'error': 'private_key 不能为空'}), 400
 
@@ -249,7 +247,7 @@ def get_file_blame_stats(repo_id):
             return jsonify({'success': False, 'error': 'repo_id 不能为空'}), 400
 
         # 获取查询参数
-        stat_date = request.args.get('stat_date', type=int)
+        stat_date = request.args.get('stat_date', type=str)
 
         stats_db, blame_stats_db = get_database()
 

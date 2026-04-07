@@ -13,7 +13,7 @@ from api.routes.stats_repo import stats_repo_bp
 from api.routes.scheduler import scheduler_bp
 from api.routes.git_ai import git_ai_bp
 from api.routes.git_ai_worker import metrics_bp, cas_bp, oauth_bp, releases_bp
-from api.routes.notes import notes_rest_bp
+from api.routes.authorship_notes import git_notes_rest_bp, authorship_notes_rest_bp
 from core.config.swagger import swagger_setup
 
 try:
@@ -56,7 +56,8 @@ app.register_blueprint(oauth_bp)
 app.register_blueprint(releases_bp)
 
 # 注册 REST Notes Store 蓝图
-app.register_blueprint(notes_rest_bp)
+app.register_blueprint(git_notes_rest_bp)
+app.register_blueprint(authorship_notes_rest_bp)
 
 # 初始化 Swagger（如果配置启用）
 swagger_setup(app, config, main_logger)

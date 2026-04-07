@@ -6,7 +6,7 @@ use git_ai::authorship::working_log::CheckpointKind;
 use git_ai::authorship::{transcript::AiTranscript, working_log::AgentId};
 use git_ai::commands::checkpoint::{
     PreparedCheckpointFile, PreparedCheckpointFileSource, PreparedCheckpointManifest,
-    PreparedPathRole,
+    PreparedPathRole, prepare_captured_checkpoint,
 };
 use git_ai::commands::checkpoint_agent::agent_presets::AgentRunResult;
 use git_ai::daemon::{
@@ -21,12 +21,16 @@ use repos::test_repo::{
     real_git_executable,
 };
 use serde_json::Value;
+use serde_json::json;
 use serial_test::serial;
 use std::collections::HashMap;
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -114,9 +118,243 @@ fn repo_workdir_string(repo: &TestRepo) -> String {
     repo.path().to_string_lossy().to_string()
 }
 
+struct ScopedEnvVar {
+    key: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl ScopedEnvVar {
+    fn set(key: &'static str, value: &str) -> Self {
+        let previous = std::env::var_os(key);
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        Self { key, previous }
+    }
+}
+
+impl Drop for ScopedEnvVar {
+    fn drop(&mut self) {
+        unsafe {
+            if let Some(previous) = self.previous.as_ref() {
+                std::env::set_var(self.key, previous);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+}
+
+struct MockApiServer {
+    base_url: String,
+    received_cas: mpsc::Receiver<Value>,
+    stop: Arc<AtomicBool>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl MockApiServer {
+    fn start() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind mock API server");
+        listener
+            .set_nonblocking(true)
+            .expect("failed to set nonblocking listener");
+        let addr = listener.local_addr().expect("failed to read listener addr");
+        let (tx, rx) = mpsc::channel();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_thread = Arc::clone(&stop);
+
+        let thread = thread::spawn(move || {
+            while !stop_thread.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        handle_http_connection(stream, &tx);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("mock API accept failed: {}", error),
+                }
+            }
+        });
+
+        Self {
+            base_url: format!("http://{}", addr),
+            received_cas: rx,
+            stop,
+            thread: Some(thread),
+        }
+    }
+
+    fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    fn recv_cas_upload(&self, timeout: Duration) -> Value {
+        self.received_cas
+            .recv_timeout(timeout)
+            .expect("timed out waiting for CAS upload")
+    }
+}
+
+impl Drop for MockApiServer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        let _ = TcpStream::connect(self.base_url.trim_start_matches("http://"));
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn handle_http_connection(mut stream: TcpStream, tx: &mpsc::Sender<Value>) {
+    let Some((path, body)) = read_http_request(&mut stream) else {
+        return;
+    };
+
+    let response_body = match path.as_str() {
+        "/worker/cas/upload" => {
+            let request_json: Value =
+                serde_json::from_slice(&body).expect("CAS upload should contain JSON");
+            tx.send(request_json.clone())
+                .expect("failed to record CAS upload");
+            let hashes = request_json["objects"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|object| object["hash"].as_str().map(|hash| hash.to_string()))
+                .collect::<Vec<_>>();
+            json!({
+                "results": hashes.iter().map(|hash| {
+                    json!({
+                        "hash": hash,
+                        "status": "ok"
+                    })
+                }).collect::<Vec<_>>(),
+                "success_count": hashes.len(),
+                "failure_count": 0
+            })
+            .to_string()
+        }
+        "/worker/metrics/upload" => json!({ "errors": [] }).to_string(),
+        _ => "{}".to_string(),
+    };
+
+    write_http_response(&mut stream, response_body.as_bytes());
+}
+
+fn read_http_request(stream: &mut TcpStream) -> Option<(String, Vec<u8>)> {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("failed to set mock API read timeout");
+
+    let mut buffer = Vec::new();
+    let header_end = loop {
+        let mut chunk = [0u8; 4096];
+        let read = stream.read(&mut chunk).ok()?;
+        if read == 0 {
+            return None;
+        }
+        buffer.extend_from_slice(&chunk[..read]);
+        if let Some(end) = find_header_end(&buffer) {
+            break end;
+        }
+    };
+
+    let headers = String::from_utf8_lossy(&buffer[..header_end]);
+    let request_line = headers.lines().next()?;
+    let path = request_line.split_whitespace().nth(1)?.to_string();
+    let content_length = headers
+        .lines()
+        .find_map(|line| {
+            line.split_once(':').and_then(|(name, value)| {
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().ok())
+                    .flatten()
+            })
+        })
+        .unwrap_or(0);
+
+    while buffer.len() - header_end < content_length {
+        let mut chunk = [0u8; 4096];
+        let read = stream.read(&mut chunk).ok()?;
+        if read == 0 {
+            break;
+        }
+        buffer.extend_from_slice(&chunk[..read]);
+    }
+
+    Some((
+        path,
+        buffer[header_end..header_end + content_length].to_vec(),
+    ))
+}
+
+fn find_header_end(buffer: &[u8]) -> Option<usize> {
+    buffer
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|idx| idx + 4)
+}
+
+fn write_http_response(stream: &mut TcpStream, body: &[u8]) {
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    stream
+        .write_all(response.as_bytes())
+        .expect("failed to write mock API response headers");
+    stream
+        .write_all(body)
+        .expect("failed to write mock API response body");
+    stream.flush().expect("failed to flush mock API response");
+}
+
 fn configure_test_home_env(command: &mut Command, test_home: &Path) {
     command.env("HOME", test_home);
     command.env("GIT_CONFIG_GLOBAL", test_home.join(".gitconfig"));
+    // Redirect XDG_CONFIG_HOME so git does not read the real user's
+    // $XDG_CONFIG_HOME/git/config (which may contain filter drivers,
+    // aliases, or other settings that break test isolation).
+    command.env("XDG_CONFIG_HOME", test_home.join(".config"));
+    // Suppress system-level git config (e.g., Xcode credential helpers)
+    // that could interfere with test isolation.
+    command.env("GIT_CONFIG_NOSYSTEM", "1");
+    // Sanitize PATH to remove directories containing the Nix git-ai
+    // wrapper.  When the wrapper (a release build with async_mode=true)
+    // runs with HOME pointing to the test home it starts a background
+    // daemon at the test socket path, poisoning the test environment.
+    if let Ok(path) = std::env::var("PATH") {
+        let sanitized: Vec<&str> = path
+            .split(':')
+            .filter(|dir| {
+                // Keep only dirs that do NOT contain a git-ai wrapper
+                // (heuristic: skip dirs where the `git` binary is a
+                //  shell-script wrapper for git-ai, or a symlink to git-ai).
+                let git_path = std::path::Path::new(dir).join("git");
+                if git_path.is_file() || git_path.is_symlink() {
+                    if let Ok(contents) = std::fs::read_to_string(&git_path)
+                        && contents.contains("git-ai")
+                    {
+                        return false;
+                    }
+                    if let Ok(target) = std::fs::read_link(&git_path)
+                        && target.to_string_lossy().contains("git-ai")
+                    {
+                        return false;
+                    }
+                    if let Ok(canonical) = git_path.canonicalize()
+                        && canonical.to_string_lossy().contains("git-ai")
+                    {
+                        return false;
+                    }
+                }
+                true
+            })
+            .collect();
+        command.env("PATH", sanitized.join(":"));
+    }
     #[cfg(windows)]
     {
         command.env("USERPROFILE", test_home);
@@ -325,6 +563,16 @@ fn latest_checkpoint_blob_content_for_file(repo: &TestRepo, file_path: &str) -> 
         .expect("checkpoint blob should be readable")
 }
 
+fn write_base_files(repo: &TestRepo) {
+    fs::write(repo.path().join("lines.md"), "base lines\n").expect("failed to write lines.md");
+    fs::write(repo.path().join("alphabet.md"), "base alphabet\n")
+        .expect("failed to write alphabet.md");
+    repo.git_og(&["add", "lines.md", "alphabet.md"])
+        .expect("add should succeed");
+    repo.git_og(&["commit", "-m", "initial commit"])
+        .expect("initial commit should succeed");
+}
+
 fn ai_agent_run_result(
     repo: &TestRepo,
     edited_filepaths: Vec<String>,
@@ -350,6 +598,66 @@ fn ai_agent_run_result(
         will_edit_filepaths: None,
         dirty_files,
     }
+}
+
+#[test]
+#[serial]
+fn prepare_captured_checkpoint_only_captures_explicit_files_when_other_ai_touched_files_are_dirty()
+{
+    let repo = TestRepo::new();
+    write_base_files(&repo);
+
+    fs::write(
+        repo.path().join("lines.md"),
+        "line touched by first checkpoint\n",
+    )
+    .expect("failed to update lines.md");
+    repo.git_ai(&["checkpoint", "mock_ai", "lines.md"])
+        .expect("first explicit checkpoint should succeed");
+
+    fs::write(
+        repo.path().join("alphabet.md"),
+        "line touched by second checkpoint\n",
+    )
+    .expect("failed to update alphabet.md");
+
+    let _daemon_home = ScopedEnvVar::set(
+        "GIT_AI_DAEMON_HOME",
+        repo.daemon_home_path()
+            .to_str()
+            .expect("daemon home should be utf-8"),
+    );
+    let prepared = prepare_captured_checkpoint(
+        &repo_storage(&repo),
+        "Test User",
+        CheckpointKind::AiAgent,
+        Some(&ai_agent_run_result(
+            &repo,
+            vec!["alphabet.md".to_string()],
+            None,
+        )),
+        false,
+        None,
+    )
+    .expect("captured checkpoint prepare should succeed")
+    .expect("captured checkpoint should be created");
+
+    let manifest_path =
+        async_checkpoint_capture_dir(&repo, &prepared.capture_id).join("manifest.json");
+    let manifest: PreparedCheckpointManifest =
+        serde_json::from_slice(&fs::read(&manifest_path).expect("manifest should be readable"))
+            .expect("manifest should deserialize");
+    let captured_paths = manifest
+        .files
+        .iter()
+        .map(|file| file.path.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        captured_paths,
+        vec!["alphabet.md"],
+        "captured checkpoint preparation must only persist the explicitly targeted file"
+    );
 }
 
 #[derive(Clone)]
@@ -584,6 +892,106 @@ impl Drop for DaemonGuard {
     }
 }
 
+fn claude_fixture_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("example-claude-code.jsonl")
+}
+
+fn assert_post_commit_uploads_prompt_cas(mode: GitTestMode) {
+    let mock_api = MockApiServer::start();
+    let _api_base_url = ScopedEnvVar::set("GIT_AI_API_BASE_URL", mock_api.base_url());
+    let _api_key = ScopedEnvVar::set("GIT_AI_API_KEY", "test-api-key");
+
+    // These tests depend on per-test API env vars being visible to the daemon.
+    // A shared daemon may already be running from an earlier test with different env.
+    let mut repo = TestRepo::new_with_mode_and_daemon_scope(mode, DaemonTestScope::Dedicated);
+    repo.patch_git_ai_config(|patch| {
+        patch.exclude_prompts_in_repositories = Some(vec![]);
+        patch.prompt_storage = Some("default".to_string());
+        patch.telemetry_oss_disabled = Some(true);
+    });
+
+    let repo_root = repo.canonical_path();
+    let file_path = repo_root.join("test.ts");
+    fs::write(&file_path, "const x = 1;\n").expect("failed to write initial file");
+    repo.stage_all_and_commit("Initial commit")
+        .expect("initial commit should succeed");
+
+    let transcript_path = repo_root.join("claude-session.jsonl");
+    fs::copy(claude_fixture_path(), &transcript_path).expect("failed to copy transcript fixture");
+
+    let hook_input = json!({
+        "cwd": repo_root.to_string_lossy().to_string(),
+        "hook_event_name": "PostToolUse",
+        "transcript_path": transcript_path.to_string_lossy().to_string(),
+        "tool_input": {
+            "file_path": file_path.to_string_lossy().to_string()
+        }
+    })
+    .to_string();
+
+    fs::write(&file_path, "const x = 1;\n// ai line one\n").expect("failed to write AI edit");
+    repo.git_ai(&["checkpoint", "claude", "--hook-input", &hook_input])
+        .expect("checkpoint should succeed");
+
+    let commit = repo
+        .stage_all_and_commit("Add AI line")
+        .expect("AI commit should succeed");
+
+    let upload = mock_api.recv_cas_upload(Duration::from_secs(15));
+    let uploaded_objects = upload["objects"]
+        .as_array()
+        .expect("CAS upload should include objects");
+    assert!(
+        !uploaded_objects.is_empty(),
+        "CAS upload should contain at least one object"
+    );
+    let uploaded_messages = uploaded_objects[0]["content"]["messages"]
+        .as_array()
+        .expect("CAS object should contain serialized prompt messages");
+    assert!(
+        !uploaded_messages.is_empty(),
+        "uploaded CAS prompt should include transcript messages"
+    );
+
+    let note = repo
+        .read_authorship_note(&commit.commit_sha)
+        .expect("commit should have authorship note");
+    let log =
+        git_ai::authorship::authorship_log_serialization::AuthorshipLog::deserialize_from_string(
+            &note,
+        )
+        .expect("authorship note should deserialize");
+    let prompt = log
+        .metadata
+        .prompts
+        .values()
+        .next()
+        .expect("authorship note should contain one prompt");
+    assert!(
+        prompt.messages.is_empty(),
+        "prompt messages should be stripped from the note after CAS handoff"
+    );
+    assert!(
+        prompt.messages_url.is_some(),
+        "prompt should retain a CAS URL after upload handoff"
+    );
+}
+
+#[test]
+#[serial]
+fn daemon_mode_post_commit_uploads_prompt_cas() {
+    assert_post_commit_uploads_prompt_cas(GitTestMode::Daemon);
+}
+
+#[test]
+#[serial]
+fn wrapper_daemon_mode_post_commit_uploads_prompt_cas() {
+    assert_post_commit_uploads_prompt_cas(GitTestMode::WrapperDaemon);
+}
+
 #[test]
 #[serial]
 fn daemon_start_spawns_detached_run_process() {
@@ -653,6 +1061,18 @@ fn checkpoint_delegate_autostarts_daemon_when_unavailable() {
     )
     .expect("failed to write updated file");
 
+    // Shut down any stale daemon that may have been spawned by a
+    // previous wrapper invocation (e.g., the Nix-installed release
+    // binary triggered via PATH during the `git add` / `git commit`
+    // wrapper steps).  The test must start with no daemon so that the
+    // checkpoint delegation path actually auto-starts a fresh one.
+    let _ = send_control_request(
+        &daemon_control_socket_path(&repo),
+        &ControlRequest::Shutdown,
+    );
+    // Wait briefly for the daemon to release the sockets.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
     repo.git_ai_with_env(
         &["checkpoint", "mock_ai", "delegate-fallback.txt"],
         &[("GIT_AI_DAEMON_CHECKPOINT_DELEGATE", "true")],
@@ -668,7 +1088,12 @@ fn checkpoint_delegate_autostarts_daemon_when_unavailable() {
     .expect("daemon status request should succeed after auto-start");
     assert!(
         status.ok,
-        "daemon should be running after delegated checkpoint auto-start"
+        "daemon should be running after delegated checkpoint auto-start; ok={}, error={:?}, data={:?}, socket={}, workdir={}",
+        status.ok,
+        status.error,
+        status.data,
+        daemon_control_socket_path(&repo).display(),
+        repo_workdir_string(&repo)
     );
     let _ = send_control_request(
         &daemon_control_socket_path(&repo),
@@ -704,6 +1129,14 @@ fn checkpoint_delegate_falls_back_when_daemon_startup_is_blocked() {
         "base\nchanged while startup blocked\n",
     )
     .expect("failed to write updated file");
+
+    // Shut down any stale daemon that may have been spawned by a
+    // previous wrapper invocation so we can acquire the lock ourselves.
+    let _ = send_control_request(
+        &daemon_control_socket_path(&repo),
+        &ControlRequest::Shutdown,
+    );
+    std::thread::sleep(std::time::Duration::from_millis(500));
 
     fs::create_dir_all(
         daemon_lock_path(&repo)
@@ -973,7 +1406,6 @@ fn daemon_captured_checkpoint_replay_uses_blob_snapshot_after_worktree_changes()
             captured_at_ms: 1_700_000_000_000,
             kind: CheckpointKind::AiAgent,
             author: "Test User".to_string(),
-            reset: false,
             is_pre_commit: false,
             explicit_path_role: PreparedPathRole::Edited,
             explicit_paths: vec!["captured-race.txt".to_string()],
@@ -1061,7 +1493,6 @@ fn daemon_captured_checkpoint_replay_supports_mixed_dirty_and_blob_sources() {
             captured_at_ms: 1_700_000_000_001,
             kind: CheckpointKind::AiAgent,
             author: "Test User".to_string(),
-            reset: false,
             is_pre_commit: false,
             explicit_path_role: PreparedPathRole::Edited,
             explicit_paths: vec![
@@ -1152,7 +1583,6 @@ fn daemon_captured_checkpoint_failure_cleans_up_capture_dir() {
             captured_at_ms: 1_700_000_000_002,
             kind: CheckpointKind::AiAgent,
             author: "Test User".to_string(),
-            reset: false,
             is_pre_commit: false,
             explicit_path_role: PreparedPathRole::Edited,
             explicit_paths: vec!["broken-capture.txt".to_string()],
@@ -1217,7 +1647,6 @@ fn daemon_captured_checkpoint_rejects_manifest_for_different_repo() {
             captured_at_ms: 1_700_000_000_003,
             kind: CheckpointKind::AiAgent,
             author: "Test User".to_string(),
-            reset: false,
             is_pre_commit: false,
             explicit_path_role: PreparedPathRole::Edited,
             explicit_paths: vec!["wrong-repo-capture.txt".to_string()],

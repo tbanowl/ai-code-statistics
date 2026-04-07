@@ -11,12 +11,9 @@ from .base import session_scope, BaseDatabase
 from .models import AuthorshipNotes, gen_xid
 
 
-class NotesDatabase(BaseDatabase):
+class AuthorshipNotesDatabase(BaseDatabase):
     """Authorship Notes 数据库操作类"""
 
-    def __init__(self):
-        super().__init__()
-        self.init_db()
 
     def create_or_update_note(
         self,

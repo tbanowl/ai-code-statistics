@@ -1,0 +1,283 @@
+tags:
+  - name: stats_repo
+    description: 仓库和 SSH Key 管理 API
+
+endpoints:
+  /api/stats/repo/ssh-key:
+    POST:
+      summary: 上传/添加 SSH Key
+      parameters:
+        - name: body
+          in: body
+          required: true
+          schema:
+            type: object
+            required:
+              - key_name
+              - public_key
+              - private_key
+            properties:
+              key_name:
+                type: string
+                description: SSH Key 名称
+              public_key:
+                type: string
+                description: 公钥内容
+              private_key:
+                type: string
+                description: 私钥内容
+      responses:
+        '200':
+          description: SSH Key 添加成功
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+              data:
+                type: object
+        '400':
+          description: 请求参数错误
+        '500':
+          description: 服务器内部错误
+
+  /api/stats/repo/ssh-keys:
+    GET:
+      summary: 列出所有 SSH Keys
+      responses:
+        '200':
+          description: SSH Keys 列表
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+              data:
+                type: object
+                properties:
+                  ssh_keys:
+                    type: array
+                    items:
+                      type: object
+                  count:
+                    type: integer
+
+  /api/stats/repo/ssh-key/<key_id>:
+    DELETE:
+      summary: 删除 SSH Key
+      parameters:
+        - name: key_id
+          in: path
+          required: true
+          type: string
+      responses:
+        '200':
+          description: SSH Key 删除成功
+        '404':
+          description: SSH Key 不存在
+        '500':
+          description: 服务器内部错误
+
+  /api/stats/repo/<repo_id>/ssh-status:
+    GET:
+      summary: 获取仓库 SSH Key 状态
+      parameters:
+        - name: repo_id
+          in: path
+          required: true
+          type: string
+      responses:
+        '200':
+          description: SSH Key 状态
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+              data:
+                type: object
+                properties:
+                  repo_id:
+                    type: string
+                  repo_path:
+                    type: string
+                  repo_name:
+                    type: string
+                  repo_stats_flag:
+                    type: integer
+                  ssh_key_id:
+                    type: string
+                  has_ssh_key:
+                    type: boolean
+        '404':
+          description: 仓库不存在
+        '500':
+          description: 服务器内部错误
+
+  /api/stats/repo/<repo_id>/ssh-key:
+    PUT:
+      summary: 关联仓库的 SSH Key
+      parameters:
+        - name: repo_id
+          in: path
+          required: true
+          type: string
+        - name: body
+          in: body
+          required: true
+          schema:
+            type: object
+            properties:
+              ssh_key_id:
+                type: string
+                description: SSH Key ID，设置为 null 使用默认配置
+      responses:
+        '200':
+          description: SSH Key 更新成功
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+              message:
+                type: string
+        '404':
+          description: 仓库或 SSH Key 不存在
+        '500':
+          description: 服务器内部错误
+
+  /api/stats/repo/<repo_id>/stats-flag:
+    PUT:
+      summary: 启用/禁用仓库统计
+      parameters:
+        - name: repo_id
+          in: path
+          required: true
+          type: string
+        - name: body
+          in: body
+          required: true
+          schema:
+            type: object
+            required:
+              - repo_stats_flag
+            properties:
+              repo_stats_flag:
+                type: integer
+                description: 0-禁用, 1-启用
+      responses:
+        '200':
+          description: 统计设置更新成功
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+              message:
+                type: string
+        '400':
+          description: 请求参数错误
+        '404':
+          description: 仓库不存在
+        '500':
+          description: 服务器内部错误
+
+  /api/stats/repo/blame/repo/<repo_id>:
+    GET:
+      summary: 获取仓库归因统计数据
+      parameters:
+        - name: repo_id
+          in: path
+          required: true
+          type: string
+        - name: start_date
+          in: query
+          type: integer
+          description: 开始日期时间戳
+        - name: end_date
+          in: query
+          type: integer
+          description: 结束日期时间戳
+      responses:
+        '200':
+          description: 归因统计数据
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+              data:
+                type: object
+                properties:
+                  stats:
+                    type: array
+                    items:
+                      type: object
+                  count:
+                    type: integer
+                  repo_id:
+                    type: string
+
+  /api/stats/repo/blame/file/<repo_id>:
+    GET:
+      summary: 获取文件归因统计数据
+      parameters:
+        - name: repo_id
+          in: path
+          required: true
+          type: string
+        - name: stat_date
+          in: query
+          type: integer
+          description: 统计日期时间戳
+      responses:
+        '200':
+          description: 文件归因统计数据
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+              data:
+                type: object
+                properties:
+                  stats:
+                    type: array
+                    items:
+                      type: object
+                  count:
+                    type: integer
+                  repo_id:
+                    type: string
+
+  /api/stats/repo/blame/repo/<repo_id>/contributors:
+    GET:
+      summary: 获取仓库贡献者归因统计数据
+      parameters:
+        - name: repo_id
+          in: path
+          required: true
+          type: string
+        - name: stat_date
+          in: query
+          type: integer
+          description: 统计日期时间戳
+      responses:
+        '200':
+          description: 贡献者归因统计数据
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+              data:
+                type: object
+                properties:
+                  stats:
+                    type: array
+                    items:
+                      type: object
+                  count:
+                    type: integer
+                  repo_id:
+                    type: string

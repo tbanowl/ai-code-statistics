@@ -321,7 +321,7 @@ class BlameStatsDatabase(BaseDatabase):
     def save_repo_blame_stats(
         self,
         repo_id: str,
-        stat_date: int,
+        stat_date: str,
         commit_sha: str,
         branch: str,
         total_lines: int,
@@ -369,7 +369,8 @@ class BlameStatsDatabase(BaseDatabase):
     def save_file_blame_stats(
         self,
         repo_id: str,
-        stat_date: int,
+        branch: str,
+        stat_date: str,
         file_path: str,
         commit_sha: str,
         total_lines: int,
@@ -393,12 +394,14 @@ class BlameStatsDatabase(BaseDatabase):
                 StatsBlameFile.repo_id == repo_id,
                 StatsBlameFile.stat_date == stat_date,
                 StatsBlameFile.file_path == file_path,
+                StatsBlameFile.branch == branch,
             ).delete()
 
             # 插入新数据
             stats = StatsBlameFile(
                 id=gen_xid(),
                 repo_id=repo_id,
+                branch=branch,
                 stat_date=stat_date,
                 file_path=file_path,
                 commit_sha=commit_sha,
@@ -417,7 +420,8 @@ class BlameStatsDatabase(BaseDatabase):
     def save_repo_contributor_stats(
         self,
         repo_id: str,
-        stat_date: int,
+        branch: str,
+        stat_date: str,
         contributor_id: str,
         contributor_name: str,
         contributor_email: str,
@@ -441,12 +445,14 @@ class BlameStatsDatabase(BaseDatabase):
                 StatsBlameRepoContributor.repo_id == repo_id,
                 StatsBlameRepoContributor.stat_date == stat_date,
                 StatsBlameRepoContributor.contributor_id == contributor_id,
+                StatsBlameRepoContributor.branch == branch,
             ).delete()
 
             # 插入新数据
             stats = StatsBlameRepoContributor(
                 id=gen_xid(),
                 repo_id=repo_id,
+                branch=branch,
                 stat_date=stat_date,
                 contributor_id=contributor_id,
                 contributor_name=contributor_name,
@@ -467,6 +473,7 @@ class BlameStatsDatabase(BaseDatabase):
         file_id: str,
         stat_date: int,
         repo_id: str,
+        branch: str,
         file_path: str,
         contributor_id: str,
         contributor_name: str,
@@ -491,6 +498,7 @@ class BlameStatsDatabase(BaseDatabase):
                 StatsBlameFileContributor.file_id == file_id,
                 StatsBlameFileContributor.stat_date == stat_date,
                 StatsBlameFileContributor.contributor_id == contributor_id,
+                StatsBlameFileContributor.branch == branch,
             ).delete()
 
             # 插入新数据
@@ -499,6 +507,7 @@ class BlameStatsDatabase(BaseDatabase):
                 file_id=file_id,
                 stat_date=stat_date,
                 repo_id=repo_id,
+                branch=branch,
                 file_path=file_path,
                 contributor_id=contributor_id,
                 contributor_name=contributor_name,
@@ -536,6 +545,7 @@ class BlameStatsDatabase(BaseDatabase):
                     StatsBlameFileContributor.file_id == stats["file_id"],
                     StatsBlameFileContributor.stat_date == stats["stat_date"],
                     StatsBlameFileContributor.contributor_id == stats["contributor_id"],
+                    StatsBlameFileContributor.branch == stats["branch"],
                 ).delete()
 
                 # 插入新数据
@@ -544,6 +554,7 @@ class BlameStatsDatabase(BaseDatabase):
                     file_id=stats["file_id"],
                     stat_date=stats["stat_date"],
                     repo_id=stats["repo_id"],
+                    branch=stats["branch"],
                     file_path=stats["file_path"],
                     contributor_id=stats["contributor_id"],
                     contributor_name=stats["contributor_name"],
@@ -666,7 +677,7 @@ class BlameStatsDatabase(BaseDatabase):
                 for s in stats
             ]
 
-    def get_file_blame_stats(self, repo_id: str, stat_date: int | None) -> list:
+    def get_file_blame_stats(self, repo_id: str, stat_date: str | None) -> list:
         """
         查询文件归因统计数据
 
@@ -695,6 +706,7 @@ class BlameStatsDatabase(BaseDatabase):
                 {
                     "id": s.id,
                     "repo_id": s.repo_id,
+                    "branch": s.branch,
                     "stat_date": s.stat_date,
                     "file_path": s.file_path,
                     "commit_sha": s.commit_sha,
@@ -752,6 +764,7 @@ class BlameStatsDatabase(BaseDatabase):
                 {
                     "id": s.id,
                     "repo_id": s.repo_id,
+                    "branch": s.branch,
                     "stat_date": s.stat_date,
                     "contributor_id": s.contributor_id,
                     "contributor_name": s.contributor_name,

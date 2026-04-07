@@ -1,7 +1,7 @@
 use crate::api::client::ApiClient;
 use crate::api::types::{
-    ApiErrorResponse, NotesBatchRequest, NotesBatchResponse, NotesListRequest, NotesListResponse,
-    NotesPushRequest, NotesPushResponse,
+    ApiErrorResponse, AuthorshipNotesBatchRequest, AuthorshipBatchResponse, AuthorshipNotesListRequest, AuthorshipNotesListResponse,
+    AuthorshipNotesPushRequest, AuthorshipNotesPushResponse,
 };
 use crate::error::GitAiError;
 
@@ -12,8 +12,8 @@ fn parse_api_error_message(body: &str, fallback: &str) -> String {
 }
 
 impl ApiClient {
-    pub fn notes_list(&self, request: &NotesListRequest) -> Result<NotesListResponse, GitAiError> {
-        let response = self.context().post_json("/worker/notes/list", request)?;
+    pub fn authorship_notes_list(&self, request: &AuthorshipNotesListRequest) -> Result<AuthorshipNotesListResponse, GitAiError> {
+        let response = self.context().post_json("/worker/authorship_notes/list", request)?;
         let status_code = response.status_code;
         let body = response
             .as_str()
@@ -27,7 +27,7 @@ impl ApiClient {
             )));
         }
 
-        let parsed: NotesListResponse =
+        let parsed: AuthorshipNotesListResponse =
             serde_json::from_str(body).map_err(GitAiError::JsonError)?;
         if !parsed.ok {
             return Err(GitAiError::Generic(
@@ -37,11 +37,11 @@ impl ApiClient {
         Ok(parsed)
     }
 
-    pub fn notes_batch_get(
+    pub fn authorship_notes_batch_get(
         &self,
-        request: &NotesBatchRequest,
-    ) -> Result<NotesBatchResponse, GitAiError> {
-        let response = self.context().post_json("/worker/notes/batch", request)?;
+        request: &AuthorshipNotesBatchRequest,
+    ) -> Result<AuthorshipBatchResponse, GitAiError> {
+        let response = self.context().post_json("/worker/authorship_notes/batch", request)?;
         let status_code = response.status_code;
         let body = response
             .as_str()
@@ -55,7 +55,7 @@ impl ApiClient {
             )));
         }
 
-        let parsed: NotesBatchResponse =
+        let parsed: AuthorshipBatchResponse =
             serde_json::from_str(body).map_err(GitAiError::JsonError)?;
         if !parsed.ok {
             return Err(GitAiError::Generic(
@@ -65,8 +65,8 @@ impl ApiClient {
         Ok(parsed)
     }
 
-    pub fn notes_push(&self, request: &NotesPushRequest) -> Result<NotesPushResponse, GitAiError> {
-        let response = self.context().post_json("/worker/notes/push", request)?;
+    pub fn authorship_notes_push(&self, request: &AuthorshipNotesPushRequest) -> Result<AuthorshipNotesPushResponse, GitAiError> {
+        let response = self.context().post_json("/worker/authorship_notes/push", request)?;
         let status_code = response.status_code;
         let body = response
             .as_str()
@@ -80,7 +80,7 @@ impl ApiClient {
             )));
         }
 
-        let parsed: NotesPushResponse =
+        let parsed: AuthorshipNotesPushResponse =
             serde_json::from_str(body).map_err(GitAiError::JsonError)?;
         if !parsed.ok {
             return Err(GitAiError::Generic(

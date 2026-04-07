@@ -1,10 +1,11 @@
 """Metrics 数据处理服务"""
 
 import json
+import uuid
 from typing import List, Dict, Optional
 from datetime import datetime
 from core.config.logging import Logger
-from core.database import MetricsDatabase, StatsDatabase
+from core.database import MetricsDatabase
 from core.database.models import MetricsEventsAgentUsage, MetricsEventsCheckpoint, MetricsEventsCommitted, MetricsEventsInstallHooks
 from core.utils.data_uid import gen_commited_uid, gen_checkpoint_uid, gen_agent_usage_uid, gen_install_hooks_uid
 
@@ -15,7 +16,6 @@ class MetricsService:
     def __init__(self):
         self.logger = Logger.get_logger("services.metrics")
         self.database = MetricsDatabase()
-        self.stats_db = StatsDatabase()
 
     def process_metrics_batch(self, events: List[Dict]) -> List[Dict]:
         """
@@ -26,18 +26,29 @@ class MetricsService:
         if not events:
             return []
 
+        batch_id = str(uuid.uuid4())
         received_at = int(datetime.now().timestamp() * 1000)
 
         # 存储原始数据
         payload_json = json.dumps({"v": 1, "events": events})
-        self.database.save_metrics_raw(
+        raw_id = self.database.save_metrics_raw(
             version=1,
             event_count=len(events),
             payload_json=payload_json,
             received_at=received_at,
         )
 
-        return []
+        errors = []
+
+        # 处理每个事件
+        for index, event in enumerate(events):
+            try:
+                self._process_single_event(event, raw_id)
+            except Exception as e:
+                self.logger.error(f"处理事件 {index} 失败: event data: {event}", e)
+                errors.append({"index": index, "error": str(e)})
+
+        return errors
 
     def _process_single_event(self, event: Dict, raw_id: str):
         """处理单个事件"""
@@ -47,6 +58,7 @@ class MetricsService:
         attrs = event.get("a", {})
 
         now = int(datetime.now().timestamp() * 1000)
+
         if event_id == 1:  # Committed
             record = MetricsEventsCommitted(
                 raw_id =raw_id,

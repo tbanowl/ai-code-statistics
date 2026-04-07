@@ -20,9 +20,7 @@ class GitCloneService:
         repo_url: str,
         private_key: str,
         target_dir: str,
-        # 使用 30 天作为默认值，平衡了数据完整性和克隆速度
-        # 对于大多数统计场景，30 天的历史记录足够进行有意义的分析
-        shallow_since: str = '30 days ago'
+        shallow_since: str = '2 month ago'
     ) -> bool:
         """
         使用指定 SSH Key 克隆仓库
@@ -41,6 +39,14 @@ class GitCloneService:
         """
         temp_key_file = None
         try:
+            # 验证私钥格式
+            if not self._validate_private_key_format(private_key):
+                self.logger.error("SSH 私钥格式无效，必须包含标准的 BEGIN/END 标记")
+                return False
+
+            # 规范化私钥格式
+            private_key = self._normalize_private_key(private_key)
+
             # 将私钥写入临时文件
             temp_key_file = self._write_private_key_to_temp(private_key)
 
@@ -51,8 +57,17 @@ class GitCloneService:
             env = os.environ.copy()
             env['GIT_SSH_COMMAND'] = ssh_command
 
-            # 使用 shallow-since 替代 depth
-            cmd = ['git', 'clone', '--shallow-since', shallow_since, repo_url, target_dir]
+            # 将 http/https 地址改为 ssh
+            if repo_url.startswith('http'):
+                repo_url = repo_url.replace('https://', 'ssh://git@')
+                repo_url = repo_url.replace('http://', 'ssh://git@')
+                repo_url = repo_url.replace('devops.cxmt.com', 'devops.cxmt.com:8022')
+                if not repo_url.endswith('.git'):
+                    repo_url += '.git'
+
+            # 使用 shallow-since
+            # cmd = ['git', 'clone', f'--shallow-since="{shallow_since}"', shallow_since, repo_url, target_dir]
+            cmd = ['git', 'clone', repo_url, target_dir]
 
             self.logger.info(f"开始克隆仓库: {repo_url} (shallow-since: {shallow_since})")
 
@@ -62,26 +77,90 @@ class GitCloneService:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                encoding='utf-8',
+                errors='replace',  # 处理无法解码的字符
                 timeout=300  # 5 分钟超时
             )
 
             if result.returncode != 0:
-                self.logger.error(f"克隆失败: {result.stderr}")
+                self.logger.error(f"克隆失败: {result.stderr}\ncmd: {cmd}")
                 return False
 
             self.logger.info(f"仓库克隆成功: {target_dir}")
             return True
 
         except subprocess.TimeoutExpired:
-            self.logger.error("克隆超时")
+            self.logger.error(f"克隆超时: {repo_url}")
             return False
         except Exception as e:
-            self.logger.error(f"克隆过程中出错: {e}")
+            self.logger.error(f"克隆过程中出错: {repo_url}", )
             return False
         finally:
             # 清理临时私钥文件
             if temp_key_file and os.path.exists(temp_key_file):
                 os.unlink(temp_key_file)
+
+    def _validate_private_key_format(self, private_key: str) -> bool:
+        """
+        验证私钥格式是否正确
+
+        Args:
+            private_key: 私钥内容
+
+        Returns:
+            格式是否有效
+        """
+        if not private_key or not private_key.strip():
+            return False
+
+        key_content = private_key.strip()
+        # 检查是否包含标准的私钥头部
+        has_header = any(header in key_content for header in [
+            '-----BEGIN RSA PRIVATE KEY-----',
+            '-----BEGIN OPENSSH PRIVATE KEY-----',
+            '-----BEGIN EC PRIVATE KEY-----',
+            '-----BEGIN DSA PRIVATE KEY-----',
+            '-----BEGIN PRIVATE KEY-----',
+            '-----BEGIN ED25519 PRIVATE KEY-----'
+        ])
+        # 检查是否包含标准的私钥尾部
+        has_footer = any(footer in key_content for footer in [
+            '-----END RSA PRIVATE KEY-----',
+            '-----END OPENSSH PRIVATE KEY-----',
+            '-----END EC PRIVATE KEY-----',
+            '-----END DSA PRIVATE KEY-----',
+            '-----END PRIVATE KEY-----',
+            '-----END ED25519 PRIVATE KEY-----'
+        ])
+
+        return has_header and has_footer
+
+    def _normalize_private_key(self, private_key: str) -> str:
+        """
+        规范化私钥格式，确保正确的换行符
+
+        Args:
+            private_key: 原始私钥内容
+
+        Returns:
+            规范化后的私钥
+        """
+        # 去除首尾空白
+        key_content = private_key.strip()
+        # 将 \\n 替换为实际换行符（处理从环境变量或配置文件读取的情况）
+        key_content = key_content.replace('\\n', '\n')
+        # 将 \r\n 替换为 \n
+        key_content = key_content.replace('\r\n', '\n')
+
+        # 确保头部前有换行（仅在需要时）
+        if not key_content.startswith('\n'):
+            key_content = '\n' + key_content
+
+        # 确保尾部有换行
+        if not key_content.endswith('\n'):
+            key_content += '\n'
+
+        return key_content[1:]  # 移除开头的换行符
 
     def _write_private_key_to_temp(self, private_key: str) -> str:
         """
@@ -96,8 +175,9 @@ class GitCloneService:
         fd, temp_path = tempfile.mkstemp(prefix='ssh_key_')
 
         try:
-            with os.fdopen(fd, 'w') as f:
-                f.write(private_key)
+            # 使用二进制模式写入私钥，避免编码问题
+            with os.fdopen(fd, 'wb') as f:
+                f.write(private_key.encode('utf-8'))
 
             # 设置文件权限为 600
             os.chmod(temp_path, 0o600)
@@ -142,7 +222,9 @@ class GitCloneService:
                 cwd=repo_dir,
                 capture_output=True,
                 text=True,
-                timeout=10
+                encoding='utf-8',
+                errors='replace',
+                timeout=100
             )
 
             if result.returncode == 0:
@@ -150,7 +232,7 @@ class GitCloneService:
 
             return None
         except Exception as e:
-            self.logger.error(f"获取提交 SHA 失败: {e}")
+            self.logger.error(f"获取提交 SHA 失败", e)
             return None
 
     def get_current_branch(self, repo_dir: str) -> Optional[str]:
@@ -169,7 +251,9 @@ class GitCloneService:
                 cwd=repo_dir,
                 capture_output=True,
                 text=True,
-                timeout=10
+                encoding='utf-8',
+                errors='replace',
+                timeout=100
             )
 
             if result.returncode == 0:
@@ -194,11 +278,13 @@ class GitCloneService:
         try:
             # 获取所有已跟踪的文件
             result = subprocess.run(
-                ['git', 'ls-files'],
+                ['git', '-c', 'core.quotepath=false', 'ls-files'],
                 cwd=repo_dir,
                 capture_output=True,
                 text=True,
-                timeout=30
+                encoding='utf-8',
+                errors='replace',
+                timeout=300
             )
 
             if result.returncode != 0:
@@ -240,9 +326,10 @@ class GitCloneService:
                 cwd=repo_dir,
                 capture_output=True,
                 text=True,
-                timeout=10
+                encoding='utf-8',
+                errors='replace',
+                timeout=60
             )
-
             if result.returncode != 0:
                 self.logger.error(f"列出分支失败: {result.stderr}")
                 return []
@@ -259,7 +346,7 @@ class GitCloneService:
             return branches
 
         except Exception as e:
-            self.logger.error(f"列出分支时出错: {e}")
+            self.logger.error(f"列出分支时出错", e)
             return []
 
     def checkout_branch(self, repo_dir: str, branch: str) -> bool:
@@ -280,7 +367,9 @@ class GitCloneService:
                 cwd=repo_dir,
                 capture_output=True,
                 text=True,
-                timeout=30
+                encoding='utf-8',
+                errors='replace',
+                timeout=60
             )
 
             if result.returncode == 0:
@@ -294,6 +383,8 @@ class GitCloneService:
                 cwd=repo_dir,
                 capture_output=True,
                 text=True,
+                encoding='utf-8',
+                errors='replace',
                 timeout=30
             )
 
@@ -305,7 +396,7 @@ class GitCloneService:
             return True
 
         except Exception as e:
-            self.logger.error(f"切换分支时出错: {e}")
+            self.logger.error(f"切换分支时出错", e)
             return False
 
     def match_branches(

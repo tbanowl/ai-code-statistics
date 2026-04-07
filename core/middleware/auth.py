@@ -1,10 +1,11 @@
 """认证中间件"""
 from functools import wraps
-from flask import request, jsonify
+from flask import request, jsonify, g
 import jwt
 from core.config.logging import Logger
 from core.config import load_config
 
+DEFAULT_AUTH_SECRET_KEY = "8ac38b9fe0934205901de4bc38470f58"
 
 def auth_required(f):
     """认证装饰器 - 支持 Authorization Header 或 X-API-Key"""
@@ -28,10 +29,10 @@ def auth_required(f):
             token = auth_header[7:]  # 去掉 "Bearer " 前缀
             try:
                 # 验证 JWT
-                secret = load_config().get('git_ai', {}).get('oauth', {}).get('secret_key', 'secret')
+                secret = load_config().get('git_ai', {}).get('oauth', {}).get('secret_key', DEFAULT_AUTH_SECRET_KEY)
                 payload = jwt.decode(token, secret, algorithms=['HS256'])
                 # 验证通过，继续处理
-                request.headers.set('auth_user', payload)
+                g.auth_user = payload
                 return f(*args, **kwargs)
             except jwt.ExpiredSignatureError:
                 return jsonify({'error': 'Token expired'}), 401

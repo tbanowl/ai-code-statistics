@@ -4,6 +4,7 @@ import jwt
 from datetime import datetime, timedelta
 from typing import Dict, Optional
 from core.config.logging import Logger
+from core.middleware.auth import DEFAULT_AUTH_SECRET_KEY
 
 
 class OAuthService:
@@ -106,7 +107,7 @@ class OAuthService:
 
     def _generate_tokens(self, client_id: str) -> Dict:
         """生成 access_token 和 refresh_token"""
-        secret = self.config.get('secret_key', '8ac38b9fe0934205901de4bc38470f58')
+        secret = self.config.get('secret_key', DEFAULT_AUTH_SECRET_KEY)
 
         now = datetime.now()
         access_expiry_hours = self.config.get('token_expiry_hours', 24)

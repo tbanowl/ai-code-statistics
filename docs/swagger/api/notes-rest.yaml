@@ -4,6 +4,10 @@ info:
   version: 2.0.0
   description: API for storing and retrieving authorship notes when git notes is not supported.
 
+tags:
+  - name: notes_rest
+    description: REST Notes Store API - 用于存储和检索作者注释（当 git notes 不被支持时）
+
 paths:
   /worker/notes:
     put:

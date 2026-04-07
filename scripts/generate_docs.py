@@ -31,6 +31,8 @@ def generate(swagger_config: dict[str, Any] | None = None) -> str:
     from api.routes.git_ai import git_ai_bp
     from api.routes.git_ai_worker import metrics_bp, cas_bp, oauth_bp, releases_bp
     from api.routes.scheduler import scheduler_bp
+    from api.routes.authorship_notes import git_notes_rest_bp
+    from api.routes.stats_repo import stats_repo_bp
 
     app.register_blueprint(stats_bp)
     app.register_blueprint(git_ai_bp)
@@ -39,6 +41,8 @@ def generate(swagger_config: dict[str, Any] | None = None) -> str:
     app.register_blueprint(oauth_bp)
     app.register_blueprint(releases_bp)
     app.register_blueprint(scheduler_bp)
+    app.register_blueprint(git_notes_rest_bp)
+    app.register_blueprint(stats_repo_bp)
 
     spec = generate_swagger_spec(
         app,

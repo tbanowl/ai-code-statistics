@@ -7,6 +7,7 @@ import re
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from core.config.logging import Logger
+from core.services.git_clone_service import GitCloneService
 
 
 @dataclass
@@ -38,7 +39,7 @@ class FileBlameResult:
 class RepoBlameResult:
     """仓库 blame 分析结果"""
 
-    stat_date: int
+    stat_date: str
     commit_sha: str
     branch: str
     total_lines: int
@@ -92,7 +93,7 @@ class BlameStatsService:
         ".md",
         ".txt",
         ".rst",
-        ".asciidoc",
+        ".asciidoc"
     ]
 
     def __init__(self, database):
@@ -104,12 +105,14 @@ class BlameStatsService:
         """
         self.logger = Logger.get_logger("services.blame_stats")
         self.database = database
+        self.git_service = GitCloneService()
+        
 
     def analyze_repository(
         self,
         repo_url: str,
         repo_dir: str,
-        stat_date: int,
+        stat_date: str,
         file_filter: Optional[Dict] = None,
     ) -> Optional[RepoBlameResult]:
         """
@@ -126,12 +129,8 @@ class BlameStatsService:
         """
         try:
             # 获取当前提交 SHA 和分支
-            from core.services.git_clone_service import GitCloneService
-
-            git_service = GitCloneService()
-
-            commit_sha = git_service.get_current_commit_sha(repo_dir)
-            branch = git_service.get_current_branch(repo_dir)
+            commit_sha = self.git_service.get_current_commit_sha(repo_dir)
+            branch = self.git_service.get_current_branch(repo_dir)
 
             if not commit_sha or not branch:
                 self.logger.error("无法获取当前提交 SHA 或分支名称")
@@ -150,13 +149,13 @@ class BlameStatsService:
             total_non_ai_lines = 0
             files_results = []
             contributor_stats = {}
-
+            notes_cache = {}
             for idx, file_path in enumerate(files, 1):
                 if idx % 100 == 0:
                     self.logger.info(f"处理进度: {idx}/{len(files)}")
 
                 result = self.analyze_file_blame(
-                    repo_url, file_path, repo_dir, commit_sha
+                    repo_url, file_path, repo_dir, commit_sha, notes_cache
                 )
 
                 if result:
@@ -181,7 +180,7 @@ class BlameStatsService:
                             "total_lines"
                         ]
 
-            ai_ratio = (total_ai_lines / total_lines * 100) if total_lines > 0 else 0.0
+            # ai_ratio = (total_ai_lines / total_lines * 100) if total_lines > 0 else 0.0
 
             self.logger.info(
                 f"统计完成: 总行数 {total_lines}, AI 行数 {total_ai_lines}, 非 AI 行数 {total_non_ai_lines}"
@@ -326,6 +325,35 @@ class BlameStatsService:
 
         return file_attestations, metadata.get("prompts", {})
 
+
+    def _notes_cache(self, unique_commits: list[str], notes_cache: Optional[Dict[str, Tuple[Dict, Dict]]] = None) -> Dict[str, Tuple[Dict, Dict]]:
+        if notes_cache is None:
+            notes_cache = {}
+        un_cache_commits = []
+        for commit in unique_commits:
+            if commit not in notes_cache:
+                un_cache_commits.append(commit)
+        if not un_cache_commits:
+            return notes_cache
+        
+        notes_dict = self.database.get_git_notes_batch(un_cache_commits)
+        if not notes_dict:
+            for commit in un_cache_commits:
+                notes_cache[commit] = ({}, {})
+            return notes_cache
+
+        for blamed_commit, note_content in notes_dict.items():
+            try:
+                notes_cache[blamed_commit] = self._parse_git_note_content(
+                    note_content
+                )
+            except Exception as exc:
+                self.logger.warning(
+                    f"Failed to parse note for {blamed_commit}: {exc}"
+                )
+        return notes_cache
+        
+
     def _is_ai_line(
         self,
         line_num: int,
@@ -338,7 +366,10 @@ class BlameStatsService:
             return False, None
 
         attestations, prompts = note_data
-        file_attestations = attestations.get(file_path)
+        if not attestations:
+            return False, None
+        
+        file_attestations = attestations.get(file_path.replace('\\', '/'))
         if not file_attestations:
             return False, None
 
@@ -364,45 +395,49 @@ class BlameStatsService:
         Returns:
             文件路径列表
         """
-        from core.services.git_clone_service import GitCloneService
-
-        git_service = GitCloneService()
-        all_files = git_service.list_files(repo_dir)
+        all_files = self.git_service.list_files(repo_dir)
 
         if not file_filter:
-            file_filter = {"enabled": False, "mode": "code_only", "extensions": []}
-
-        if not file_filter.get("enabled", False):
-            # 默认只统计代码文件
-            return [f for f in all_files if self._is_code_file(f)]
+            file_filter = {"mode": "code_only", "extensions": [], "excluds": []}
 
         mode = file_filter.get("mode", "code_only")
-
+        
+        excluds = file_filter.get("excluds", [])
+        extensions = file_filter.get("extensions", [])
+        
         if mode == "all":
-            return all_files
+            excluds = []
+            extensions = []
         elif mode == "code_only":
-            return [f for f in all_files if self._is_code_file(f)]
+            extensions = self.CODE_EXTENSIONS
         elif mode == "custom":
-            custom_extensions = file_filter.get("extensions", [])
-            return [
-                f
-                for f in all_files
-                if any(f.endswith(ext) for ext in custom_extensions)
-            ]
+            extensions = file_filter.get("extensions", [])
         else:
-            return [f for f in all_files if self._is_code_file(f)]
+            extensions = self.CODE_EXTENSIONS
+        
+        if excluds or extensions:
+            all_files = [f for f in all_files if self._is_read_file(f, extensions, excluds)]
 
-    def _is_code_file(self, file_path: str) -> bool:
+        return all_files
+
+    def _is_read_file(self, file_path: str, extensions: list[str] | None, excluds: list[str] | None) -> bool:
         """
-        判断是否为代码文件
+        判断是否为读取文件
 
         Args:
             file_path: 文件路径
 
         Returns:
-            是否为代码文件
+            是否读取文件
         """
-        return any(file_path.endswith(ext) for ext in self.CODE_EXTENSIONS)
+        if extensions and not any(file_path.endswith(ext) for ext in extensions):
+            return False
+        
+        if not excluds:
+            return True
+        
+        return not any(file_path.endswith(ext) for ext in excluds)
+        
 
     def analyze_file_blame(
         self,
@@ -432,29 +467,16 @@ class BlameStatsService:
                 rel_path = os.path.relpath(file_path, repo_dir)
 
             blame_output = self._run_git_blame(repo_dir, rel_path)
+            if not blame_output:
+                self.logger.warning(f'git blame {rel_path} 失败')
+                return None
             blame_data = self._parse_blame_porcelain(blame_output)
 
             if not blame_data:
                 return None
-
-            if notes_cache is None:
-                notes_cache = {}
-                notes_dict = {}
-                if self.database and hasattr(self.database, "get_git_notes_batch"):
-                    unique_commits = list(
-                        {line["commit"] for line in blame_data.values()}
-                    )
-                    notes_dict = self.database.get_git_notes_batch(unique_commits)
-
-                for blamed_commit, note_content in notes_dict.items():
-                    try:
-                        notes_cache[blamed_commit] = self._parse_git_note_content(
-                            note_content
-                        )
-                    except Exception as exc:
-                        self.logger.warning(
-                            f"Failed to parse note for {blamed_commit}: {exc}"
-                        )
+            
+            unique_commits = list({line["commit"] for line in blame_data.values()})
+            new_notes_cache = self._notes_cache(unique_commits, notes_cache)
 
             total_lines = len(blame_data)
             ai_lines = 0
@@ -463,9 +485,10 @@ class BlameStatsService:
 
             for line_num, line_info in blame_data.items():
                 is_ai, ai_author = self._is_ai_line(
-                    line_num, rel_path, line_info["commit"], notes_cache
+                    line_num, rel_path, line_info["commit"], new_notes_cache
                 )
                 author = ai_author if is_ai else line_info["author"]
+                author_mail = line_info["author_mail"]
 
                 if is_ai:
                     ai_lines += 1
@@ -477,6 +500,7 @@ class BlameStatsService:
                         "ai_lines": 0,
                         "non_ai_lines": 0,
                         "total_lines": 0,
+                        "mail": author_mail
                     }
 
                 if is_ai:
@@ -498,7 +522,7 @@ class BlameStatsService:
             self.logger.warning(f"分析文件超时: {rel_path}")
             return None
         except Exception as e:
-            self.logger.error(f"分析文件失败: {rel_path}, 错误: {e}")
+            self.logger.error(f"分析文件失败: {rel_path}", e)
             return None
 
     def _run_git_blame(self, repo_dir: str, rel_path: str) -> str:
@@ -507,10 +531,16 @@ class BlameStatsService:
             cwd=repo_dir,
             capture_output=True,
             text=True,
-            timeout=30,
+            encoding='utf-8',
+            errors='replace',
+            timeout=60,
         )
         if result.returncode != 0:
-            raise RuntimeError(f"执行 git blame 失败: {rel_path}")
+            size = os.path.getsize(rel_path)
+            if os.path.getsize(rel_path) == 0:
+                self.logger.info(f"skip git blame with empty file: {rel_path}")
+            else:
+                raise RuntimeError(f"执行 git blame 失败: {rel_path}")
         return result.stdout
 
     def _parse_blame_porcelain(self, blame_output: str) -> Dict[int, Dict[str, str]]:
@@ -529,17 +559,20 @@ class BlameStatsService:
                 commit_sha = parts[0]
                 final_line = int(parts[2])
                 author = "Unknown"
+                author_mail = ""
                 i += 1
 
                 while i < len(lines) and not lines[i].startswith("\t"):
                     if lines[i].startswith("author "):
                         author = lines[i][7:]
+                    if lines[i].startswith("author-mail "):
+                        author_mail = lines[i][13:-1]
                     i += 1
 
                 if i < len(lines) and lines[i].startswith("\t"):
                     i += 1
 
-                result[final_line] = {"commit": commit_sha, "author": author}
+                result[final_line] = {"commit": commit_sha, "author": author, "author_mail": author_mail}
                 continue
 
             i += 1

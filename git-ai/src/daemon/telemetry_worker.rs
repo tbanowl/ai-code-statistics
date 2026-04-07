@@ -147,6 +147,70 @@ impl DaemonTelemetryWorkerHandle {
     pub async fn submit_cas(&self, records: Vec<CasSyncPayload>) {
         self.buffer.lock().await.ingest_cas(records);
     }
+
+    /// Submit telemetry envelopes synchronously (best-effort, non-blocking).
+    ///
+    /// Used by the daemon process's own `observability::log_*()` calls which
+    /// cannot go through the control socket (the daemon can't connect to itself).
+    /// Uses `try_lock()` to avoid blocking the caller if the buffer is contested.
+    pub fn submit_telemetry_sync(&self, envelopes: Vec<TelemetryEnvelope>) {
+        if let Ok(mut buf) = self.buffer.try_lock() {
+            buf.ingest_envelopes(envelopes);
+        }
+    }
+
+    /// Submit CAS records synchronously (best-effort, non-blocking).
+    ///
+    /// Used by daemon-owned post-commit paths that cannot route through the
+    /// control socket because the daemon cannot connect to itself.
+    pub fn submit_cas_sync(&self, records: Vec<CasSyncPayload>) {
+        if let Ok(mut buf) = self.buffer.try_lock() {
+            buf.ingest_cas(records);
+        }
+    }
+}
+
+/// Global handle for the daemon's in-process telemetry worker.
+///
+/// Set once when the daemon spawns its telemetry worker, allowing
+/// `observability::log_*()` functions to route events directly into
+/// the worker buffer when running inside the daemon process.
+static DAEMON_INTERNAL_TELEMETRY: std::sync::OnceLock<DaemonTelemetryWorkerHandle> =
+    std::sync::OnceLock::new();
+
+/// Register the daemon's in-process telemetry worker handle.
+/// Called once during daemon startup after `spawn_telemetry_worker()`.
+pub fn set_daemon_internal_telemetry(handle: DaemonTelemetryWorkerHandle) {
+    let _ = DAEMON_INTERNAL_TELEMETRY.set(handle);
+}
+
+/// Submit telemetry from within the daemon process (sync, best-effort).
+/// Returns true if the handle was available and envelopes were submitted.
+pub fn submit_daemon_internal_telemetry(envelopes: Vec<TelemetryEnvelope>) -> bool {
+    if let Some(handle) = DAEMON_INTERNAL_TELEMETRY.get() {
+        handle.submit_telemetry_sync(envelopes);
+        true
+    } else {
+        false
+    }
+}
+
+/// Submit CAS records from within the daemon process (sync, best-effort).
+/// Returns true if the handle was available and records were submitted.
+pub fn submit_daemon_internal_cas(records: Vec<CasSyncPayload>) -> bool {
+    if let Some(handle) = DAEMON_INTERNAL_TELEMETRY.get() {
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let handle = handle.clone();
+            runtime.spawn(async move {
+                handle.submit_cas(records).await;
+            });
+        } else {
+            handle.submit_cas_sync(records);
+        }
+        true
+    } else {
+        false
+    }
 }
 
 /// Spawn the telemetry worker task. Returns a handle for submitting events.

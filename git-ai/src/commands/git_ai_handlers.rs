@@ -180,9 +180,6 @@ pub fn handle_git_ai(args: &[String]) {
         "upgrade" => {
             commands::upgrade::run_with_args(&args[1..]);
         }
-        "flush-logs" => {
-            commands::flush_logs::handle_flush_logs(&args[1..]);
-        }
         "flush-cas" => {
             commands::flush_cas::handle_flush_cas(&args[1..]);
         }
@@ -258,7 +255,6 @@ fn print_help() {
     eprintln!(
         "    --hook-input <json|stdin>   JSON payload required by presets, or 'stdin' to read from stdin"
     );
-    eprintln!("    --reset                     Reset working log");
     eprintln!("    mock_ai [pathspecs...]      Test preset accepting optional file pathspecs");
     eprintln!("  blame <file>       Git blame with AI authorship overlay");
     eprintln!("  diff <commit|range>  Show diff with AI authorship annotations");
@@ -299,8 +295,6 @@ fn print_help() {
     eprintln!("  bg                 Run and control git-ai background service");
     eprintln!("  install-hooks      Install git hooks for AI authorship tracking");
     eprintln!("  uninstall-hooks    Remove git-ai hooks from all detected tools");
-    eprintln!("  git-hooks ensure   Ensure repo-local git-ai hooks are installed/healed");
-    eprintln!("  git-hooks remove   Remove repo-local git-ai hooks and restore local hooksPath");
     eprintln!("  ci                 Continuous integration utilities");
     eprintln!("    github                 GitHub CI helpers");
     eprintln!("  squash-authorship  Generate authorship log for squashed commits");
@@ -359,16 +353,11 @@ fn handle_checkpoint(args: &[String]) {
         .to_string();
 
     // Parse checkpoint-specific arguments
-    let mut reset = false;
     let mut hook_input = None;
 
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
-            "--reset" => {
-                reset = true;
-                i += 1;
-            }
             "--hook-input" => {
                 if i + 1 < args.len() {
                     hook_input = Some(strip_utf8_bom(args[i + 1].clone()));
@@ -774,12 +763,10 @@ fn handle_checkpoint(args: &[String]) {
                     modified
                 });
 
-                commands::git_hook_handlers::ensure_repo_level_hooks_for_checkpoint(&repo);
                 let checkpoint_result = run_checkpoint_via_daemon_or_local(
                     &repo,
                     &default_user_name,
                     checkpoint_kind,
-                    reset,
                     false,
                     repo_agent_result,
                     allow_captured_async,
@@ -952,12 +939,10 @@ fn handle_checkpoint(args: &[String]) {
         None
     };
 
-    commands::git_hook_handlers::ensure_repo_level_hooks_for_checkpoint(&repo);
     let checkpoint_result = run_checkpoint_via_daemon_or_local(
         &repo,
         &default_user_name,
         checkpoint_kind,
-        reset,
         false,
         agent_run_result,
         allow_captured_async,
@@ -1016,12 +1001,10 @@ fn handle_checkpoint(args: &[String]) {
                 modified.will_edit_filepaths = None;
             }
 
-            commands::git_hook_handlers::ensure_repo_level_hooks_for_checkpoint(&ext_repo);
             match run_checkpoint_via_daemon_or_local(
                 &ext_repo,
                 &ext_user_name,
                 checkpoint_kind,
-                false,
                 false,
                 Some(modified),
                 allow_captured_async,
@@ -1059,10 +1042,6 @@ fn handle_checkpoint(args: &[String]) {
         }
     }
 
-    if checkpoint_kind != CheckpointKind::Human {
-        observability::spawn_background_flush();
-    }
-
     if local_checkpoint_failed {
         std::process::exit(0);
     }
@@ -1079,7 +1058,6 @@ fn run_checkpoint_via_daemon_or_local(
     repo: &Repository,
     author: &str,
     kind: CheckpointKind,
-    reset: bool,
     quiet: bool,
     agent_run_result: Option<AgentRunResult>,
     allow_captured_async: bool,
@@ -1108,7 +1086,6 @@ fn run_checkpoint_via_daemon_or_local(
                             repo,
                             author,
                             kind,
-                            reset,
                             agent_run_result.as_ref(),
                             is_pre_commit,
                             None,
@@ -1186,7 +1163,6 @@ fn run_checkpoint_via_daemon_or_local(
                                 repo_working_dir: repo_working_dir.clone(),
                                 kind: Some(checkpoint_kind_to_str(kind).to_string()),
                                 author: Some(author.to_string()),
-                                reset: Some(reset),
                                 quiet: Some(quiet),
                                 is_pre_commit: Some(is_pre_commit),
                                 agent_run_result: agent_run_result.clone(),
@@ -1235,15 +1211,8 @@ fn run_checkpoint_via_daemon_or_local(
             }
         }
     }
-    let stats = commands::checkpoint::run(
-        repo,
-        author,
-        kind,
-        reset,
-        quiet,
-        agent_run_result,
-        is_pre_commit,
-    )?;
+    let stats =
+        commands::checkpoint::run(repo, author, kind, quiet, agent_run_result, is_pre_commit)?;
     Ok(CheckpointDispatchOutcome {
         stats,
         queued: false,
@@ -1785,35 +1754,6 @@ fn handle_stats(args: &[String]) {
 
 fn handle_git_hooks(args: &[String]) {
     match args.first().map(String::as_str) {
-        Some("ensure") => {
-            let repo = match find_repository(&Vec::<String>::new()) {
-                Ok(repo) => repo,
-                Err(e) => {
-                    eprintln!("Failed to find repository: {}", e);
-                    std::process::exit(1);
-                }
-            };
-
-            match commands::git_hook_handlers::ensure_repo_hooks_installed(&repo, false) {
-                Ok(report) => {
-                    if let Err(e) = commands::git_hook_handlers::mark_repo_hooks_enabled(&repo) {
-                        eprintln!("Failed to persist repo hook opt-in: {}", e);
-                        std::process::exit(1);
-                    }
-                    let status = if report.changed { "updated" } else { "ok" };
-                    println!(
-                        "repo hooks {}: {}",
-                        status,
-                        report.managed_hooks_path.to_string_lossy()
-                    );
-                    std::process::exit(0);
-                }
-                Err(e) => {
-                    eprintln!("Failed to ensure repo hooks: {}", e);
-                    std::process::exit(1);
-                }
-            }
-        }
         Some("remove") | Some("uninstall") => {
             let repo = match find_repository(&Vec::<String>::new()) {
                 Ok(repo) => repo,
@@ -1840,7 +1780,8 @@ fn handle_git_hooks(args: &[String]) {
             }
         }
         _ => {
-            eprintln!("Usage: git-ai git-hooks <ensure|remove>");
+            eprintln!("The git core hooks feature has been sunset.");
+            eprintln!("Usage: git-ai git-hooks remove");
             std::process::exit(1);
         }
     }
@@ -1869,8 +1810,6 @@ fn emit_no_repo_agent_metrics(agent_run_result: Option<&AgentRunResult>) {
 
     let values = crate::metrics::AgentUsageValues::new();
     crate::metrics::record(values, attrs);
-
-    observability::spawn_background_flush();
 }
 
 fn get_all_files_for_mock_ai(working_dir: &str) -> Vec<String> {

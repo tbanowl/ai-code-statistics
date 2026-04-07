@@ -19,7 +19,7 @@ from sqlalchemy import (
     Index,
     UniqueConstraint,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 from .base import Base
 
 
@@ -27,10 +27,10 @@ def now_ts() -> int:
     """返回当前时间戳（毫秒）"""
     return int(time.time() * 1000)
 
+
 def gen_xid() -> str:
     """生成 XID 字符串"""
     return XID().string()
-
 
 class ModelBase(Base):
     """模型基类，提供通用字段和方法"""
@@ -95,16 +95,16 @@ class MetricsEventsCommitted(ModelBase):
     time_waiting_for_ai: Mapped[dict] = mapped_column(JSON, nullable=True)
 
     # 事件属性
-    git_ai_version: Mapped[str] = mapped_column(String(20), nullable=True)
-    repo_url: Mapped[str] = mapped_column(String(200), nullable=True, index=True)
-    author: Mapped[str] = mapped_column(String(100), nullable=True, index=True)
-    commit_sha: Mapped[str] = mapped_column(String(40), nullable=True, index=True)
-    base_commit_sha: Mapped[str] = mapped_column(String(40), nullable=True)
-    branch: Mapped[str] = mapped_column(String(100), nullable=True)
-    tool: Mapped[str] = mapped_column(String(100), nullable=True)
-    model: Mapped[str] = mapped_column(String(100), nullable=True)
-    prompt_id: Mapped[str] = mapped_column(String(100), nullable=True)
-    external_prompt_id: Mapped[str] = mapped_column(String(100), nullable=True)
+    git_ai_version: Mapped[str] = mapped_column(String, nullable=True)
+    repo_url: Mapped[str] = mapped_column(String, nullable=True, index=True)
+    author: Mapped[str] = mapped_column(String, nullable=True, index=True)
+    commit_sha: Mapped[str] = mapped_column(String, nullable=True, index=True)
+    base_commit_sha: Mapped[str] = mapped_column(String, nullable=True)
+    branch: Mapped[str] = mapped_column(String, nullable=True)
+    tool: Mapped[str] = mapped_column(String, nullable=True)
+    model: Mapped[str] = mapped_column(String, nullable=True)
+    prompt_id: Mapped[str] = mapped_column(String, nullable=True)
+    external_prompt_id: Mapped[str] = mapped_column(String, nullable=True)
     custom_attributes: Mapped[dict] = mapped_column(JSON, nullable=True)
 
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
@@ -257,27 +257,15 @@ class StatsRepository(ModelBase):
         BigInteger, nullable=False, default=now_ts, onupdate=now_ts
     )
 
-    # 关系
-    branch_configs = relationship(
-        "StatsRepoBranchConfig", back_populates="repository", cascade="all, delete-orphan"
-    )
-
 
 class StatsRepoBranchConfig(ModelBase):
     """仓库分支配置表"""
 
     __tablename__ = "stats_repo_branch_config"
 
-    __table_args__ = (UniqueConstraint("repo_id", "branch_pattern"),)
-
     id: Mapped[str] = mapped_column(String(20), primary_key=True, default=gen_xid)
-    repo_id: Mapped[str] = mapped_column(
-        String(20),
-        ForeignKey("stats_repositories.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    branch_pattern: Mapped[str] = mapped_column(Text, nullable=False)
+    repo_id: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    branch_pattern: Mapped[str] = mapped_column(String(400), nullable=False)
     # pattern_type 有效值: 'exact' (精确匹配), 'wildcard' (通配符), 'special' (特殊规则)
     pattern_type: Mapped[str] = mapped_column(String(20), nullable=False, default="exact")
     enabled: Mapped[int] = mapped_column(Integer, default=1)
@@ -285,10 +273,6 @@ class StatsRepoBranchConfig(ModelBase):
     updated_at: Mapped[int] = mapped_column(
         BigInteger, nullable=False, default=now_ts, onupdate=now_ts
     )
-
-    # 关系
-    repository = relationship("StatsRepository", back_populates="branch_configs")
-
 
 class StatsContributor(ModelBase):
     """贡献者表"""
@@ -337,17 +321,16 @@ class StatsDailyStat(ModelBase):
     __tablename__ = "stats_daily_stats"
 
     id: Mapped[str] = mapped_column(String(20), primary_key=True, default=gen_xid)
+    # 统计日期，格式：YYYYMMDD
     stat_date: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
     repo_id: Mapped[str] = mapped_column(
         String(20),
-        ForeignKey("stats_repositories.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
     repo_name: Mapped[str] = mapped_column(String, nullable=True)
     contributor_id: Mapped[str] = mapped_column(
         String(20),
-        ForeignKey("stats_contributors.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -427,7 +410,7 @@ class AuthorshipNotes(ModelBase):
 
     id: Mapped[str] = mapped_column(String(20), primary_key=True, default=gen_xid)
     repo_url: Mapped[str] = mapped_column(Text, nullable=False)
-    branch: Mapped[str] = mapped_column(Text, nullable=False)
+    branch: Mapped[str] = mapped_column(String(40), nullable=False)
     commit_sha: Mapped[str] = mapped_column(String(40), nullable=False)
     note_blob_oid: Mapped[str] = mapped_column(String(40), nullable=True)
     author_name: Mapped[str] = mapped_column(Text, nullable=False)
@@ -453,7 +436,7 @@ class StatsSshKey(ModelBase):
 
     id: Mapped[str] = mapped_column(String(20), primary_key=True, default=gen_xid)
     key_name: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
-    public_key: Mapped[str] = mapped_column(Text, nullable=False)
+    public_key: Mapped[str] = mapped_column(Text, nullable=True)
     private_key_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
     updated_at: Mapped[int] = mapped_column(
@@ -476,7 +459,7 @@ class StatsBlameRepo(ModelBase):
     repo_id: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     stat_date: Mapped[int] = mapped_column(BigInteger, nullable=False)
     commit_sha: Mapped[str] = mapped_column(String(40), nullable=False)
-    branch: Mapped[str] = mapped_column(Text, nullable=False)
+    branch: Mapped[str] = mapped_column(String(40), nullable=False)
     total_lines: Mapped[int] = mapped_column(Integer, nullable=False)
     ai_lines: Mapped[int] = mapped_column(Integer, nullable=False)
     non_ai_lines: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -501,6 +484,7 @@ class StatsBlameFile(ModelBase):
 
     id: Mapped[str] = mapped_column(String(20), primary_key=True, default=gen_xid)
     repo_id: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    branch: Mapped[str] = mapped_column(String(40), nullable=False)
     stat_date: Mapped[int] = mapped_column(BigInteger, nullable=False)
     file_path: Mapped[str] = mapped_column(Text, nullable=False)
     commit_sha: Mapped[str] = mapped_column(String(40), nullable=False)
@@ -527,6 +511,7 @@ class StatsBlameRepoContributor(ModelBase):
 
     id: Mapped[str] = mapped_column(String(20), primary_key=True, default=gen_xid)
     repo_id: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    branch: Mapped[str] = mapped_column(String(40), nullable=False)
     stat_date: Mapped[int] = mapped_column(BigInteger, nullable=False)
     contributor_id: Mapped[str] = mapped_column(String(20), nullable=False)
     contributor_name: Mapped[str] = mapped_column(Text, nullable=False)
@@ -555,6 +540,7 @@ class StatsBlameFileContributor(ModelBase):
     file_id: Mapped[str] = mapped_column(String(20), nullable=False)
     stat_date: Mapped[int] = mapped_column(BigInteger, nullable=False)
     repo_id: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    branch: Mapped[str] = mapped_column(String(40), nullable=False)
     file_path: Mapped[str] = mapped_column(Text, nullable=False)
     contributor_id: Mapped[str] = mapped_column(String(20), nullable=False)
     contributor_name: Mapped[str] = mapped_column(Text, nullable=False)

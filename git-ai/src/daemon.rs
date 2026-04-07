@@ -55,6 +55,8 @@ use std::fs::{self, File, OpenOptions};
 #[cfg(windows)]
 use std::io;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+#[cfg(windows)]
+use std::os::windows::io::{AsRawHandle, FromRawHandle, IntoRawHandle};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -90,7 +92,16 @@ const DAEMON_SOCKET_PROBE_TIMEOUT: Duration = Duration::from_millis(100);
 const WINDOWS_TRACE_PIPE_WORKERS: usize = 16;
 #[cfg(windows)]
 const WINDOWS_CONTROL_PIPE_WORKERS: usize = 8;
+#[cfg(windows)]
+const WINDOWS_STDOUT_HANDLE: u32 = (-11i32) as u32;
+#[cfg(windows)]
+const WINDOWS_STDERR_HANDLE: u32 = (-12i32) as u32;
 static DAEMON_PROCESS_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+#[cfg(windows)]
+unsafe extern "system" {
+    fn SetStdHandle(nstdhandle: u32, hhandle: *mut std::ffi::c_void) -> i32;
+}
 
 #[cfg(not(windows))]
 pub type DaemonClientStream = LocalSocketStream;
@@ -1248,7 +1259,6 @@ fn apply_checkpoint_side_effect(request: CheckpointRunRequest) -> Result<(), Git
     match request {
         CheckpointRunRequest::Live(request) => {
             let repo = find_repository_in_path(&request.repo_working_dir)?;
-            crate::commands::git_hook_handlers::ensure_repo_level_hooks_for_checkpoint(&repo);
 
             let kind = request
                 .kind
@@ -1264,7 +1274,6 @@ fn apply_checkpoint_side_effect(request: CheckpointRunRequest) -> Result<(), Git
                 &repo,
                 &author,
                 kind,
-                request.reset.unwrap_or(false),
                 request.quiet.unwrap_or(true),
                 request.agent_run_result,
                 request.is_pre_commit.unwrap_or(false),
@@ -1273,7 +1282,6 @@ fn apply_checkpoint_side_effect(request: CheckpointRunRequest) -> Result<(), Git
         }
         CheckpointRunRequest::Captured(request) => {
             let repo = find_repository_in_path(&request.repo_working_dir)?;
-            crate::commands::git_hook_handlers::ensure_repo_level_hooks_for_checkpoint(&repo);
             let _ = crate::commands::checkpoint::execute_captured_checkpoint(
                 &repo,
                 &request.capture_id,
@@ -2339,7 +2347,6 @@ fn sync_pre_commit_checkpoint_for_daemon_commit(
         repo,
         author,
         CheckpointKind::Human,
-        false,
         true,
         Some(replay_agent_result),
         base_commit != "initial",
@@ -3078,13 +3085,12 @@ fn remove_pid_metadata(config: &DaemonConfig) -> Result<(), GitAiError> {
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(not(windows))]
 fn daemon_is_test_mode() -> bool {
     std::env::var_os("GIT_AI_TEST_DB_PATH").is_some()
         || std::env::var_os("GITAI_TEST_DB_PATH").is_some()
 }
 
-#[cfg(unix)]
 fn daemon_log_dir(config: &DaemonConfig) -> PathBuf {
     config.internal_dir.join("daemon").join("logs")
 }
@@ -3107,8 +3113,14 @@ fn maybe_setup_daemon_log_file(config: &DaemonConfig) -> Option<DaemonLogGuard> 
 }
 
 #[cfg(windows)]
-fn maybe_setup_daemon_log_file(_config: &DaemonConfig) -> Option<DaemonLogGuard> {
-    None
+fn maybe_setup_daemon_log_file(config: &DaemonConfig) -> Option<DaemonLogGuard> {
+    match setup_daemon_log_file(config) {
+        Ok(guard) => Some(guard),
+        Err(e) => {
+            debug_log(&format!("daemon log file setup failed: {}", e));
+            None
+        }
+    }
 }
 
 struct DaemonLogGuard {
@@ -3146,10 +3158,89 @@ fn setup_daemon_log_file(config: &DaemonConfig) -> Result<DaemonLogGuard, GitAiE
     Ok(DaemonLogGuard { _file: file })
 }
 
+#[cfg(windows)]
+fn setup_daemon_log_file(config: &DaemonConfig) -> Result<DaemonLogGuard, GitAiError> {
+    let log_dir = daemon_log_dir(config);
+    fs::create_dir_all(&log_dir)?;
+
+    let prune_dir = log_dir.clone();
+    std::thread::spawn(move || prune_stale_daemon_logs(&prune_dir));
+
+    let log_path = log_dir.join(format!("{}.log", std::process::id()));
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)?;
+    redirect_windows_stdio_to_log_file(&file)?;
+    eprintln!("[git-ai] daemon log initialized at {}", log_path.display());
+
+    Ok(DaemonLogGuard { _file: file })
+}
+
+#[cfg(windows)]
+fn redirect_windows_stdio_to_log_file(file: &File) -> Result<(), GitAiError> {
+    redirect_windows_stdio_stream(file, 1, WINDOWS_STDOUT_HANDLE)?;
+    redirect_windows_stdio_stream(file, 2, WINDOWS_STDERR_HANDLE)?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn redirect_windows_stdio_stream(
+    file: &File,
+    std_fd: libc::c_int,
+    std_handle: u32,
+) -> Result<(), GitAiError> {
+    let clone = file.try_clone()?;
+    let raw_handle = clone.into_raw_handle();
+    let fd = unsafe {
+        libc::open_osfhandle(
+            raw_handle as libc::intptr_t,
+            libc::O_APPEND | libc::O_BINARY,
+        )
+    };
+    if fd == -1 {
+        unsafe {
+            drop(File::from_raw_handle(raw_handle));
+        }
+        return Err(GitAiError::Generic(format!(
+            "open_osfhandle failed for daemon log stream {}: {}",
+            std_fd,
+            std::io::Error::last_os_error()
+        )));
+    }
+
+    let dup_result = unsafe { libc::dup2(fd, std_fd) };
+    if dup_result == -1 {
+        let err = std::io::Error::last_os_error();
+        let _ = unsafe { libc::close(fd) };
+        return Err(GitAiError::Generic(format!(
+            "dup2 failed for daemon log stream {}: {}",
+            std_fd, err
+        )));
+    }
+    if unsafe { libc::close(fd) } == -1 {
+        debug_log(&format!(
+            "close failed for daemon log stream {} after successful redirect: {}",
+            std_fd,
+            std::io::Error::last_os_error()
+        ));
+    }
+
+    let set_handle_result = unsafe { SetStdHandle(std_handle, file.as_raw_handle()) };
+    if set_handle_result == 0 {
+        return Err(GitAiError::Generic(format!(
+            "SetStdHandle failed for daemon log stream {}: {}",
+            std_fd,
+            std::io::Error::last_os_error()
+        )));
+    }
+
+    Ok(())
+}
+
 /// Remove log files from previous daemon runs that are older than one week and
 /// whose PID is no longer alive, to avoid unbounded growth while keeping recent
 /// logs available for debugging.
-#[cfg(unix)]
 fn prune_stale_daemon_logs(log_dir: &Path) {
     let one_week = std::time::Duration::from_secs(7 * 24 * 60 * 60);
     let entries = match fs::read_dir(log_dir) {
@@ -3162,22 +3253,26 @@ fn prune_stale_daemon_logs(log_dir: &Path) {
             Some(s) => s,
             None => continue,
         };
-        let pid: u32 = match stem.parse() {
+        let _pid: u32 = match stem.parse() {
             Ok(p) => p,
             Err(_) => continue,
         };
-        if process_alive(pid) {
-            continue;
-        }
         let dominated = path
             .metadata()
             .ok()
             .and_then(|m| m.modified().ok())
             .and_then(|t| t.elapsed().ok())
             .is_some_and(|age| age > one_week);
-        if dominated {
-            let _ = fs::remove_file(&path);
+        if !dominated {
+            continue;
         }
+        #[cfg(unix)]
+        {
+            if process_alive(_pid) {
+                continue;
+            }
+        }
+        let _ = fs::remove_file(&path);
     }
 }
 
@@ -4087,6 +4182,14 @@ impl ActorDaemonCoordinator {
         let Some(command) = command else {
             return Ok(None);
         };
+
+        // Repo-creating commands (clone, init) have no meaningful carryover
+        // state — the target repo doesn't exist before the command runs, and the
+        // worktree hint may point to the CWD (a non-repo directory) rather than
+        // the newly created repo.
+        if matches!(command, "clone" | "init") {
+            return Ok(None);
+        }
 
         let repo = discover_repository_in_path_no_git_exec(input.worktree)?;
         let stable_heads = stable_carryover_heads_for_command(&repo, &input, &parsed)?;
@@ -6939,6 +7042,44 @@ fn handle_trace_connection_actor_reader<R: Read>(
     Ok(())
 }
 
+/// Git environment variables that must not leak into the daemon process.
+///
+/// The daemon is a long-lived, repository-agnostic process that serves requests
+/// for many different repositories. Environment variables like `GIT_DIR` and
+/// `GIT_WORK_TREE` pin git operations to a single repository and override the
+/// `-C <path>` flag that the daemon uses to target each repository individually.
+///
+/// When a daemon is spawned by a git wrapper invocation (e.g. `git add`), the
+/// parent process may have these variables set by git itself (hook context) or
+/// by test harnesses. Clearing them at daemon startup prevents incorrect
+/// repository resolution that manifests as `fatal: not a git repository: '/dev/null'`.
+///
+/// This list is used in two places:
+/// - `spawn_daemon_run_detached` strips them from the child process via `env_remove`.
+/// - `sanitize_git_env_for_daemon` clears them from the current process at daemon startup
+///   as a belt-and-suspenders defence (the daemon may be launched by another mechanism).
+pub const GIT_ENV_VARS_TO_SANITIZE: &[&str] = &[
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_CEILING_DIRECTORIES",
+    "GIT_QUARANTINE_PATH",
+    "GIT_NAMESPACE",
+];
+
+fn sanitize_git_env_for_daemon() {
+    for var in GIT_ENV_VARS_TO_SANITIZE {
+        // SAFETY: daemon startup is single-threaded at this point -- the tokio
+        // runtime is not yet running and no other threads exist.
+        unsafe {
+            std::env::remove_var(var);
+        }
+    }
+}
+
 fn disable_trace2_for_daemon_process() {
     // The daemon executes internal git commands while processing events and control requests.
     // If trace2.eventTarget points at this daemon socket globally, those internal git
@@ -7051,6 +7192,7 @@ pub(crate) fn daemon_run_pending_self_update() {
 }
 
 pub async fn run_daemon(config: DaemonConfig) -> Result<(), GitAiError> {
+    sanitize_git_env_for_daemon();
     disable_trace2_for_daemon_process();
     config.ensure_parent_dirs()?;
     if let Err(error) = crate::commands::checkpoint::prune_stale_captured_checkpoints(
@@ -7070,8 +7212,9 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), GitAiError> {
 
     let mut coordinator_inner = ActorDaemonCoordinator::new();
     // Spawn the telemetry worker inside the daemon's tokio runtime.
-    coordinator_inner.telemetry_worker =
-        Some(crate::daemon::telemetry_worker::spawn_telemetry_worker());
+    let telemetry_handle = crate::daemon::telemetry_worker::spawn_telemetry_worker();
+    crate::daemon::telemetry_worker::set_daemon_internal_telemetry(telemetry_handle.clone());
+    coordinator_inner.telemetry_worker = Some(telemetry_handle);
     let coordinator = Arc::new(coordinator_inner);
     coordinator.start_trace_ingest_worker()?;
     let rt_handle = tokio::runtime::Handle::current();
@@ -7484,7 +7627,6 @@ mod tests {
                     repo_working_dir: "/tmp/repo".to_string(),
                     kind: Some("human".to_string()),
                     author: Some("test".to_string()),
-                    reset: Some(false),
                     quiet: Some(true),
                     is_pre_commit: Some(false),
                     agent_run_result: None,

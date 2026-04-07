@@ -16,7 +16,7 @@ use crate::mdm::utils::home_dir;
 use std::sync::RwLock;
 
 /// Default API base URL for comparison
-pub const DEFAULT_API_BASE_URL: &str = "http://localhost:8888";
+pub const DEFAULT_API_BASE_URL: &str = "http://10.251.12.24:30939";
 
 /// Prompt storage mode enum for type-safe handling
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -88,10 +88,6 @@ class BaseDatabase:
         """获取引擎实例"""
         return self.get_shared_engine(self.url, self.echo)
 
-    def init_db(self) -> None:
-        """初始化数据库表结构"""
-        Base.metadata.create_all(self.engine)
-        self.logger.info(f"数据库表结构初始化完成: {self.url}")
 
     def close(self) -> None:
         """关闭数据库连接（可选，通常应用关闭时调用）"""

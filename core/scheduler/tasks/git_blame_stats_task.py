@@ -1,6 +1,7 @@
 """Git Blame 统计定时任务"""
 
 import os
+import time
 from datetime import datetime, timedelta
 from typing import Dict, Optional
 from core.scheduler.tasks.base import BaseTask
@@ -19,7 +20,7 @@ class GitBlameStatsTask(BaseTask):
         self.blame_stats_db = BlameStatsDatabase()
         self.ssh_key_service = SshKeyService()
         self.git_clone_service = GitCloneService()
-        self.blame_stats_service = BlameStatsService(self.database)
+        self.blame_stats_service = BlameStatsService(self.blame_stats_db)
 
 
     def execute(self, context: Optional[Dict] = None) -> Dict:
@@ -31,10 +32,9 @@ class GitBlameStatsTask(BaseTask):
         if stat_date is None:
             # 默认统计昨天
             yesterday = datetime.now() - timedelta(days=1)
-            stat_date = int(yesterday.replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
+            stat_date = yesterday.replace(hour=0, minute=0, second=0, microsecond=0).strftime('%Y%m%d')
 
-        stat_date_dt = datetime.fromtimestamp(stat_date / 1000)
-        self.logger.info(f"统计日期: {stat_date_dt.strftime('%Y-%m-%d')}")
+        self.logger.info(f"统计日期: stat_date")
 
         # 加载配置文件中的默认 SSH Key
         default_ssh_key = self.ssh_key_service.load_default_ssh_key_from_config()
@@ -57,6 +57,7 @@ class GitBlameStatsTask(BaseTask):
         failed_repos = 0
         skipped_repos = 0
 
+        repos_start_time = time.time()
         for repo in repos:
             repo_id = repo['id']
             repo_path = repo['repo_path']
@@ -76,7 +77,11 @@ class GitBlameStatsTask(BaseTask):
 
             try:
                 # 克隆并统计仓库
+                repo_start_time = time.time()
                 result = self._stat_repository(repo_id, repo_path, stat_date, ssh_key_info)
+                repo_end_time = time.time()
+                elapsed_time = repo_end_time - repo_start_time
+                self.logger.info(f'单仓库 AI 代码量统计耗时：{elapsed_time:.4f} 秒，repo：{repo_path}')
 
                 if result:
                     success_repos += 1
@@ -90,6 +95,10 @@ class GitBlameStatsTask(BaseTask):
             except Exception as e:
                 self.logger.error(f"仓库 {repo_name} 统计失败: {e}", exc_info=True)
                 failed_repos += 1
+
+        repos_end_time = time.time()
+        elapsed_time = repos_end_time - repos_start_time
+        self.logger.info(f'所有仓库AI代码量统计耗时：{elapsed_time:.4f} 秒，仓库数量：{len(repos)}')
 
         summary = {
             'success': failed_repos == 0,
@@ -111,7 +120,7 @@ class GitBlameStatsTask(BaseTask):
         self,
         repo_id: str,
         repo_path: str,
-        stat_date: int,
+        stat_date: str,
         ssh_key_info: Dict
     ) -> Dict | None:
         """
@@ -241,7 +250,7 @@ class GitBlameStatsTask(BaseTask):
     def _save_branch_stats(
         self,
         repo_id: str,
-        stat_date: int,
+        stat_date: str,
         result
     ) -> None:
         """
@@ -268,6 +277,7 @@ class GitBlameStatsTask(BaseTask):
         for file_result in result.files_results:
             self.blame_stats_db.save_file_blame_stats(
                 repo_id=repo_id,
+                branch=result.branch,
                 stat_date=stat_date,
                 file_path=file_result.file_path,
                 commit_sha=file_result.commit_sha,
@@ -285,11 +295,12 @@ class GitBlameStatsTask(BaseTask):
             )
             contributor_ids[contrib_key] = contrib_id
 
-            contrib_name = f'Contributor_{contrib_key[:8]}'
+            contrib_name = contrib_key
             contrib_email = ""
 
             self.blame_stats_db.save_repo_contributor_stats(
                 repo_id=repo_id,
+                branch=result.branch,
                 stat_date=stat_date,
                 contributor_id=contrib_id,
                 contributor_name=contrib_name,
@@ -316,9 +327,10 @@ class GitBlameStatsTask(BaseTask):
                     'file_id': file_id,
                     'stat_date': stat_date,
                     'repo_id': repo_id,
+                    'branch': result.branch,
                     'file_path': file_result.file_path,
                     'contributor_id': contrib_id,
-                    'contributor_name': f'Contributor_{contrib_key[:8]}',
+                    'contributor_name': contrib_key,
                     'contributor_email': None,
                     'ai_lines': stats['ai_lines'],
                     'non_ai_lines': stats['non_ai_lines'],

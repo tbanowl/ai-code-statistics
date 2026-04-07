@@ -138,29 +138,29 @@ pub struct CAPromptStoreReadResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct NotesListRequest {
+pub struct AuthorshipNotesListRequest {
     pub repo_url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct NotesListData {
+pub struct AuthorshipNotesListData {
     pub commit_shas: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct NotesListResponse {
+pub struct AuthorshipNotesListResponse {
     pub ok: bool,
-    pub data: NotesListData,
+    pub data: AuthorshipNotesListData,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct NotesBatchRequest {
+pub struct AuthorshipNotesBatchRequest {
     pub repo_url: String,
     pub commit_shas: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct NotesBatchItem {
+pub struct AuthorshipNotesBatchItem {
     pub commit_sha: String,
     pub content: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -168,19 +168,19 @@ pub struct NotesBatchItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct NotesBatchData {
-    pub notes: Vec<NotesBatchItem>,
+pub struct AuthorshipNotesBatchData {
+    pub notes: Vec<AuthorshipNotesBatchItem>,
     pub missing: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct NotesBatchResponse {
+pub struct AuthorshipBatchResponse {
     pub ok: bool,
-    pub data: NotesBatchData,
+    pub data: AuthorshipNotesBatchData,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct NotesPushItem {
+pub struct AuthorshipNotesPushItem {
     pub branch: String,
     pub commit_sha: String,
     pub note_blob_oid: String,
@@ -190,21 +190,21 @@ pub struct NotesPushItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct NotesPushRequest {
+pub struct AuthorshipNotesPushRequest {
     pub repo_url: String,
-    pub notes: Vec<NotesPushItem>,
+    pub notes: Vec<AuthorshipNotesPushItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct NotesPushData {
+pub struct AuthorshipNotesPushData {
     pub created: usize,
     pub updated: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct NotesPushResponse {
+pub struct AuthorshipNotesPushResponse {
     pub ok: bool,
-    pub data: NotesPushData,
+    pub data: AuthorshipNotesPushData,
 }
 
 #[cfg(test)]
@@ -464,7 +464,7 @@ mod tests {
     #[test]
     fn test_notes_list_response_has_commit_shas() {
         let body = r#"{"ok":true,"data":{"commit_shas":["abc123","def456"]}}"#;
-        let parsed: NotesListResponse = serde_json::from_str(body).unwrap();
+        let parsed: AuthorshipNotesListResponse = serde_json::from_str(body).unwrap();
         assert!(parsed.ok);
         assert_eq!(parsed.data.commit_shas[0], "abc123");
         assert_eq!(parsed.data.commit_shas[1], "def456");

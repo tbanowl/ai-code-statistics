@@ -12,7 +12,7 @@ from core.database import MetricsDatabase, StatsDatabase
 @scheduled(cron="*/2 * * * *", job_id="metrics_event_processor", name="Metrics事件处理")
 class MetricsEventProcessorTask(BaseTask):
     """Metrics 事件处理任务 - 从原始数据表提取事件到各事件表"""
-
+    
     @staticmethod
     def _parse_author(author: Optional[str]) -> tuple[str, Optional[str]]:
         raw = (author or "").strip()
@@ -26,6 +26,7 @@ class MetricsEventProcessorTask(BaseTask):
             return name, email
 
         return raw, None
+
 
     @staticmethod
     def _sync_stats_dimensions(stats_db: StatsDatabase, payload_json: str) -> None:
@@ -59,50 +60,19 @@ class MetricsEventProcessorTask(BaseTask):
             stats_db.ensure_repo_contributor_link(repo_id, contributor_id)
             seen_pairs.add(pair_key)
 
+
     def execute(self, context: Optional[Dict] = None) -> Dict:
         self.logger.info("开始执行 Metrics 事件处理任务")
 
         # 获取配置
-        batch_size = (
-            self.config.get("scheduler", {})
-            .get("jobs", {})
-            .get("metrics_event_processor", {})
+        batch_size = self.config.get("scheduler", {})\
+            .get("jobs", {})\
+            .get("metrics_event_processor", {})\
             .get("batch_size", 100)
-        )
 
-        # timeout_minutes = (
-        #     self.config.get("scheduler", {})
-        #     .get("jobs", {})
-        #     .get("metrics_event_processor", {})
-        #     .get("timeout_minutes", 10)
-        # )
-
-        # # 并发安全检查
-
-        # scheduler_db = SchedulerDatabase()
-
-        # running_task = scheduler_db.has_running_task(
-        #     "metrics_event_processor", timeout_minutes
-        # )
-
-        # if running_task:
-        #     self.logger.info(
-        #         f"已有任务在处理中（id={running_task['id']}），跳过本次执行"
-        #     )
-        #     return {"success": True, "skipped": True, "skip_reason": "running_task"}
-
-        # # 检查是否有超时任务需要恢复
-        # pending_or_running_task = scheduler_db.get_running_task_execution("metrics_event_processor")
-        # if pending_or_running_task:
-        #     # 有超时任务，恢复 raw 记录状态
-        #     db_ = MetricsDatabase()
-        #     reset_count = db_.reset_stuck_extracting_records()
-        #     if reset_count > 0:
-        #         self.logger.warning(f"恢复 {reset_count} 条被卡住的原始记录")
-        #     # 标记旧任务为失败
-        #     scheduler_db.update_task_execution_status(pending_or_running_task['id'], "failed")
-
+        # 并发安全检查
         db = MetricsDatabase()
+        service = MetricsService()
         stats_db = StatsDatabase()
 
         # 循环批处理
@@ -116,10 +86,9 @@ class MetricsEventProcessorTask(BaseTask):
             "failed": 0,
             "total_events": 0,
             "error_events": 0,
-            "batches": 0,
+            "batches": 0
         }
 
-        service = MetricsService()
 
         while True:
             # 获取下一批记录
@@ -192,5 +161,5 @@ class MetricsEventProcessorTask(BaseTask):
             "failed": stats["failed"],
             "total_events": stats["total_events"],
             "error_events": stats["error_events"],
-            "batches": stats["batches"],
+            "batches": stats["batches"]
         }

@@ -102,7 +102,7 @@ def get_repository_consolidation_report():
         return jsonify({"success": False, "error": str(exc)}), 500
 
 
-@stats_bp.route("/stats/contributors", methods=["GET"])
+@stats_bp.route("/contributors", methods=["GET"])
 def get_contributors():
     try:
         page, page_size = _get_pagination()
@@ -227,19 +227,20 @@ def get_daily_stats():
         return jsonify({"success": False, "error": str(exc)}), 500
 
 
-@stats_bp.route("/aggregate", methods=["GET"])
+@stats_bp.route("/aggregate", methods=["POST"])
 def get_stats_aggregate_compat():
     try:
-        start_date = request.args.get("start_date", type=int)
-        end_date = request.args.get("end_date", type=int)
+        payload = request.get_json(silent=True) or {}
+        start_date = payload.get("start_date")
+        end_date = payload.get("end_date")
         if start_date is None or end_date is None:
             return jsonify(
                 {"success": False, "error": "start_date and end_date are required"}
             ), 400
 
         db = StatsDatabase()
-        repo_id = request.args.get("repo_id")
-        contributor_id = request.args.get("contributor_id")
+        repo_id = payload.get("repo_id")
+        contributor_id = payload.get("contributor_id")
 
         items = db.get_aggregated_stats(
             start_date=start_date,

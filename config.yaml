@@ -1,7 +1,7 @@
 # 数据库配置
 database:
-  # url: postgresql://gitai:${DB_PASSWORD}@postgres:5432/gitai_stats
-  url: ${DB_URL:sqlite:///./data/ai_stats.db}
+  # MySQL 测试环境
+  url: ${DB_URL:mysql+pymysql://root:admin123@10.251.8.49:8006/git_ai?charset=utf8mb4}
   echo: ${DB_ECHO:false}  # 生产环境关闭 SQL 回显
 
 # 定时任务配置
@@ -23,7 +23,7 @@ scheduler:
   jobs:
     daily_aggregation:
       enabled: true
-      cron: "0 2 * * *"
+      cron: "*/10 * * * *"
     # Metrics 事件处理任务
     metrics_event_processor:
       enabled: true
@@ -33,7 +33,7 @@ scheduler:
     # Git Blame 统计任务
     git_blame_stats:
       enabled: true
-      cron: "0 2 * * *"
+      cron: "0 */1 * * *"
 
 # Git Blame 统计配置
 blame_stats:
@@ -45,9 +45,14 @@ blame_stats:
   # 文件过滤配置
   file_filter:
     enabled: false
-    mode: code_only  # code_only | all | custom
-    extensions:
-      - .py
+    mode: all  # code_only | all | custom
+    excluds:
+      - .jpg
+      - .jpeg
+      - .png
+      - .exe
+    # extensions: # when mode is custom
+    #   - .py
 
 # Web 服务配置
 web:

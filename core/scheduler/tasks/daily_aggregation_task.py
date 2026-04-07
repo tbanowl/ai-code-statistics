@@ -52,6 +52,7 @@ class DailyAggregationTask(BaseTask):
         total_records = 0
         cursor = range_start
         while cursor <= range_end:
+            now_ts = cursor.timestamp()
             day_start_ts = int(cursor.timestamp() * 1000)
             day_end_ts = int(
                 cursor.replace(
@@ -59,6 +60,7 @@ class DailyAggregationTask(BaseTask):
                 ).timestamp()
                 * 1000
             )
+            stat_date = cursor.strftime('%Y%m%d')
 
             self.logger.info(f"聚合时间范围: {day_start_ts} - {day_end_ts}")
 
@@ -68,12 +70,6 @@ class DailyAggregationTask(BaseTask):
                 repo_url=repo_url,
                 author=contributor,
             )
-            # checkpoint_events = stats_db.query_checkpoint_events(
-            #     day_start_ts,
-            #     day_end_ts,
-            #     repo_url=repo_url,
-            #     author=contributor,
-            # )
             checkpoint_events = []
 
             self.logger.info(
@@ -93,7 +89,7 @@ class DailyAggregationTask(BaseTask):
                 )
                 stats_db.ensure_repo_contributor_link(repo_id, contributor_id)
 
-                stats_db.upsert_daily_stat(day_start_ts, repo_id, contributor_id, stats)
+                stats_db.upsert_daily_stat(stat_date, repo_id, contributor_id, stats)
 
             total_records += len(aggregated)
             cursor = cursor + timedelta(days=1)
@@ -126,7 +122,7 @@ class DailyAggregationTask(BaseTask):
 
             stats = aggregated[key]
             stats["ai_generated_lines_total"] += int(event.get("total_ai_additions_total", 0))
-            stats["ai_generated_lines"] = stats["ai_generated_lines_total"]
+            stats["ai_generated_lines"] = int(event.get("ai_additions", 0))
             stats["ai_accepted_lines"] += int(event.get("ai_accepted_lines", 0))
             stats["human_lines"] += int(event.get("human_additions", 0))
             if event.get("git_ai_version"):

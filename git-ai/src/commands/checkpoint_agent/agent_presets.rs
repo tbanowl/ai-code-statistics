@@ -4,6 +4,7 @@ use crate::{
         working_log::{AgentId, CheckpointKind},
     },
     error::GitAiError,
+    git::repository::find_repository_for_file,
     observability::log_error,
 };
 use chrono::{TimeZone, Utc};
@@ -70,7 +71,7 @@ impl AgentCheckpointPreset for ClaudePreset {
                 GitAiError::PresetError("transcript_path not found in hook_input".to_string())
             })?;
 
-        let _cwd = hook_data
+        let cwd = hook_data
             .get("cwd")
             .and_then(|v| v.as_str())
             .ok_or_else(|| GitAiError::PresetError("cwd not found in hook_input".to_string()))?;
@@ -135,7 +136,7 @@ impl AgentCheckpointPreset for ClaudePreset {
                 agent_metadata: None,
                 checkpoint_kind: CheckpointKind::Human,
                 transcript: None,
-                repo_working_dir: None,
+                repo_working_dir: Some(cwd.to_string()),
                 edited_filepaths: None,
                 will_edit_filepaths: file_path_as_vec,
                 dirty_files: None,
@@ -147,8 +148,7 @@ impl AgentCheckpointPreset for ClaudePreset {
             agent_metadata: Some(agent_metadata),
             checkpoint_kind: CheckpointKind::AiAgent,
             transcript: Some(transcript),
-            // use default.
-            repo_working_dir: None,
+            repo_working_dir: Some(cwd.to_string()),
             edited_filepaths: file_path_as_vec,
             will_edit_filepaths: None,
             dirty_files: None,
@@ -416,7 +416,7 @@ impl AgentCheckpointPreset for GeminiPreset {
                 GitAiError::PresetError("transcript_path not found in hook_input".to_string())
             })?;
 
-        let _cwd = hook_data
+        let cwd = hook_data
             .get("cwd")
             .and_then(|v| v.as_str())
             .ok_or_else(|| GitAiError::PresetError("cwd not found in hook_input".to_string()))?;
@@ -469,7 +469,7 @@ impl AgentCheckpointPreset for GeminiPreset {
                 agent_metadata: None,
                 checkpoint_kind: CheckpointKind::Human,
                 transcript: None,
-                repo_working_dir: None,
+                repo_working_dir: Some(cwd.to_string()),
                 edited_filepaths: None,
                 will_edit_filepaths: file_path_as_vec,
                 dirty_files: None,
@@ -481,8 +481,7 @@ impl AgentCheckpointPreset for GeminiPreset {
             agent_metadata: Some(agent_metadata),
             checkpoint_kind: CheckpointKind::AiAgent,
             transcript: Some(transcript),
-            // use default.
-            repo_working_dir: None,
+            repo_working_dir: Some(cwd.to_string()),
             edited_filepaths: file_path_as_vec,
             will_edit_filepaths: None,
             dirty_files: None,
@@ -612,6 +611,12 @@ impl AgentCheckpointPreset for WindsurfPreset {
             .and_then(|v| v.as_str())
             .unwrap_or("unknown");
 
+        // Extract cwd if present (Windsurf may or may not provide it)
+        let cwd = hook_data
+            .get("cwd")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
         // Determine transcript path: either directly from tool_info or derived from trajectory_id
         let transcript_path = hook_data
             .get("tool_info")
@@ -669,7 +674,7 @@ impl AgentCheckpointPreset for WindsurfPreset {
                 agent_metadata: None,
                 checkpoint_kind: CheckpointKind::Human,
                 transcript: None,
-                repo_working_dir: None,
+                repo_working_dir: cwd.clone(),
                 edited_filepaths: None,
                 will_edit_filepaths: file_path_as_vec,
                 dirty_files: None,
@@ -682,7 +687,7 @@ impl AgentCheckpointPreset for WindsurfPreset {
             agent_metadata: Some(agent_metadata),
             checkpoint_kind: CheckpointKind::AiAgent,
             transcript: Some(transcript),
-            repo_working_dir: None,
+            repo_working_dir: cwd,
             edited_filepaths: file_path_as_vec,
             will_edit_filepaths: None,
             dirty_files: None,
@@ -824,7 +829,7 @@ impl AgentCheckpointPreset for ContinueCliPreset {
                 GitAiError::PresetError("transcript_path not found in hook_input".to_string())
             })?;
 
-        let _cwd = hook_data
+        let cwd = hook_data
             .get("cwd")
             .and_then(|v| v.as_str())
             .ok_or_else(|| GitAiError::PresetError("cwd not found in hook_input".to_string()))?;
@@ -886,7 +891,7 @@ impl AgentCheckpointPreset for ContinueCliPreset {
                 agent_metadata: None,
                 checkpoint_kind: CheckpointKind::Human,
                 transcript: None,
-                repo_working_dir: None,
+                repo_working_dir: Some(cwd.to_string()),
                 edited_filepaths: None,
                 will_edit_filepaths: file_path_as_vec,
                 dirty_files: None,
@@ -898,8 +903,7 @@ impl AgentCheckpointPreset for ContinueCliPreset {
             agent_metadata: Some(agent_metadata),
             checkpoint_kind: CheckpointKind::AiAgent,
             transcript: Some(transcript),
-            // use default.
-            repo_working_dir: None,
+            repo_working_dir: Some(cwd.to_string()),
             edited_filepaths: file_path_as_vec,
             will_edit_filepaths: None,
             dirty_files: None,
@@ -1428,28 +1432,10 @@ impl AgentCheckpointPreset for CursorPreset {
             .map(Self::normalize_cursor_path)
             .unwrap_or_default();
 
-        let repo_working_dir = if !file_path.is_empty() {
-            workspace_roots
-                .iter()
-                .find(|root| {
-                    let root_str = root.as_str();
-                    file_path.starts_with(root_str)
-                        && (file_path.len() == root_str.len()
-                            || file_path[root_str.len()..].starts_with('/')
-                            || file_path[root_str.len()..].starts_with('\\')
-                            || root_str.ends_with('/')
-                            || root_str.ends_with('\\'))
-                })
-                .cloned()
-                .or_else(|| workspace_roots.first().cloned())
-                .ok_or_else(|| {
-                    GitAiError::PresetError("No workspace root found in hook_input".to_string())
-                })?
-        } else {
-            workspace_roots.first().cloned().ok_or_else(|| {
+        let repo_working_dir = Self::resolve_repo_working_dir(&file_path, &workspace_roots)
+            .ok_or_else(|| {
                 GitAiError::PresetError("No workspace root found in hook_input".to_string())
-            })?
-        };
+            })?;
 
         if hook_event_name == "preToolUse" {
             let will_edit = if !file_path.is_empty() {
@@ -1553,6 +1539,36 @@ impl AgentCheckpointPreset for CursorPreset {
 }
 
 impl CursorPreset {
+    fn matching_workspace_root(file_path: &str, workspace_roots: &[String]) -> Option<String> {
+        workspace_roots
+            .iter()
+            .find(|root| {
+                let root_str = root.as_str();
+                file_path.starts_with(root_str)
+                    && (file_path.len() == root_str.len()
+                        || file_path[root_str.len()..].starts_with('/')
+                        || file_path[root_str.len()..].starts_with('\\')
+                        || root_str.ends_with('/')
+                        || root_str.ends_with('\\'))
+            })
+            .cloned()
+    }
+
+    fn resolve_repo_working_dir(file_path: &str, workspace_roots: &[String]) -> Option<String> {
+        if file_path.is_empty() {
+            return workspace_roots.first().cloned();
+        }
+
+        let matched_workspace = Self::matching_workspace_root(file_path, workspace_roots)
+            .or_else(|| workspace_roots.first().cloned())?;
+
+        find_repository_for_file(file_path, Some(&matched_workspace))
+            .ok()
+            .and_then(|repo| repo.workdir().ok())
+            .map(|path| path.to_string_lossy().to_string())
+            .or(Some(matched_workspace))
+    }
+
     /// Normalize Windows paths that Cursor sends in Unix-style format.
     ///
     /// On Windows, Cursor sometimes sends paths like `/c:/Users/...` instead of `C:\Users\...`.

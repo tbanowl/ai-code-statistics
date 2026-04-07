@@ -1,12 +1,18 @@
+import os
 
 from flask import Blueprint, request, jsonify
 from core.config.logging import Logger
+from core.middleware.auth import auth_required
 from core.services.notes_service import NotesRestService
 
-notes_rest_bp = Blueprint("notes_rest", __name__, url_prefix="/worker/notes")
+git_notes_rest_bp = Blueprint("notes_rest", __name__, url_prefix="/worker/notes")
+authorship_notes_rest_bp = Blueprint("authorship_notes_rest", __name__, url_prefix="/worker/authorship_notes")
 logger = Logger.get_logger("api.notes")
 
-notes_service = NotesRestService()
+
+def get_notes_service() -> NotesRestService:
+    return NotesRestService(db_url=os.environ.get("DB_URL"))
+
 
 def ok_response(data):
     """成功响应"""
@@ -18,8 +24,9 @@ def error_response(message, status_code=400):
     return jsonify({"ok": False, "error": message}), status_code
 
 
-@notes_rest_bp.route("", methods=["PUT"])
-# @auth_required
+@git_notes_rest_bp.route("", methods=["PUT"])
+@authorship_notes_rest_bp.route("", methods=["PUT"])
+@auth_required
 def create_or_update_note():
     """创建或更新单个注释 (PUT /worker/notes)
 
@@ -58,7 +65,7 @@ def create_or_update_note():
             if field not in payload:
                 return error_response(f"缺少必需字段: {field}", 400)
 
-        note = notes_service.create_or_update_note(
+        note = get_notes_service().create_or_update_note(
             repo_url=payload["repo_url"],
             branch=payload["branch"],
             commit_sha=payload["commit_sha"],
@@ -76,8 +83,9 @@ def create_or_update_note():
         return error_response(f"服务器错误", 500)
 
 
-@notes_rest_bp.route("/get", methods=["POST"])
-# @auth_required
+@git_notes_rest_bp.route("/get", methods=["POST"])
+@authorship_notes_rest_bp.route("/get", methods=["POST"])
+@auth_required
 def get_note():
     """获取单个注释 (POST /worker/notes/get)
 
@@ -116,7 +124,7 @@ def get_note():
         if "repo_url" not in payload or "commit_sha" not in payload:
             return error_response("缺少必需字段: repo_url 和 commit_sha", 400)
 
-        note = notes_service.get_note(
+        note = get_notes_service().get_note(
             repo_url=payload["repo_url"], commit_sha=payload["commit_sha"]
         )
 
@@ -141,8 +149,9 @@ def get_note():
         return error_response(f"服务器错误", 500)
 
 
-@notes_rest_bp.route("/batch", methods=["POST"])
-# @auth_required
+@git_notes_rest_bp.route("/batch", methods=["POST"])
+@authorship_notes_rest_bp.route("/batch", methods=["POST"])
+@auth_required
 def batch_get_notes():
     """批量获取注释 (POST /worker/notes/batch)
 
@@ -178,7 +187,7 @@ def batch_get_notes():
         if "repo_url" not in payload or "commit_shas" not in payload:
             return error_response("缺少必需字段: repo_url 和 commit_shas", 400)
 
-        result = notes_service.batch_get_notes(
+        result = get_notes_service().batch_get_notes(
             repo_url=payload["repo_url"], commit_shas=payload["commit_shas"]
         )
 
@@ -189,8 +198,9 @@ def batch_get_notes():
         return error_response(f"服务器错误", 500)
 
 
-@notes_rest_bp.route("/push", methods=["POST"])
-# @auth_required
+@git_notes_rest_bp.route("/push", methods=["POST"])
+@authorship_notes_rest_bp.route("/push", methods=["POST"])
+@auth_required
 def batch_push_notes():
     """批量推送（创建/更新）注释 (POST /worker/notes/push)
 
@@ -223,7 +233,7 @@ def batch_push_notes():
         if "repo_url" not in payload or "notes" not in payload:
             return error_response("缺少必需字段: repo_url 和 notes", 400)
 
-        result = notes_service.batch_push_notes(
+        result = get_notes_service().batch_push_notes(
             repo_url=payload["repo_url"], notes_data=payload["notes"]
         )
 
@@ -234,8 +244,9 @@ def batch_push_notes():
         return error_response(f"服务器错误", 500)
 
 
-@notes_rest_bp.route("/list", methods=["POST"])
-# @auth_required
+@git_notes_rest_bp.route("/list", methods=["POST"])
+@authorship_notes_rest_bp.route("/list", methods=["POST"])
+@auth_required
 def list_notes():
     """列出仓库中所有有注释的提交 SHA (POST /worker/notes/list)
 
@@ -260,7 +271,7 @@ def list_notes():
         if "repo_url" not in payload:
             return error_response("缺少必需字段: repo_url", 400)
 
-        commit_shas = notes_service.list_notes(repo_url=payload["repo_url"])
+        commit_shas = get_notes_service().list_notes(repo_url=payload["repo_url"])
 
         return ok_response({"commit_shas": commit_shas})
 
@@ -269,8 +280,9 @@ def list_notes():
         return error_response(f"服务器错误", 500)
 
 
-@notes_rest_bp.route("/search", methods=["POST"])
-# @auth_required
+@git_notes_rest_bp.route("/search", methods=["POST"])
+@authorship_notes_rest_bp.route("/search", methods=["POST"])
+@auth_required
 def search_notes():
     """在注释内容中搜索 (POST /worker/notes/search)
 
@@ -296,7 +308,7 @@ def search_notes():
         if "repo_url" not in payload or "pattern" not in payload:
             return error_response("缺少必需字段: repo_url 和 pattern", 400)
 
-        commit_shas = notes_service.search_notes(
+        commit_shas = get_notes_service().search_notes(
             repo_url=payload["repo_url"], pattern=payload["pattern"]
         )
 

@@ -29,15 +29,15 @@ jobs:
       matrix:
         include:
           - os: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-musl
             artifact_name: git-ai-linux-x64
             use_docker: true
-            docker_image: ubuntu:20.04
+            docker_image: ubuntu:22.04
           - os: ubuntu-22.04-arm
-            target: aarch64-unknown-linux-gnu
+            target: aarch64-unknown-linux-musl
             artifact_name: git-ai-linux-arm64
             use_docker: true
-            docker_image: ubuntu:20.04
+            docker_image: ubuntu:22.04
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: git-ai-windows-x64
@@ -75,7 +75,7 @@ jobs:
             ${{ matrix.docker_image }} \
             bash -c "
               apt-get update && \
-              apt-get install -y curl build-essential pkg-config libssl-dev && \
+              apt-get install -y curl build-essential pkg-config musl-tools && \
               curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --target ${{ matrix.target }} && \
               . \$HOME/.cargo/env && \
               cargo build --release --target ${{ matrix.target }} && \
@@ -125,9 +125,14 @@ jobs:
         if: contains(matrix.os, 'ubuntu')
         run: |
           file target/${{ matrix.target }}/release/git-ai
-          ldd target/${{ matrix.target }}/release/git-ai || true
-          echo "Required GLIBC version:"
-          objdump -T target/${{ matrix.target }}/release/git-ai | grep GLIBC | sed 's/.*GLIBC_/GLIBC_/' | sort -V | uniq | tail -1
+          # Verify the binary is statically linked (musl)
+          if ldd target/${{ matrix.target }}/release/git-ai 2>&1 | grep -q 'not a dynamic executable\|statically linked'; then
+            echo "Binary is statically linked (musl) - no GLIBC dependency"
+          else
+            echo "::error::Binary is dynamically linked - expected static musl binary"
+            ldd target/${{ matrix.target }}/release/git-ai || true
+            exit 1
+          fi
 
       - name: Verify binary architecture (Windows)
         if: contains(matrix.os, 'windows')
@@ -161,7 +166,7 @@ jobs:
 
       - name: Upload artifact (Windows)
         if: contains(matrix.os, 'windows')
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: ${{ matrix.artifact_name }}
           path: release/${{ matrix.artifact_name }}.exe
@@ -169,7 +174,7 @@ jobs:
 
       - name: Upload artifact (non-Windows)
         if: ${{ !contains(matrix.os, 'windows') }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: ${{ matrix.artifact_name }}
           path: release/${{ matrix.artifact_name }}
@@ -235,7 +240,7 @@ jobs:
           cp target/x86_64-apple-darwin/release/git-ai release/git-ai-macos-x64
 
       - name: Upload artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: git-ai-macos-x64
           path: release/git-ai-macos-x64
@@ -349,7 +354,7 @@ jobs:
           sha256sum install.sh install.ps1 >> SHA256SUMS
 
       - name: Generate attestations for release artifacts
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
           subject-path: |
             release/git-ai-*

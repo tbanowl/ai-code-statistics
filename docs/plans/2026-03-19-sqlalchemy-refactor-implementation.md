@@ -1,6 +1,6 @@
 # SQLAlchemy 数据库重构 - 实现计划
 
-**设计文档**: [2026-03-19-sqlalchemy-refactor-design.md](./2026-03-19-sqlalchemy-refactor-design.md)
+**设计文档**: [2026-03-19-sqlalchemy-refactor-design.md](2026-03-19-sqlalchemy-refactor-design.md)
 **日期**: 2026-03-19
 **版本**: 1.0
 

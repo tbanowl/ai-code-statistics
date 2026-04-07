@@ -58,8 +58,9 @@ impl GitTestMode {
 
     pub fn from_mode_name(mode: &str) -> Self {
         match mode.to_lowercase().as_str() {
-            "hooks" => Self::Hooks,
-            "both" | "wrapper+hooks" | "hooks+wrapper" => Self::Both,
+            // Git core hooks have been sunset — "hooks" and "both" now
+            // fall through to Wrapper mode.
+            "hooks" | "both" | "wrapper+hooks" | "hooks+wrapper" => Self::Wrapper,
             "daemon" | "trace-daemon" | "pure-daemon" => Self::Daemon,
             "wrapper-daemon" => Self::WrapperDaemon,
             _ => Self::Wrapper,
@@ -71,7 +72,8 @@ impl GitTestMode {
     }
 
     pub fn uses_hooks(self) -> bool {
-        matches!(self, Self::Hooks | Self::Both)
+        // Git core hooks have been sunset.
+        false
     }
 
     pub fn uses_daemon(self) -> bool {
@@ -367,6 +369,10 @@ impl DaemonProcess {
 fn configure_test_home_env(command: &mut Command, test_home: &Path) {
     command.env("HOME", test_home);
     command.env("GIT_CONFIG_GLOBAL", test_home.join(".gitconfig"));
+    // Redirect XDG_CONFIG_HOME so git does not read the real user's
+    // $XDG_CONFIG_HOME/git/config (which may contain filter drivers,
+    // aliases, or other settings that break test isolation).
+    command.env("XDG_CONFIG_HOME", test_home.join(".config"));
     #[cfg(windows)]
     {
         command.env("USERPROFILE", test_home);
@@ -664,10 +670,6 @@ fn normalize_test_git_ai_checkpoint_args(args: &[&str]) -> Vec<String> {
     let mut i = 1usize;
     while i < args.len() {
         match args[i] {
-            "--reset" => {
-                normalized.push(args[i].to_string());
-                i += 1;
-            }
             "--hook-input" => {
                 normalized.push(args[i].to_string());
                 if let Some(value) = args.get(i + 1) {
@@ -1708,9 +1710,6 @@ impl TestRepo {
                 }
                 "--hook-input" => {
                     i += 2;
-                }
-                "--reset" => {
-                    i += 1;
                 }
                 _ if arg.starts_with("--hook-input=") || arg.starts_with('-') => {
                     i += 1;
@@ -2903,10 +2902,6 @@ mod tests {
         assert_eq!(
             normalize_test_git_ai_checkpoint_args(&["checkpoint", "src/lib.rs"]),
             vec!["checkpoint", "--", "src/lib.rs"]
-        );
-        assert_eq!(
-            normalize_test_git_ai_checkpoint_args(&["checkpoint", "--reset", "src/lib.rs"]),
-            vec!["checkpoint", "--reset", "--", "src/lib.rs"]
         );
     }
 

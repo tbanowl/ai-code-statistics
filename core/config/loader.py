@@ -4,7 +4,6 @@ from typing import Dict, Any, Optional
 
 config_data: Dict[str, Any] = {}
 
-
 def load_config() -> Dict[str, Any]:
     return load_config_by_path(None)
 

@@ -1,6 +1,7 @@
 # 数据文件
 data/*.db
 data/*.sqlite
+*.db
 
 # 日志文件
 .logs/

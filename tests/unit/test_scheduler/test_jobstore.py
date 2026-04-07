@@ -1,9 +1,11 @@
 """APScheduler JobStore 持久化功能单元测试"""
-
 import pytest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+from core.scheduler.scheduled import scheduled
 from core.scheduler.scheduler import AICodeScheduler
+from core.scheduler.tasks.base import BaseTask
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+from typing import Dict, Optional
 
 
 @pytest.fixture
@@ -13,15 +15,24 @@ def mock_config_with_jobstore():
         "scheduler": {
             "enabled": True,
             "timezone": "Asia/Shanghai",
-            "jobstore": {"type": "sqlalchemy"},
+            "jobstore": {
+                "type": "sqlalchemy"
+            },
             "job_defaults": {
                 "coalesce": True,
                 "max_instances": 1,
-                "misfire_grace_time": 300,
+                "misfire_grace_time": 300
             },
-            "jobs": {"test_task": {"cron": "0 2 * * *", "enabled": True}},
+            "jobs": {
+                "test_task": {
+                    "cron": "0 2 * * *",
+                    "enabled": True
+                }
+            }
         },
-        "database": {"url": "sqlite:///:memory:"},
+        "database": {
+            "url": "sqlite:///:memory:"
+        }
     }
 
 
@@ -32,9 +43,16 @@ def mock_config_without_jobstore():
         "scheduler": {
             "enabled": True,
             "timezone": "Asia/Shanghai",
-            "jobs": {"test_task": {"cron": "0 2 * * *", "enabled": True}},
+            "jobs": {
+                "test_task": {
+                    "cron": "0 2 * * *",
+                    "enabled": True
+                }
+            }
         },
-        "database": {"url": "sqlite:///:memory:"},
+        "database": {
+            "url": "sqlite:///:memory:"
+        }
     }
 
 
@@ -45,16 +63,16 @@ def test_jobstore_initialization_with_sqlalchemy(mock_config_with_jobstore):
 
         # 验证 JobStore 已配置
         assert scheduler.scheduler._jobstores is not None
-        assert "default" in scheduler.scheduler._jobstores
+        assert 'default' in scheduler.scheduler._jobstores
 
         # 验证是 SQLAlchemyJobStore
-        jobstore = scheduler.scheduler._jobstores["default"]
+        jobstore = scheduler.scheduler._jobstores['default']
         assert isinstance(jobstore, SQLAlchemyJobStore)
 
         # 验证 job_defaults 配置生效
-        assert scheduler.scheduler._job_defaults["coalesce"] is True
-        assert scheduler.scheduler._job_defaults["max_instances"] == 1
-        assert scheduler.scheduler._job_defaults["misfire_grace_time"] == 300
+        assert scheduler.scheduler._job_defaults['coalesce'] is True
+        assert scheduler.scheduler._job_defaults['max_instances'] == 1
+        assert scheduler.scheduler._job_defaults['misfire_grace_time'] == 300
 
 
 def test_jobstore_not_configured_uses_memory(mock_config_without_jobstore):
@@ -75,9 +93,9 @@ def test_jobstore_with_unsupported_type():
             "jobstore": {
                 "type": "redis"  # 不支持
             },
-            "jobs": {},
+            "jobs": {}
         },
-        "database": {},
+        "database": {}
     }
 
     with patch("core.config.logging.Logger.get_logger"):
@@ -90,8 +108,12 @@ def test_jobstore_with_unsupported_type():
 def test_get_engine_from_db_uses_scheduler_db():
     """测试 _get_engine_from_db 方法使用 SchedulerDatabase 的 engine"""
     config = {
-        "scheduler": {"enabled": True, "jobstore": {"type": "sqlalchemy"}, "jobs": {}},
-        "database": {"url": "sqlite:///:memory:"},
+        "scheduler": {
+            "enabled": True,
+            "jobstore": {"type": "sqlalchemy"},
+            "jobs": {}
+        },
+        "database": {"url": "sqlite:///:memory:"}
     }
 
     with patch("core.config.logging.Logger.get_logger"):
@@ -104,7 +126,6 @@ def test_get_engine_from_db_uses_scheduler_db():
         assert engine is not None
         # 验证 engine 是 SQLAlchemy Engine 实例
         from sqlalchemy import Engine
-
         assert isinstance(engine, Engine)
         # 验证 URL 正确
         assert str(engine.url).startswith("sqlite")
@@ -113,17 +134,21 @@ def test_get_engine_from_db_uses_scheduler_db():
 def test_job_defaults_default_values():
     """测试未配置 job_defaults 时使用默认值"""
     config = {
-        "scheduler": {"enabled": True, "jobstore": {"type": "sqlalchemy"}, "jobs": {}},
-        "database": {},
+        "scheduler": {
+            "enabled": True,
+            "jobstore": {"type": "sqlalchemy"},
+            "jobs": {}
+        },
+        "database": {}
     }
 
     with patch("core.config.logging.Logger.get_logger"):
         scheduler = AICodeScheduler(config)
 
         # 验证默认值
-        assert scheduler.scheduler._job_defaults["coalesce"] is True
-        assert scheduler.scheduler._job_defaults["max_instances"] == 1
-        assert scheduler.scheduler._job_defaults["misfire_grace_time"] == 300
+        assert scheduler.scheduler._job_defaults['coalesce'] is True
+        assert scheduler.scheduler._job_defaults['max_instances'] == 1
+        assert scheduler.scheduler._job_defaults['misfire_grace_time'] == 300
 
 
 def test_timezone_configuration():
@@ -133,9 +158,9 @@ def test_timezone_configuration():
             "enabled": True,
             "timezone": "America/New_York",
             "jobstore": {"type": "sqlalchemy"},
-            "jobs": {},
+            "jobs": {}
         },
-        "database": {},
+        "database": {}
     }
 
     with patch("core.config.logging.Logger.get_logger"):
@@ -148,17 +173,17 @@ def test_timezone_configuration():
 def test_jobstore_initialization_failure_fallback():
     """测试 JobStore 初始化失败时降级到内存模式"""
     config = {
-        "scheduler": {"enabled": True, "jobstore": {"type": "sqlalchemy"}, "jobs": {}},
-        "database": {},
+        "scheduler": {
+            "enabled": True,
+            "jobstore": {"type": "sqlalchemy"},
+            "jobs": {}
+        },
+        "database": {}
     }
 
     # Mock _get_engine_from_db 抛出异常
     with patch("core.config.logging.Logger.get_logger"):
-        with patch.object(
-            AICodeScheduler,
-            "_get_engine_from_db",
-            side_effect=Exception("Database error"),
-        ):
+        with patch.object(AICodeScheduler, '_get_engine_from_db', side_effect=Exception("Database error")):
             scheduler = AICodeScheduler(config)
 
             # 验证降级到内存模式（空字典）
