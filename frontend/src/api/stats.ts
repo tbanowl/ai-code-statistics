@@ -83,6 +83,27 @@ export type DailyStatItem = {
   updated_at: number;
 };
 
+export type CommittedReportItem = {
+  id: string;
+  repo_url: string;
+  author: string;
+  branch: string;
+  timestamp: number;
+  human_additions: number;
+  git_diff_deleted_lines: number;
+  git_diff_added_lines: number;
+  first_checkpoint_ts: number | null;
+  commit_subject: string;
+  commit_body: string;
+  tool_model_pairs: string;
+  mixed_additions: number;
+  ai_additions: number;
+  ai_accepted: number;
+  total_ai_additions: number;
+  total_ai_deletions: number;
+  base_commit_sha: string;
+};
+
 export type TriggerAggregateData = {
   execution_id: string;
   status: string;
@@ -151,6 +172,26 @@ export const getDailyStats = (params?: {
   return http.request<ApiResponse<DailyStatItem[]>>("get", "/api/stats/daily", {
     params
   });
+};
+
+export const getCommittedReport = (params?: {
+  page?: number;
+  page_size?: number;
+  start_date?: number;
+  end_date?: number;
+  repo_url?: string;
+  author?: string;
+  branch?: string;
+  repo_id?: string;
+  contributor_id?: string;
+}) => {
+  return http.request<ApiResponse<CommittedReportItem[]>>(
+    "get",
+    "/api/stats/commits",
+    {
+      params
+    }
+  );
 };
 
 export const triggerStatsAggregate = (payload?: {

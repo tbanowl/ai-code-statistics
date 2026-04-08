@@ -227,6 +227,58 @@ def get_daily_stats():
         return jsonify({"success": False, "error": str(exc)}), 500
 
 
+@stats_bp.route("/commits", methods=["GET"])
+def get_committed_report():
+    try:
+        page, page_size = _get_pagination()
+        db = StatsDatabase()
+
+        repo_url = request.args.get("repo_url")
+        author = request.args.get("author")
+        branch = request.args.get("branch")
+        start_date = request.args.get("start_date", type=int)
+        end_date = request.args.get("end_date", type=int)
+
+        repo_id = request.args.get("repo_id")
+        contributor_id = request.args.get("contributor_id")
+
+        if repo_id and not repo_url:
+            repo = db.get_repository_by_id(repo_id)
+            if repo:
+                repo_url = repo.get("repo_path")
+
+        if contributor_id and not author:
+            contributor = db.get_contributor_by_id(contributor_id)
+            if contributor:
+                author = contributor.get("contributor_uid")
+
+        result = db.get_committed_events_paginated(
+            page=page,
+            page_size=page_size,
+            start_ts=start_date,
+            end_ts=end_date,
+            repo_url=repo_url,
+            author=author,
+            branch=branch,
+        )
+
+        return jsonify(
+            {
+                "success": True,
+                "data": result["items"],
+                "pagination": {
+                    "total": result["total"],
+                    "page": result["page"],
+                    "page_size": result["page_size"],
+                },
+            }
+        )
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
 @stats_bp.route("/aggregate", methods=["POST"])
 def get_stats_aggregate_compat():
     try:

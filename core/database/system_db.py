@@ -374,7 +374,7 @@ class SystemDatabase(BaseDatabase):
                 keep_alive=data.get("keepAlive", 0),
             )
             menu.show_link = 1 if data.get("showLink", True) else 0
-            menu.keep_alive = 1 if data.get("keepAlive", False) else 0：
+            menu.keep_alive = 1 if data.get("keepAlive", False) else 0
             session.add(menu)
             return menu
 

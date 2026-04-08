@@ -88,6 +88,73 @@ def test_query_committed_and_checkpoint_events(setup_dbs):
     assert checkpoints[0]["lines_added_sloc"] == 3
 
 
+def test_get_committed_events_paginated_formats_report_fields(setup_dbs):
+    metrics_db, stats_db = setup_dbs
+
+    raw_id = metrics_db.save_metrics_raw(
+        batch_id="b-report",
+        version=1,
+        event_count=1,
+        payload_json="{}",
+        received_at=1710000000000,
+    )
+    metrics_db.save_committed_event(
+        {
+            "raw_id": raw_id,
+            "timestamp": 1710000000001,
+            "repo_url": "https://github.com/acme/repo.git",
+            "author": "alice <alice@example.com>",
+            "branch": "main",
+            "human_additions": 6,
+            "git_diff_added_lines": 10,
+            "git_diff_deleted_lines": 2,
+            "first_checkpoint_ts": 1710000000002,
+            "commit_subject": "feat: add report",
+            "commit_body": "report body",
+            "tool_model_pairs": ["baseline", "cursor", "copilot"],
+            "mixed_additions": [5, 1],
+            "ai_additions": [4, 2],
+            "ai_accepted": [3, 1],
+            "total_ai_additions": [9, 2],
+            "total_ai_deletions": [7, 3],
+            "base_commit_sha": "abc123",
+        }
+    )
+
+    result = stats_db.get_committed_events_paginated(
+        page=1,
+        page_size=10,
+        start_ts=1710000000000,
+        end_ts=1710000000010,
+        repo_url="github.com/acme",
+        author="alice",
+        branch="mai",
+    )
+
+    assert result["total"] == 1
+    assert len(result["items"]) == 1
+    assert result["items"][0] == {
+        "id": result["items"][0]["id"],
+        "repo_url": "https://github.com/acme/repo.git",
+        "author": "alice",
+        "branch": "main",
+        "timestamp": 1710000000001,
+        "human_additions": 6,
+        "git_diff_deleted_lines": 2,
+        "git_diff_added_lines": 10,
+        "first_checkpoint_ts": 1710000000002,
+        "commit_subject": "feat: add report",
+        "commit_body": "report body",
+        "tool_model_pairs": "cursor, copilot",
+        "mixed_additions": 5,
+        "ai_additions": 4,
+        "ai_accepted": 3,
+        "total_ai_additions": 9,
+        "total_ai_deletions": 7,
+        "base_commit_sha": "abc123",
+    }
+
+
 def test_repository_contributor_and_daily_stats_flow(setup_dbs):
     _, stats_db = setup_dbs
 

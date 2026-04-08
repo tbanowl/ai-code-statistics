@@ -17,6 +17,54 @@ from .models import (
 
 
 class StatsDatabase(BaseDatabase):
+    @staticmethod
+    def _parse_json_field(value: object) -> object:
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except Exception:
+                return value
+        return value
+
+    @staticmethod
+    def _first_metric_value(value: object) -> int:
+        value = StatsDatabase._parse_json_field(value)
+        if value is None:
+            return 0
+        if isinstance(value, (int, float)):
+            return int(value)
+        if isinstance(value, list):
+            if not value:
+                return 0
+            return StatsDatabase._first_metric_value(value[0])
+        if isinstance(value, dict):
+            if not value:
+                return 0
+            return StatsDatabase._first_metric_value(next(iter(value.values())))
+        if isinstance(value, str):
+            return int(value) if value.isdigit() else 0
+        return 0
+
+    @staticmethod
+    def _format_tool_model_pairs(value: object) -> str:
+        value = StatsDatabase._parse_json_field(value)
+        if not isinstance(value, list) or len(value) <= 1:
+            return "-"
+
+        def stringify(item: object) -> str:
+            if isinstance(item, str):
+                return item
+            if isinstance(item, dict):
+                for key in ("tool", "name"):
+                    current = item.get(key)
+                    if isinstance(current, str) and current.strip():
+                        return current.strip()
+                return json.dumps(item, ensure_ascii=False)
+            return str(item)
+
+        display_items = [stringify(item).strip() for item in value[1:]]
+        display_items = [item for item in display_items if item]
+        return ", ".join(display_items) if display_items else "-"
 
     @staticmethod
     def _metric_total(value: object) -> int:
@@ -291,17 +339,109 @@ class StatsDatabase(BaseDatabase):
                         "author": author_name,
                         "author_uid": (row.author or "").strip() or author_name,
                         "author_email": author_email,
-                        "tool_model_pairs_total": self._metric_total(row.tool_model_pairs),
-                        "mixed_additions_total": self._metric_total(row.mixed_additions),
+                        "tool_model_pairs_total": self._metric_total(
+                            row.tool_model_pairs
+                        ),
+                        "mixed_additions_total": self._metric_total(
+                            row.mixed_additions
+                        ),
                         "human_additions": int(row.human_additions or 0),
                         "ai_additions": self._metric_total(row.ai_additions),
                         "ai_accepted_lines": self._metric_total(row.ai_accepted),
-                        "total_ai_additions_total": self._metric_total(row.total_ai_additions),
-                        "total_ai_deletions_total": self._metric_total(row.total_ai_deletions),
+                        "total_ai_additions_total": self._metric_total(
+                            row.total_ai_additions
+                        ),
+                        "total_ai_deletions_total": self._metric_total(
+                            row.total_ai_deletions
+                        ),
                         "git_ai_version": row.git_ai_version,
                     }
                 )
             return items
+
+    def get_committed_events_paginated(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+        start_ts: Optional[int] = None,
+        end_ts: Optional[int] = None,
+        repo_url: Optional[str] = None,
+        author: Optional[str] = None,
+        branch: Optional[str] = None,
+    ) -> Dict:
+        with session_scope(self.engine) as session:
+            query = session.query(MetricsEventsCommitted)
+
+            if start_ts is not None:
+                query = query.filter(MetricsEventsCommitted.timestamp >= start_ts)
+            if end_ts is not None:
+                query = query.filter(MetricsEventsCommitted.timestamp <= end_ts)
+            if repo_url:
+                query = query.filter(
+                    MetricsEventsCommitted.repo_url.contains(repo_url.strip())
+                )
+            if author:
+                author_key = author.strip()
+                query = query.filter(
+                    or_(
+                        MetricsEventsCommitted.author.contains(author_key),
+                        MetricsEventsCommitted.author == author_key,
+                        MetricsEventsCommitted.author.like(f"{author_key} <%"),
+                    )
+                )
+            if branch:
+                query = query.filter(
+                    MetricsEventsCommitted.branch.contains(branch.strip())
+                )
+
+            total = query.count()
+            rows = (
+                query.order_by(MetricsEventsCommitted.timestamp.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+                .all()
+            )
+
+            items: List[Dict] = []
+            for row in rows:
+                author_name, _author_email = self._parse_author(row.author)
+                items.append(
+                    {
+                        "id": row.id,
+                        "repo_url": row.repo_url or "",
+                        "author": author_name,
+                        "branch": row.branch or "",
+                        "timestamp": row.timestamp,
+                        "human_additions": int(row.human_additions or 0),
+                        "git_diff_deleted_lines": int(row.git_diff_deleted_lines or 0),
+                        "git_diff_added_lines": int(row.git_diff_added_lines or 0),
+                        "first_checkpoint_ts": row.first_checkpoint_ts,
+                        "commit_subject": row.commit_subject or "",
+                        "commit_body": row.commit_body or "",
+                        "tool_model_pairs": self._format_tool_model_pairs(
+                            row.tool_model_pairs
+                        ),
+                        "mixed_additions": self._first_metric_value(
+                            row.mixed_additions
+                        ),
+                        "ai_additions": self._first_metric_value(row.ai_additions),
+                        "ai_accepted": self._first_metric_value(row.ai_accepted),
+                        "total_ai_additions": self._first_metric_value(
+                            row.total_ai_additions
+                        ),
+                        "total_ai_deletions": self._first_metric_value(
+                            row.total_ai_deletions
+                        ),
+                        "base_commit_sha": row.base_commit_sha or "",
+                    }
+                )
+
+            return {
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+                "items": items,
+            }
 
     def query_checkpoint_events(
         self,
