@@ -1,0 +1,24 @@
+requirements.txt
+  2b01e88d7886154a 6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.6-2",
+  "base_commit_sha": "4753e5c8886285bd706e6cf7e3c869622a307a8e",
+  "prompts": {
+    "2b01e88d7886154a": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_27f638b01ffe6qmAbH5kWR45tV",
+        "model": "zai-coding-plan/glm-5.1"
+      },
+      "human_author": "ZhangLei <tbanowl@gmail.com>",
+      "messages": [],
+      "total_additions": 28,
+      "total_deletions": 115,
+      "accepted_lines": 4,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8888/cas/e553884663feb53945d9a6397ca6922963c22234b5525602f11c8b958742845e"
+    }
+  }
+}
