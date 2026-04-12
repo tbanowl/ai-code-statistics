@@ -151,8 +151,8 @@ class BlameStatsService:
             contributor_stats = {}
             notes_cache = {}
             for idx, file_path in enumerate(files, 1):
-                if idx % 100 == 0:
-                    self.logger.info(f"处理进度: {idx}/{len(files)}")
+                if idx % 10 == 0:
+                    self.logger.info(f"[仓库AI代码量任务] 处理进度: {idx}/{len(files)}, 仓库URL: {repo_url}")
 
                 result = self.analyze_file_blame(
                     repo_url, file_path, repo_dir, commit_sha, notes_cache

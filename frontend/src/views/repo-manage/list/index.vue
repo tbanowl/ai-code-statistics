@@ -1,12 +1,15 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, watch } from "vue";
 import { PureTableBar } from "@/components/RePureTableBar";
 import { useRenderIcon } from "@/components/ReIcon/src/hooks";
 import { message } from "@/utils/message";
 import {
   getRepoList,
   updateRepoStatsFlag,
-  getRepoBranchConfigs,
+  getAllRepoBranchConfigs,
+  createRepoBranchConfig,
+  updateRepoBranchConfig,
+  deleteRepoBranchConfig,
   getRepoContributors,
   getSshKeys,
   updateRepoSshKey,
@@ -18,6 +21,9 @@ import {
 
 import Refresh from "~icons/ep/refresh";
 import Search from "~icons/ep/search";
+import AddFill from "~icons/ri/add-circle-line";
+import Delete from "~icons/ep/delete";
+import EditIcon from "~icons/ep/edit";
 
 defineOptions({
   name: "RepoManageList"
@@ -38,6 +44,28 @@ const branchDrawerVisible = ref(false);
 const branchLoading = ref(false);
 const branchConfigs = ref<BranchConfig[]>([]);
 const currentRepoName = ref("");
+const currentRepoId4Branch = ref("");
+
+const branchDialogVisible = ref(false);
+const branchDialogLoading = ref(false);
+const branchDialogMode = ref<"add" | "edit">("add");
+const branchDialogForm = ref({
+  branch_pattern: "",
+  pattern_type: "exact",
+  enabled: 1
+});
+const branchDialogEditId = ref("");
+
+watch(
+  () => branchDialogForm.value.pattern_type,
+  (type) => {
+    if (type === "special") {
+      branchDialogForm.value.branch_pattern = "all";
+    } else if (branchDialogForm.value.branch_pattern === "all") {
+      branchDialogForm.value.branch_pattern = "";
+    }
+  }
+);
 
 const contributorDrawerVisible = ref(false);
 const contributorLoading = ref(false);
@@ -47,6 +75,12 @@ const sshDialogVisible = ref(false);
 const sshDialogLoading = ref(false);
 const selectedSshKeyId = ref<string | null>(null);
 const currentRepoId = ref<string>("");
+
+const branchPatternTypeMap = {
+  exact: "精确匹配",
+  wildcard: "通配符",
+  special: "特殊规则"
+};
 
 const columns = [
   {
@@ -133,16 +167,93 @@ const handleStatsFlagChange = async (row: RepoItem, value: number) => {
 
 const openBranchDrawer = async (row: RepoItem) => {
   currentRepoName.value = row.repo_name || row.repo_path;
+  currentRepoId4Branch.value = row.id;
   branchDrawerVisible.value = true;
   branchLoading.value = true;
   try {
-    const { data } = await getRepoBranchConfigs(row.id);
+    const { data } = await getAllRepoBranchConfigs(row.id);
     branchConfigs.value = data?.configs || [];
   } catch {
     message("获取分支配置失败", { type: "error" });
     branchConfigs.value = [];
   } finally {
     branchLoading.value = false;
+  }
+};
+
+const refreshBranchConfigs = async () => {
+  branchLoading.value = true;
+  try {
+    const { data } = await getAllRepoBranchConfigs(currentRepoId4Branch.value);
+    branchConfigs.value = data?.configs || [];
+  } catch {
+    message("获取分支配置失败", { type: "error" });
+  } finally {
+    branchLoading.value = false;
+  }
+};
+
+const openBranchAdd = () => {
+  branchDialogMode.value = "add";
+  branchDialogForm.value = {
+    branch_pattern: "",
+    pattern_type: "exact",
+    enabled: 1
+  };
+  branchDialogEditId.value = "";
+  branchDialogVisible.value = true;
+};
+
+const openBranchEdit = (row: BranchConfig) => {
+  branchDialogMode.value = "edit";
+  branchDialogForm.value = {
+    branch_pattern: row.branch_pattern,
+    pattern_type: row.pattern_type,
+    enabled: row.enabled
+  };
+  branchDialogEditId.value = row.id;
+  branchDialogVisible.value = true;
+};
+
+const handleBranchDialogConfirm = async () => {
+  if (!branchDialogForm.value.branch_pattern.trim()) {
+    message("分支模式不能为空", { type: "warning" });
+    return;
+  }
+  branchDialogLoading.value = true;
+  try {
+    if (branchDialogMode.value === "add") {
+      await createRepoBranchConfig(
+        currentRepoId4Branch.value,
+        branchDialogForm.value
+      );
+      message("添加成功", { type: "success" });
+    } else {
+      await updateRepoBranchConfig(
+        currentRepoId4Branch.value,
+        branchDialogEditId.value,
+        branchDialogForm.value
+      );
+      message("更新成功", { type: "success" });
+    }
+    branchDialogVisible.value = false;
+    refreshBranchConfigs();
+  } catch {
+    message(branchDialogMode.value === "add" ? "添加失败" : "更新失败", {
+      type: "error"
+    });
+  } finally {
+    branchDialogLoading.value = false;
+  }
+};
+
+const handleBranchDelete = async (row: BranchConfig) => {
+  try {
+    await deleteRepoBranchConfig(currentRepoId4Branch.value, row.id);
+    message("删除成功", { type: "success" });
+    refreshBranchConfigs();
+  } catch {
+    message("删除失败", { type: "error" });
   }
 };
 
@@ -307,23 +418,113 @@ onMounted(() => {
       v-model="branchDrawerVisible"
       title="分支配置"
       direction="rtl"
-      size="500px"
+      size="600px"
     >
-      <div class="mb-4 text-sm text-gray-500">
-        仓库: {{ currentRepoName }}
+      <div class="flex items-center mb-3">
+        <span class="text-sm text-gray-500">仓库: {{ currentRepoName }}</span>
+        <div class="flex-1" />
+        <el-button
+          type="primary"
+          :icon="useRenderIcon(AddFill)"
+          size="small"
+          @click="openBranchAdd"
+        >
+          新增
+        </el-button>
       </div>
-      <el-table :data="branchConfigs" :loading="branchLoading" border>
-        <el-table-column prop="branch_pattern" label="分支模式" min-width="150" />
-        <el-table-column prop="pattern_type" label="类型" min-width="100" />
-        <el-table-column prop="enabled" label="启用" min-width="80">
+      <el-table v-loading="branchLoading" :data="branchConfigs" border>
+        <el-table-column
+          prop="branch_pattern"
+          label="分支模式"
+          min-width="110"
+        />
+        <el-table-column prop="pattern_type" label="类型" width="90">
           <template #default="{ row }">
-            <el-tag :type="row.enabled === 1 ? 'success' : 'info'">
-              {{ row.enabled === 1 ? '是' : '否' }}
+            {{ branchPatternTypeMap[row.pattern_type] || row.pattern_type }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="enabled" label="启用" width="70">
+          <template #default="{ row }">
+            <el-tag :type="row.enabled === 1 ? 'success' : 'info'" size="small">
+              {{ row.enabled === 1 ? "是" : "否" }}
             </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="150" fixed="right">
+          <template #default="{ row }">
+            <el-button
+              link
+              type="primary"
+              :icon="useRenderIcon(EditIcon)"
+              @click="openBranchEdit(row)"
+              >编辑</el-button
+            >
+            <el-popconfirm
+              title="确认删除？"
+              @confirm="handleBranchDelete(row)"
+            >
+              <template #reference>
+                <el-button link type="danger" :icon="useRenderIcon(Delete)"
+                  >删除</el-button
+                >
+              </template>
+            </el-popconfirm>
           </template>
         </el-table-column>
       </el-table>
     </el-drawer>
+
+    <el-dialog
+      v-model="branchDialogVisible"
+      :title="branchDialogMode === 'add' ? '新增分支配置' : '编辑分支配置'"
+      width="440px"
+      destroy-on-close
+    >
+      <el-form :model="branchDialogForm" label-width="90px">
+        <el-form-item label="匹配类型" required>
+          <el-select v-model="branchDialogForm.pattern_type" class="w-full">
+            <el-option label="精确匹配" value="exact" />
+            <el-option label="通配符" value="wildcard" />
+            <el-option label="特殊规则" value="special" />
+          </el-select>
+          <div class="el-form-item__tip">
+            <p><b>精确匹配</b>：完全匹配分支名，如 <code>main</code></p>
+            <p><b>通配符</b>：支持 <code>*</code> 通配，如 <code>release/*</code></p>
+            <p><b>特殊规则</b>：内置规则，如所有分支</p>
+          </div>
+        </el-form-item>
+        <el-form-item label="分支模式" required>
+          <el-select
+            v-if="branchDialogForm.pattern_type === 'special'"
+            v-model="branchDialogForm.branch_pattern"
+            class="w-full"
+          >
+            <el-option label="所有分支" value="all" />
+          </el-select>
+          <el-input
+            v-else
+            v-model="branchDialogForm.branch_pattern"
+            :placeholder="branchDialogForm.pattern_type === 'wildcard' ? '如 release/*' : '如 main'"
+          />
+        </el-form-item>
+        <el-form-item label="启用">
+          <el-switch
+            v-model="branchDialogForm.enabled"
+            :active-value="1"
+            :inactive-value="0"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="branchDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="branchDialogLoading"
+          @click="handleBranchDialogConfirm"
+          >确定</el-button
+        >
+      </template>
+    </el-dialog>
 
     <el-drawer
       v-model="contributorDrawerVisible"
@@ -331,13 +532,19 @@ onMounted(() => {
       direction="rtl"
       size="500px"
     >
-      <div class="mb-4 text-sm text-gray-500">
-        仓库: {{ currentRepoName }}
-      </div>
+      <div class="mb-4 text-sm text-gray-500">仓库: {{ currentRepoName }}</div>
       <el-table :data="contributorStats" :loading="contributorLoading" border>
-        <el-table-column prop="contributor_name" label="贡献者" min-width="120" />
+        <el-table-column
+          prop="contributor_name"
+          label="贡献者"
+          min-width="120"
+        />
         <el-table-column prop="ai_lines" label="AI代码行" min-width="100" />
-        <el-table-column prop="non_ai_lines" label="非AI代码行" min-width="100" />
+        <el-table-column
+          prop="non_ai_lines"
+          label="非AI代码行"
+          min-width="100"
+        />
         <el-table-column prop="total_lines" label="总行数" min-width="100" />
       </el-table>
     </el-drawer>
@@ -367,7 +574,11 @@ onMounted(() => {
       </el-form>
       <template #footer>
         <el-button @click="sshDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="sshDialogLoading" @click="confirmBindSshKey">
+        <el-button
+          type="primary"
+          :loading="sshDialogLoading"
+          @click="confirmBindSshKey"
+        >
           确定
         </el-button>
       </template>

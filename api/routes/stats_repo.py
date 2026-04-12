@@ -346,3 +346,73 @@ def get_repo_branch_configs(repo_id):
     except Exception as e:
         logging.error("获取仓库分支配置失败", exc_info=e)
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@stats_repo_bp.route("/<repo_id>/branch-configs/all", methods=["GET"])
+def get_all_repo_branch_configs(repo_id):
+    try:
+        _, blame_stats_db = get_database()
+        configs = blame_stats_db.get_all_repo_branch_configs(repo_id)
+        return jsonify(
+            {"success": True, "data": {"configs": configs, "count": len(configs)}}
+        )
+    except Exception as e:
+        logging.error("获取仓库分支配置失败", exc_info=e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@stats_repo_bp.route("/<repo_id>/branch-configs", methods=["POST"])
+def create_repo_branch_config(repo_id):
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"success": False, "error": "请求体为空"}), 400
+        branch_pattern = data.get("branch_pattern", "").strip()
+        if not branch_pattern:
+            return jsonify({"success": False, "error": "branch_pattern 不能为空"}), 400
+        pattern_type = data.get("pattern_type", "exact")
+        enabled = data.get("enabled", 1)
+        _, blame_stats_db = get_database()
+        config_id = blame_stats_db.save_repo_branch_config(
+            repo_id, branch_pattern, pattern_type, enabled
+        )
+        return jsonify({"success": True, "data": {"id": config_id}})
+    except Exception as e:
+        logging.error("新增分支配置失败", exc_info=e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@stats_repo_bp.route("/<repo_id>/branch-configs/<config_id>", methods=["PUT"])
+def update_repo_branch_config(repo_id, config_id):
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"success": False, "error": "请求体为空"}), 400
+        branch_pattern = data.get("branch_pattern", "").strip()
+        if not branch_pattern:
+            return jsonify({"success": False, "error": "branch_pattern 不能为空"}), 400
+        pattern_type = data.get("pattern_type", "exact")
+        enabled = data.get("enabled", 1)
+        _, blame_stats_db = get_database()
+        result = blame_stats_db.update_repo_branch_config_by_id(
+            config_id, branch_pattern, pattern_type, enabled
+        )
+        if not result:
+            return jsonify({"success": False, "error": "配置不存在"}), 404
+        return jsonify({"success": True})
+    except Exception as e:
+        logging.error("更新分支配置失败", exc_info=e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@stats_repo_bp.route("/<repo_id>/branch-configs/<config_id>", methods=["DELETE"])
+def delete_repo_branch_config(repo_id, config_id):
+    try:
+        _, blame_stats_db = get_database()
+        result = blame_stats_db.delete_repo_branch_config_by_id(config_id)
+        if not result:
+            return jsonify({"success": False, "error": "配置不存在"}), 404
+        return jsonify({"success": True})
+    except Exception as e:
+        logging.error("删除分支配置失败", exc_info=e)
+        return jsonify({"success": False, "error": str(e)}), 500

@@ -57,3 +57,15 @@ export const addSshKey = (data: { key_name: string; public_key?: string; private
 
 export const deleteSshKey = (keyId: string) =>
   http.request<R<unknown>>("delete", `/api/stats-repo/ssh-key/${keyId}`);
+
+export const getAllRepoBranchConfigs = (repoId: string) =>
+  http.request<R<{ configs: BranchConfig[]; count: number }>>("get", `/api/stats-repo/${repoId}/branch-configs/all`);
+
+export const createRepoBranchConfig = (repoId: string, data: { branch_pattern: string; pattern_type: string; enabled: number }) =>
+  http.request<R<{ id: string }>>("post", `/api/stats-repo/${repoId}/branch-configs`, { data });
+
+export const updateRepoBranchConfig = (repoId: string, configId: string, data: { branch_pattern: string; pattern_type: string; enabled: number }) =>
+  http.request<R<unknown>>("put", `/api/stats-repo/${repoId}/branch-configs/${configId}`, { data });
+
+export const deleteRepoBranchConfig = (repoId: string, configId: string) =>
+  http.request<R<unknown>>("delete", `/api/stats-repo/${repoId}/branch-configs/${configId}`);

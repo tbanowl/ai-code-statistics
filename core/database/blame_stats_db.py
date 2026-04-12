@@ -248,6 +248,59 @@ class BlameStatsDatabase(BaseDatabase):
                 StatsRepoBranchConfig.repo_id == repo_id
             ).delete()
 
+    def get_all_repo_branch_configs(self, repo_id: str) -> list:
+        from core.database.models import StatsRepoBranchConfig
+
+        with session_scope(self.engine) as session:
+            configs = (
+                session.query(StatsRepoBranchConfig)
+                .filter(StatsRepoBranchConfig.repo_id == repo_id)
+                .all()
+            )
+            return [
+                {
+                    "id": c.id,
+                    "branch_pattern": c.branch_pattern,
+                    "pattern_type": c.pattern_type,
+                    "enabled": c.enabled,
+                }
+                for c in configs
+            ]
+
+    def update_repo_branch_config_by_id(
+        self,
+        config_id: str,
+        branch_pattern: str,
+        pattern_type: str,
+        enabled: int,
+    ) -> bool:
+        from core.database.models import StatsRepoBranchConfig
+
+        with session_scope(self.engine) as session:
+            config = (
+                session.query(StatsRepoBranchConfig)
+                .filter(StatsRepoBranchConfig.id == config_id)
+                .first()
+            )
+            if not config:
+                return False
+            config.branch_pattern = branch_pattern
+            config.pattern_type = pattern_type
+            config.enabled = enabled
+            config.updated_at = int(time.time() * 1000)
+            return True
+
+    def delete_repo_branch_config_by_id(self, config_id: str) -> bool:
+        from core.database.models import StatsRepoBranchConfig
+
+        with session_scope(self.engine) as session:
+            deleted = (
+                session.query(StatsRepoBranchConfig)
+                .filter(StatsRepoBranchConfig.id == config_id)
+                .delete()
+            )
+            return deleted > 0
+
     # ============================================================================
     # 删除当天统计结果
     # ============================================================================
@@ -599,11 +652,10 @@ class BlameStatsDatabase(BaseDatabase):
                     return contrib.id
 
         # 通过 name 和 email 组合查找
-        contrib_uid = f"{name}:{email}" if email else name
         with session_scope(self.engine) as session:
             contrib = (
                 session.query(StatsContributor)
-                .filter(StatsContributor.contributor_uid == contrib_uid)
+                .filter(StatsContributor.name == name)
                 .first()
             )
             if contrib:
@@ -614,7 +666,6 @@ class BlameStatsDatabase(BaseDatabase):
         with session_scope(self.engine) as session:
             contrib = StatsContributor(
                 id=gen_xid(),
-                contributor_uid=contrib_uid,
                 name=name,
                 email=email,
                 created_at=now,
