@@ -1,0 +1,38 @@
+sql/migration_add_commit_time.sql
+  10ea508e06d3fb57 1-10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.6-2",
+  "base_commit_sha": "7387a9cc28d6d91e7518c79d89ff6956f462474e",
+  "prompts": {
+    "10ea508e06d3fb57": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_27ef93165ffe8uTdSC9wnIfKQN",
+        "model": "anthropic/claude-opus-4-6"
+      },
+      "human_author": "ZhangLei <tbanowl@gmail.com>",
+      "messages": [],
+      "total_additions": 283,
+      "total_deletions": 57,
+      "accepted_lines": 279,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8888/cas/3a61155e55ecffad1e48821757f2fc60174e5daa89e68de40dcbaafdea23d8e1"
+    },
+    "2b01e88d7886154a": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_27f638b01ffe6qmAbH5kWR45tV",
+        "model": "zai-coding-plan/glm-5.1"
+      },
+      "human_author": "ZhangLei <tbanowl@gmail.com>",
+      "messages": [],
+      "total_additions": 79,
+      "total_deletions": 78,
+      "accepted_lines": 18,
+      "overriden_lines": 50,
+      "messages_url": "http://localhost:8888/cas/8d91f70cf666aa68a06bdcbdddab76c94527284147b54934b00e863e8476fa75"
+    }
+  }
+}
