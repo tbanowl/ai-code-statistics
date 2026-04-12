@@ -1,0 +1,26 @@
+core/scheduler/tasks/git_blame_stats_task.py
+  3a2c23da1f3830ac 36,40-42,59-63,73-76,92-94,97-99,116-118,121-126,137,156,163,165,183,193,212,224-232,245-249,261
+core/database/blame_stats_db.py
+  3a2c23da1f3830ac 551-554,556-597
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.6-2",
+  "base_commit_sha": "83919a8bbe0c5f32f331a9e44ca869f39c69cb6f",
+  "prompts": {
+    "3a2c23da1f3830ac": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_27fa22c6fffeI0rD4xHebJdMuS",
+        "model": "anthropic/claude-opus-4-6"
+      },
+      "human_author": "ZhangLei <tbanowl@gmail.com>",
+      "messages": [],
+      "total_additions": 342,
+      "total_deletions": 277,
+      "accepted_lines": 96,
+      "overriden_lines": 2,
+      "messages_url": "http://localhost:8888/cas/fed8db99b2b85cd5985f2006408a73d76ca56eb6f85f59f0f08cb944026bcee8"
+    }
+  }
+}
