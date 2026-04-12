@@ -466,9 +466,12 @@ class BlameStatsService:
             if rel_path is None:
                 rel_path = os.path.relpath(file_path, repo_dir)
 
+            if os.path.getsize(os.path.join(repo_dir, rel_path)) == 0:
+                self.logger.info(f"skip git blame with empty file: {rel_path}")
+                return None
             blame_output = self._run_git_blame(repo_dir, rel_path)
             if not blame_output:
-                self.logger.warning(f'git blame {rel_path} 失败')
+                self.logger.warning(f"git blame 输出为空: {rel_path}")
                 return None
             blame_data = self._parse_blame_porcelain(blame_output)
 
@@ -526,6 +529,7 @@ class BlameStatsService:
             return None
 
     def _run_git_blame(self, repo_dir: str, rel_path: str) -> str:
+
         result = subprocess.run(
             ["git", "blame", "--line-porcelain", rel_path],
             cwd=repo_dir,
@@ -536,11 +540,7 @@ class BlameStatsService:
             timeout=60,
         )
         if result.returncode != 0:
-            size = os.path.getsize(rel_path)
-            if os.path.getsize(rel_path) == 0:
-                self.logger.info(f"skip git blame with empty file: {rel_path}")
-            else:
-                raise RuntimeError(f"执行 git blame 失败: {rel_path}")
+            raise RuntimeError(f"执行 git blame 失败: {rel_path}")
         return result.stdout
 
     def _parse_blame_porcelain(self, blame_output: str) -> Dict[int, Dict[str, str]]:

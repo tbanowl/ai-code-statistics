@@ -9,7 +9,13 @@ from core.scheduler.scheduled import scheduled
 from core.database import BlameStatsDatabase
 from core.services import SshKeyService, GitCloneService, BlameStatsService
 from core.config import load_config
-
+from core.database.models import (
+    StatsBlameFile,
+    StatsBlameRepoContributor,
+    StatsBlameRepo,
+    StatsBlameFileContributor,
+    gen_xid
+)
 
 @scheduled(cron="0 2 * * *", job_id="git_blame_stats", name="Git代码归因统计")
 class GitBlameStatsTask(BaseTask):
@@ -22,17 +28,18 @@ class GitBlameStatsTask(BaseTask):
         self.git_clone_service = GitCloneService()
         self.blame_stats_service = BlameStatsService(self.blame_stats_db)
 
-
     def execute(self, context: Optional[Dict] = None) -> Dict:
         """执行 Git Blame 统计任务"""
         self.logger.info("开始执行 Git Blame 统计任务")
 
         # 获取统计日期
-        stat_date = context.get('stat_date') if context else None
+        stat_date = context.get("stat_date") if context else None
         if stat_date is None:
             # 默认统计昨天
             yesterday = datetime.now() - timedelta(days=1)
-            stat_date = yesterday.replace(hour=0, minute=0, second=0, microsecond=0).strftime('%Y%m%d')
+            stat_date = yesterday.replace(
+                hour=0, minute=0, second=0, microsecond=0
+            ).strftime("%Y%m%d")
 
         self.logger.info(f"统计日期: stat_date")
 
@@ -49,7 +56,11 @@ class GitBlameStatsTask(BaseTask):
         self.logger.info(f"待统计仓库数量: {len(repos)}")
 
         if not repos:
-            return {'success': True, 'message': '没有需要统计的仓库', 'stat_date': stat_date}
+            return {
+                "success": True,
+                "message": "没有需要统计的仓库",
+                "stat_date": stat_date,
+            }
 
         # 统计结果汇总
         total_repos = 0
@@ -59,10 +70,10 @@ class GitBlameStatsTask(BaseTask):
 
         repos_start_time = time.time()
         for repo in repos:
-            repo_id = repo['id']
-            repo_path = repo['repo_path']
-            repo_name = repo.get('repo_name', repo_path)
-            repo_ssh_key_id = repo.get('ssh_key_id')
+            repo_id = repo["id"]
+            repo_path = repo["repo_path"]
+            repo_name = repo.get("repo_name", repo_path)
+            repo_ssh_key_id = repo.get("ssh_key_id")
 
             total_repos += 1
             self.logger.info(f"开始统计仓库: {repo_name} ({repo_path})")
@@ -78,10 +89,14 @@ class GitBlameStatsTask(BaseTask):
             try:
                 # 克隆并统计仓库
                 repo_start_time = time.time()
-                result = self._stat_repository(repo_id, repo_path, stat_date, ssh_key_info)
+                result = self._stat_repository(
+                    repo_id, repo_path, stat_date, ssh_key_info
+                )
                 repo_end_time = time.time()
                 elapsed_time = repo_end_time - repo_start_time
-                self.logger.info(f'单仓库 AI 代码量统计耗时：{elapsed_time:.4f} 秒，repo：{repo_path}')
+                self.logger.info(
+                    f"单仓库 AI 代码量统计耗时：{elapsed_time:.4f} 秒，repo：{repo_path}"
+                )
 
                 if result:
                     success_repos += 1
@@ -98,15 +113,17 @@ class GitBlameStatsTask(BaseTask):
 
         repos_end_time = time.time()
         elapsed_time = repos_end_time - repos_start_time
-        self.logger.info(f'所有仓库AI代码量统计耗时：{elapsed_time:.4f} 秒，仓库数量：{len(repos)}')
+        self.logger.info(
+            f"所有仓库AI代码量统计耗时：{elapsed_time:.4f} 秒，仓库数量：{len(repos)}"
+        )
 
         summary = {
-            'success': failed_repos == 0,
-            'stat_date': stat_date,
-            'total_repos': total_repos,
-            'success_repos': success_repos,
-            'failed_repos': failed_repos,
-            'skipped_repos': skipped_repos
+            "success": failed_repos == 0,
+            "stat_date": stat_date,
+            "total_repos": total_repos,
+            "success_repos": success_repos,
+            "failed_repos": failed_repos,
+            "skipped_repos": skipped_repos,
         }
 
         self.logger.info(
@@ -117,11 +134,7 @@ class GitBlameStatsTask(BaseTask):
         return summary
 
     def _stat_repository(
-        self,
-        repo_id: str,
-        repo_path: str,
-        stat_date: str,
-        ssh_key_info: Dict
+        self, repo_id: str, repo_path: str, stat_date: str, ssh_key_info: Dict
     ) -> Dict | None:
         """
         统计单个仓库
@@ -140,16 +153,16 @@ class GitBlameStatsTask(BaseTask):
         temp_dir = None
         try:
             # 创建临时目录
-            temp_dir = tempfile.mkdtemp(prefix='git_blame_')
+            temp_dir = tempfile.mkdtemp(prefix="git_blame_")
 
             # 克隆仓库
             self.logger.info(f"克隆仓库到临时目录: {temp_dir}")
 
             if not self.git_clone_service.clone_with_ssh_key(
                 repo_path,
-                ssh_key_info['private_key'],
+                ssh_key_info["private_key"],
                 temp_dir,
-                shallow_since='2026-03-28'
+                shallow_since="2026-03-28",
             ):
                 self.logger.error("仓库克隆失败")
                 return None
@@ -167,8 +180,7 @@ class GitBlameStatsTask(BaseTask):
             else:
                 # 根据配置匹配分支
                 target_branches = self.git_clone_service.match_branches(
-                    all_branches,
-                    branch_configs
+                    all_branches, branch_configs
                 )
                 self.logger.info(f"根据配置匹配到 {len(target_branches)} 个分支")
 
@@ -178,7 +190,7 @@ class GitBlameStatsTask(BaseTask):
 
             # 获取统计配置
             config = load_config()
-            file_filter = config.get('blame_stats', {}).get('file_filter', {})
+            file_filter = config.get("blame_stats", {}).get("file_filter", {})
             repo_url = self.blame_stats_db.get_repository_repo_url(repo_id)
 
             # 遍历每个分支进行统计
@@ -197,10 +209,7 @@ class GitBlameStatsTask(BaseTask):
 
                 # 统计该分支
                 result = self.blame_stats_service.analyze_repository(
-                    repo_url,
-                    temp_dir,
-                    stat_date,
-                    file_filter
+                    repo_url, temp_dir, stat_date, file_filter
                 )
 
                 if not result:
@@ -212,13 +221,15 @@ class GitBlameStatsTask(BaseTask):
                 self._save_branch_stats(repo_id, stat_date, result)
 
                 branch_results[branch] = {
-                    'total_lines': result.total_lines,
-                    'ai_lines': result.ai_lines,
-                    'non_ai_lines': result.non_ai_lines,
-                    'ai_ratio': round(
-                        (result.ai_lines / result.total_lines * 100) if result.total_lines > 0 else 0.0,
-                        2
-                    )
+                    "total_lines": result.total_lines,
+                    "ai_lines": result.ai_lines,
+                    "non_ai_lines": result.non_ai_lines,
+                    "ai_ratio": round(
+                        (result.ai_lines / result.total_lines * 100)
+                        if result.total_lines > 0
+                        else 0.0,
+                        2,
+                    ),
                 }
                 success_count += 1
 
@@ -231,11 +242,11 @@ class GitBlameStatsTask(BaseTask):
 
             # 返回汇总信息
             return {
-                'success': failed_count == 0,
-                'total_branches': len(target_branches),
-                'success_branches': success_count,
-                'failed_branches': failed_count,
-                'branch_results': branch_results
+                "success": failed_count == 0,
+                "total_branches": len(target_branches),
+                "success_branches": success_count,
+                "failed_branches": failed_count,
+                "branch_results": branch_results,
             }
 
         except Exception as e:
@@ -247,97 +258,103 @@ class GitBlameStatsTask(BaseTask):
             if temp_dir and os.path.exists(temp_dir):
                 self.git_clone_service.cleanup_temp_dir(temp_dir)
 
-    def _save_branch_stats(
-        self,
-        repo_id: str,
-        stat_date: str,
-        result
-    ) -> None:
-        """
-        保存分支统计结果
+    def _save_branch_stats(self, repo_id: str, stat_date: str, result) -> None:
 
-        Args:
-            repo_id: 仓库 ID
-            stat_date: 统计日期
-            result: 分析结果
-        """
-        # 保存仓库级统计结果
-        self.blame_stats_db.save_repo_blame_stats(
+        branch = result.branch
+        now = int(time.time() * 1000)
+
+        contributor_ids = {}
+        for contrib_key in result.contributor_stats:
+            contributor_ids[contrib_key] = self.blame_stats_db.get_or_create_contributor(
+                "Unknown", None
+            )
+
+        ai_ratio = (
+            (result.ai_lines / result.total_lines * 100)
+            if result.total_lines > 0
+            else 0.0
+        )
+        repo_obj = StatsBlameRepo(
+            id=gen_xid(),
             repo_id=repo_id,
             stat_date=stat_date,
             commit_sha=result.commit_sha,
-            branch=result.branch,
+            branch=branch,
             total_lines=result.total_lines,
             ai_lines=result.ai_lines,
             non_ai_lines=result.non_ai_lines,
-            total_files=result.total_files
+            ai_ratio=ai_ratio,
+            total_files=result.total_files,
+            created_at=now,
+            updated_at=now,
         )
 
-        # 保存文件级统计结果
-        for file_result in result.files_results:
-            self.blame_stats_db.save_file_blame_stats(
-                repo_id=repo_id,
-                branch=result.branch,
-                stat_date=stat_date,
-                file_path=file_result.file_path,
-                commit_sha=file_result.commit_sha,
-                total_lines=file_result.total_lines,
-                ai_lines=file_result.ai_lines,
-                non_ai_lines=file_result.non_ai_lines
+        file_id_map = {}
+        file_objs = []
+        for fr in result.files_results:
+            fid = gen_xid()
+            file_id_map[fr.file_path] = fid
+            fr_ratio = (
+                (fr.ai_lines / fr.total_lines * 100) if fr.total_lines > 0 else 0.0
+            )
+            file_objs.append(
+                StatsBlameFile(
+                    id=fid,
+                    repo_id=repo_id,
+                    branch=branch,
+                    stat_date=stat_date,
+                    file_path=fr.file_path,
+                    commit_sha=fr.commit_sha,
+                    total_lines=fr.total_lines,
+                    ai_lines=fr.ai_lines,
+                    non_ai_lines=fr.non_ai_lines,
+                    ai_ratio=fr_ratio,
+                    created_at=now,
+                    updated_at=now,
+                )
             )
 
-        # 保存仓库贡献者统计结果
-        contributor_ids = {}
+        rc_objs = []
         for contrib_key, stats in result.contributor_stats.items():
-            contrib_id = self.blame_stats_db.get_or_create_contributor(
-                'Unknown',
-                None
-            )
-            contributor_ids[contrib_key] = contrib_id
-
-            contrib_name = contrib_key
-            contrib_email = ""
-
-            self.blame_stats_db.save_repo_contributor_stats(
-                repo_id=repo_id,
-                branch=result.branch,
-                stat_date=stat_date,
-                contributor_id=contrib_id,
-                contributor_name=contrib_name,
-                contributor_email=contrib_email,
-                ai_lines=stats['ai_lines'],
-                non_ai_lines=stats['non_ai_lines'],
-                total_lines=stats['total_lines']
+            rc_objs.append(
+                StatsBlameRepoContributor(
+                    id=gen_xid(),
+                    repo_id=repo_id,
+                    branch=branch,
+                    stat_date=stat_date,
+                    contributor_id=contributor_ids[contrib_key],
+                    contributor_name=contrib_key,
+                    contributor_email="",
+                    ai_lines=stats["ai_lines"],
+                    non_ai_lines=stats["non_ai_lines"],
+                    total_lines=stats["total_lines"],
+                    created_at=now,
+                    updated_at=now,
+                )
             )
 
-        # 保存文件贡献者统计
-        file_records = self.blame_stats_db.get_file_blame_stats(repo_id, stat_date)
-        file_id_map = {r['file_path']: r['id'] for r in file_records}
-
-        file_contributor_stats = []
-        for file_result in result.files_results:
-            file_id = file_id_map.get(file_result.file_path)
-            if not file_id:
+        fc_objs = []
+        for fr in result.files_results:
+            fid = file_id_map.get(fr.file_path)
+            if not fid:
                 continue
-
-            for contrib_key, stats in file_result.contributor_stats.items():
-                contrib_id = contributor_ids.get(contrib_key)
-
-                file_contributor_stats.append({
-                    'file_id': file_id,
-                    'stat_date': stat_date,
-                    'repo_id': repo_id,
-                    'branch': result.branch,
-                    'file_path': file_result.file_path,
-                    'contributor_id': contrib_id,
-                    'contributor_name': contrib_key,
-                    'contributor_email': None,
-                    'ai_lines': stats['ai_lines'],
-                    'non_ai_lines': stats['non_ai_lines'],
-                    'total_lines': stats['total_lines']
-                })
-
-        if file_contributor_stats:
-            self.blame_stats_db.save_batch_file_contributor_stats(
-                file_contributor_stats
-            )
+            for contrib_key, stats in fr.contributor_stats.items():
+                fc_objs.append(
+                    StatsBlameFileContributor(
+                        id=gen_xid(),
+                        file_id=fid,
+                        stat_date=stat_date,
+                        repo_id=repo_id,
+                        branch=branch,
+                        file_path=fr.file_path,
+                        contributor_id=contributor_ids.get(contrib_key),
+                        contributor_name=contrib_key,
+                        contributor_email=None,
+                        ai_lines=stats["ai_lines"],
+                        non_ai_lines=stats["non_ai_lines"],
+                        total_lines=stats["total_lines"],
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+        self.blame_stats_db.save_branch_stats_batch(repo_id, branch, stat_date, repo_obj, file_objs, rc_objs, fc_objs)

@@ -3,8 +3,17 @@
 import time
 from core.config.logging import Logger
 from core.database.base import BaseDatabase, session_scope
-from core.database.models import gen_xid
-
+from core.database.models import (
+    AuthorshipNotes,
+    StatsBlameFile,
+    StatsBlameFileContributor,
+    StatsBlameRepo,
+    StatsBlameRepoContributor,
+    StatsRepoBranchConfig,
+    StatsRepository,
+    StatsContributor,
+    gen_xid
+)
 
 class BlameStatsDatabase(BaseDatabase):
     """Blame 统计数据库操作类"""
@@ -34,8 +43,6 @@ class BlameStatsDatabase(BaseDatabase):
         Returns:
             是否更新成功
         """
-        from core.database.models import StatsRepository
-
         with session_scope(self.engine) as session:
             repo = (
                 session.query(StatsRepository)
@@ -61,8 +68,6 @@ class BlameStatsDatabase(BaseDatabase):
         Returns:
             是否更新成功
         """
-        from core.database.models import StatsRepository
-
         with session_scope(self.engine) as session:
             repo = (
                 session.query(StatsRepository)
@@ -84,8 +89,6 @@ class BlameStatsDatabase(BaseDatabase):
         Returns:
             仓库列表
         """
-        from core.database.models import StatsRepository
-
         with session_scope(self.engine) as session:
             repos = (
                 session.query(StatsRepository)
@@ -113,8 +116,6 @@ class BlameStatsDatabase(BaseDatabase):
         Returns:
             仓库对象
         """
-        from core.database.models import StatsRepository
-
         with session_scope(self.engine) as session:
             return (
                 session.query(StatsRepository)
@@ -132,8 +133,6 @@ class BlameStatsDatabase(BaseDatabase):
         Returns:
             仓库路径字符串
         """
-        from core.database.models import StatsRepository
-
         with session_scope(self.engine) as session:
             repo = (
                 session.query(StatsRepository)
@@ -156,8 +155,6 @@ class BlameStatsDatabase(BaseDatabase):
         Returns:
             分支配置列表（仅包含 enabled=1 的配置）
         """
-        from core.database.models import StatsRepoBranchConfig
-
         with session_scope(self.engine) as session:
             configs = (
                 session.query(StatsRepoBranchConfig)
@@ -197,8 +194,6 @@ class BlameStatsDatabase(BaseDatabase):
         Returns:
             配置 ID
         """
-        from core.database.models import StatsRepoBranchConfig
-
         now = int(time.time() * 1000)
 
         with session_scope(self.engine) as session:
@@ -241,16 +236,12 @@ class BlameStatsDatabase(BaseDatabase):
         Args:
             repo_id: 仓库 ID
         """
-        from core.database.models import StatsRepoBranchConfig
-
         with session_scope(self.engine) as session:
             session.query(StatsRepoBranchConfig).filter(
                 StatsRepoBranchConfig.repo_id == repo_id
             ).delete()
 
     def get_all_repo_branch_configs(self, repo_id: str) -> list:
-        from core.database.models import StatsRepoBranchConfig
-
         with session_scope(self.engine) as session:
             configs = (
                 session.query(StatsRepoBranchConfig)
@@ -274,8 +265,6 @@ class BlameStatsDatabase(BaseDatabase):
         pattern_type: str,
         enabled: int,
     ) -> bool:
-        from core.database.models import StatsRepoBranchConfig
-
         with session_scope(self.engine) as session:
             config = (
                 session.query(StatsRepoBranchConfig)
@@ -291,8 +280,6 @@ class BlameStatsDatabase(BaseDatabase):
             return True
 
     def delete_repo_branch_config_by_id(self, config_id: str) -> bool:
-        from core.database.models import StatsRepoBranchConfig
-
         with session_scope(self.engine) as session:
             deleted = (
                 session.query(StatsRepoBranchConfig)
@@ -313,8 +300,6 @@ class BlameStatsDatabase(BaseDatabase):
             repo_id: 仓库 ID
             stat_date: 统计日期
         """
-        from core.database.models import StatsBlameRepo
-
         with session_scope(self.engine) as session:
             session.query(StatsBlameRepo).filter(
                 StatsBlameRepo.repo_id == repo_id, StatsBlameRepo.stat_date == stat_date
@@ -328,8 +313,6 @@ class BlameStatsDatabase(BaseDatabase):
             repo_id: 仓库 ID
             stat_date: 统计日期
         """
-        from core.database.models import StatsBlameFile
-
         with session_scope(self.engine) as session:
             session.query(StatsBlameFile).filter(
                 StatsBlameFile.repo_id == repo_id, StatsBlameFile.stat_date == stat_date
@@ -343,8 +326,6 @@ class BlameStatsDatabase(BaseDatabase):
             repo_id: 仓库 ID
             stat_date: 统计日期
         """
-        from core.database.models import StatsBlameRepoContributor
-
         with session_scope(self.engine) as session:
             session.query(StatsBlameRepoContributor).filter(
                 StatsBlameRepoContributor.repo_id == repo_id,
@@ -359,8 +340,6 @@ class BlameStatsDatabase(BaseDatabase):
             repo_id: 仓库 ID
             stat_date: 统计日期
         """
-        from core.database.models import StatsBlameFileContributor
-
         with session_scope(self.engine) as session:
             session.query(StatsBlameFileContributor).filter(
                 StatsBlameFileContributor.repo_id == repo_id,
@@ -388,8 +367,6 @@ class BlameStatsDatabase(BaseDatabase):
         Returns:
             统计记录 ID
         """
-        from core.database.models import StatsBlameRepo
-
         ai_ratio = (ai_lines / total_lines * 100) if total_lines > 0 else 0.0
         now = int(time.time() * 1000)
 
@@ -436,8 +413,6 @@ class BlameStatsDatabase(BaseDatabase):
         Returns:
             文件统计记录 ID
         """
-        from core.database.models import StatsBlameFile
-
         ai_ratio = (ai_lines / total_lines * 100) if total_lines > 0 else 0.0
         now = int(time.time() * 1000)
 
@@ -488,8 +463,6 @@ class BlameStatsDatabase(BaseDatabase):
         Returns:
             贡献者统计记录 ID
         """
-        from core.database.models import StatsBlameRepoContributor
-
         now = int(time.time() * 1000)
 
         with session_scope(self.engine) as session:
@@ -541,8 +514,6 @@ class BlameStatsDatabase(BaseDatabase):
         Returns:
             贡献者统计记录 ID
         """
-        from core.database.models import StatsBlameFileContributor
-
         now = int(time.time() * 1000)
 
         with session_scope(self.engine) as session:
@@ -576,6 +547,54 @@ class BlameStatsDatabase(BaseDatabase):
 
             return stats.id
 
+    def save_branch_stats_batch(self, repo_id: str, branch: str, stat_date: str, repo_obj, file_objs, rc_objs, fc_objs) -> None:
+        """
+        以仓库+分支为维度，在单个事务内保存所有统计数据。
+        先检查当天数据是否存在，存在则删除，再批量插入（每批 1000 条）。
+        """
+        BATCH_SIZE = 1000
+
+        with session_scope(self.engine) as session:
+            exists = (
+                session.query(StatsBlameRepo)
+                .filter(
+                    StatsBlameRepo.repo_id == repo_id,
+                    StatsBlameRepo.stat_date == stat_date,
+                    StatsBlameRepo.branch == branch,
+                )
+                .first()
+            )
+
+            if exists:
+                session.query(StatsBlameRepo).filter(
+                    StatsBlameRepo.repo_id == repo_id,
+                    StatsBlameRepo.stat_date == stat_date,
+                    StatsBlameRepo.branch == branch,
+                ).delete()
+                session.query(StatsBlameFile).filter(
+                    StatsBlameFile.repo_id == repo_id,
+                    StatsBlameFile.stat_date == stat_date,
+                    StatsBlameFile.branch == branch,
+                ).delete()
+                session.query(StatsBlameRepoContributor).filter(
+                    StatsBlameRepoContributor.repo_id == repo_id,
+                    StatsBlameRepoContributor.stat_date == stat_date,
+                    StatsBlameRepoContributor.branch == branch,
+                ).delete()
+                session.query(StatsBlameFileContributor).filter(
+                    StatsBlameFileContributor.repo_id == repo_id,
+                    StatsBlameFileContributor.stat_date == stat_date,
+                    StatsBlameFileContributor.branch == branch,
+                ).delete()
+
+            session.add(repo_obj)
+            for i in range(0, len(file_objs), BATCH_SIZE):
+                session.bulk_save_objects(file_objs[i : i + BATCH_SIZE])
+            for i in range(0, len(rc_objs), BATCH_SIZE):
+                session.bulk_save_objects(rc_objs[i : i + BATCH_SIZE])
+            for i in range(0, len(fc_objs), BATCH_SIZE):
+                session.bulk_save_objects(fc_objs[i : i + BATCH_SIZE])
+
     def save_batch_file_contributor_stats(self, stats_list: list) -> int:
         """
         批量保存文件贡献者统计结果
@@ -586,8 +605,6 @@ class BlameStatsDatabase(BaseDatabase):
         Returns:
             保存的记录数量
         """
-        from core.database.models import StatsBlameFileContributor
-
         now = int(time.time() * 1000)
 
         with session_scope(self.engine) as session:
@@ -638,8 +655,6 @@ class BlameStatsDatabase(BaseDatabase):
         Returns:
             贡献者 ID
         """
-        from core.database.models import StatsContributor
-
         # 通过 email 查找
         if email:
             with session_scope(self.engine) as session:
@@ -694,8 +709,6 @@ class BlameStatsDatabase(BaseDatabase):
         Returns:
             统计数据列表
         """
-        from core.database.models import StatsBlameRepo
-
         with session_scope(self.engine) as session:
             query = session.query(StatsBlameRepo).filter(
                 StatsBlameRepo.repo_id == repo_id
@@ -739,8 +752,6 @@ class BlameStatsDatabase(BaseDatabase):
         Returns:
             文件统计数据列表
         """
-        from core.database.models import StatsBlameFile
-
         with session_scope(self.engine) as session:
             query = session.query(StatsBlameFile).filter(
                 StatsBlameFile.repo_id == repo_id
@@ -775,7 +786,6 @@ class BlameStatsDatabase(BaseDatabase):
         if not commit_shas:
             return {}
 
-        from core.database.models import AuthorshipNotes
 
         with session_scope(self.engine) as session:
             notes = (
@@ -797,8 +807,6 @@ class BlameStatsDatabase(BaseDatabase):
         Returns:
             贡献者统计数据列表
         """
-        from core.database.models import StatsBlameRepoContributor
-
         with session_scope(self.engine) as session:
             query = session.query(StatsBlameRepoContributor).filter(
                 StatsBlameRepoContributor.repo_id == repo_id
@@ -837,8 +845,6 @@ class BlameStatsDatabase(BaseDatabase):
         end_date: int | None = None,
         repo_id: str | None = None,
     ) -> dict:
-        from core.database.models import StatsBlameRepo, StatsRepository
-
         with session_scope(self.engine) as session:
             query = session.query(StatsBlameRepo)
             if start_date is not None:
