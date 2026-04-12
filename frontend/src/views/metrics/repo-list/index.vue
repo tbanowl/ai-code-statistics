@@ -3,10 +3,7 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { PureTableBar } from "@/components/RePureTableBar";
 import { useRenderIcon } from "@/components/ReIcon/src/hooks";
 import { getPickerShortcuts } from "@/views/monitor/utils";
-import {
-  getBlameRepoStats,
-  type BlameRepoStatItem
-} from "@/api/stats";
+import { getBlameRepoStats, type BlameRepoStatItem } from "@/api/stats";
 
 import Refresh from "~icons/ep/refresh";
 
@@ -49,6 +46,13 @@ const defaultDateRange = (): [Date, Date] => {
   return [start, end];
 };
 
+const formatDate = (d: Date) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}${m}${day}`;
+};
+
 const formatStatDate = (value: number) => {
   const text = String(value).padStart(8, "0");
   const year = text.slice(0, 4);
@@ -71,8 +75,8 @@ const buildParams = () => {
   return {
     page: pagination.value.page,
     page_size: pagination.value.page_size,
-    start_date: start?.getTime(),
-    end_date: end?.getTime(),
+    start_date: start ? formatDate(start) : undefined,
+    end_date: end ? formatDate(end) : undefined,
     repo_id: form.repo_name || undefined,
     branch: form.branch || undefined
   };
@@ -147,7 +151,7 @@ onMounted(async () => {
         <el-date-picker
           v-model="dateRange"
           :shortcuts="getPickerShortcuts()"
-          type="datetimerange"
+          type="daterange"
           range-separator="至"
           start-placeholder="开始日期时间"
           end-placeholder="结束日期时间"

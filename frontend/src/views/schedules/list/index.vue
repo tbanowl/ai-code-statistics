@@ -106,14 +106,14 @@ const handleTriggerJob = async (row: JobItem) => {
 };
 
 const executionStatusTagMap = {
-  running: "warning",
-  success: "success",
+  pending: "pending",
+  completed: "completed",
   failed: "danger"
 } as const;
 
 const executionStatusMap = {
-  running: "运行中",
-  success: "成功",
+  pending: "运行中",
+  completed: "成功",
   failed: "失败"
 };
 
@@ -173,7 +173,7 @@ onMounted(() => {
           </template>
           <template #enabled="{ row }">
             <el-tag :type="row.enabled ? 'success' : 'info'">
-              {{ row.enabled ? '启用' : '禁用' }}
+              {{ row.enabled ? "启用" : "禁用" }}
             </el-tag>
           </template>
           <template #nextRunTime="{ row }">
@@ -193,7 +193,7 @@ onMounted(() => {
               type="primary"
               :size="size"
               :loading="triggerLoading"
-              :disabled="row.status === 'pending'"
+              :disabled="row.status === 'running'"
               @click="handleTriggerJob(row)"
             >
               执行任务
@@ -221,7 +221,7 @@ onMounted(() => {
       size="800px"
     >
       <template #header>
-        <div class="flex items-center justify-between w-full">
+        <div class="flex-bc items-center w-full">
           <span>执行历史</span>
           <div v-if="currentJob" class="text-sm text-gray-500">
             {{ currentJob.name }} ({{ currentJob.id }})
@@ -236,17 +236,18 @@ onMounted(() => {
         刷新
       </el-button>
       <el-table :data="executionsList" :loading="executionsLoading" border>
-        <el-table-column prop="id" label="执行ID" min-width="220" />
         <el-table-column prop="start_time" label="开始时间" min-width="170">
           <template #default="{ row }">
-            {{ formatTimestamp(new Date(row.start_time * 1000).toISOString()) }}
+            {{ formatTimestamp(new Date(row.started_at).toISOString()) }}
           </template>
         </el-table-column>
         <el-table-column prop="end_time" label="结束时间" min-width="170">
           <template #default="{ row }">
-            {{ row.end_time
-              ? formatTimestamp(new Date(row.end_time * 1000).toISOString())
-              : '-' }}
+            {{
+              row.finished_at
+                ? formatTimestamp(new Date(row.finished_at).toISOString())
+                : "-"
+            }}
           </template>
         </el-table-column>
         <el-table-column prop="status" label="状态" min-width="100">
@@ -256,14 +257,14 @@ onMounted(() => {
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="error" label="错误信息" min-width="200" show-overflow-tooltip>
+        <el-table-column
+          prop="error"
+          label="错误信息"
+          min-width="200"
+          show-overflow-tooltip
+        >
           <template #default="{ row }">
-            {{ row.error || '-' }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="output" label="输出" min-width="200" show-overflow-tooltip>
-          <template #default="{ row }">
-            {{ row.output || '-' }}
+            {{ row.error || "-" }}
           </template>
         </el-table-column>
       </el-table>

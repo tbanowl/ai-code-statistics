@@ -26,8 +26,8 @@ export type JobStatus = {
 export type ExecutionItem = {
   id: string;
   job_id: string;
-  start_time: number;
-  end_time: number | null;
+  started_at: number;
+  finished_at: number | null;
   status: "running" | "success" | "failed";
   error: string | null;
   output: string | null;
