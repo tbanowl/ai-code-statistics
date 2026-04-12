@@ -3,7 +3,7 @@ Git AI 代码统计 - 独立 Web 应用 v2.0
 统计 GitLab/GitHub 仓库中 AI 生成代码的占比。
 """
 
-from flask import Flask, send_from_directory
+from flask import Flask, send_from_directory, jsonify
 import os
 import sys
 from core.config.loader import load_config_by_path
@@ -37,8 +37,8 @@ main_logger = Logger.get_logger("app")
 main_logger.info("应用启动，Git AI 代码统计工具 v2.0")
 
 # 创建 Flask 应用，设置静态文件目录为编译后的 static
-static_dir = os.path.abspath(os.path.join(BASE_DIR, "static"))
-app = Flask(__name__, static_folder=static_dir, template_folder=static_dir)
+static_dir = os.path.abspath(os.path.join(BASE_DIR, "frontend_static"))
+app = Flask(__name__, static_folder=static_dir, static_url_path='/static')
 
 # 配置 Flask 日志
 setup_flask_logging(app, config)
@@ -60,10 +60,6 @@ app.register_blueprint(releases_bp)
 app.register_blueprint(git_notes_rest_bp)
 app.register_blueprint(authorship_notes_rest_bp)
 app.register_blueprint(system_bp)
-
-from core.database.system_db import SystemDatabase
-
-SystemDatabase().init_default_data()
 
 # 初始化 Swagger（如果配置启用）
 swagger_setup(app, config, main_logger)
@@ -93,10 +89,32 @@ def index():
     return send_from_directory(static_dir, "index.html")
 
 
-@app.route("/<path:filename>")
-def static_file(filename):
-    """首页 - 返回编译后的 index.html"""
-    return send_from_directory(static_dir, filename)
+# @app.route("/<path:filename>")
+# def static_file(filename):
+#     """首页 - 返回编译后的 index.html"""
+#     return send_from_directory(static_dir, filename)
+
+# @app.route('/', defaults={'path': '', 'path2': '', 'path3': ''})
+# # @app.route('/<path:path>', defaults={'path2': '', 'path3': ''})
+# # @app.route('/<path:path>/<path:path2>', defaults={'path3': ''})
+# # @app.route('/<path:path>/<path:path2>/<path:path3>')
+# def index(path):
+# # def index(path, path2, path3):
+#     full_path = path
+#     # if path2:
+#     #     full_path = f"{path}/{path2}"
+#     # if path3:
+#     #     full_path = f"{full_path}/{path3}"
+#     # 判断是否为静态文件请求（有扩展名的文件）
+#     if path and os.path.exists(os.path.join(static_dir, full_path)):
+#         return send_from_directory(static_dir, full_path)
+    
+#     # 判断是否为 API 请求（已被蓝图处理，这里作为兜底）
+#     if path.startswith('api/'):
+#         return jsonify({'error': 'API endpoint not found'}), 404
+    
+#     # 其他所有请求 → 返回 index.html，交给 Vue Router 处理
+#     return send_from_directory(static_dir, 'index.html')
 
 
 @app.route("/health")

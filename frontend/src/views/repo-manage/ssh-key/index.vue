@@ -24,7 +24,7 @@ const dialogLoading = ref(false);
 const form = ref({ key_name: "", public_key: "", private_key: "" });
 
 const columns = [
-  { label: "Key 名称", prop: "key_name", minWidth: 150 },
+  { label: "Key 名称", prop: "key_name", minWidth: 150 , slot: "keyName"},
   { label: "公钥", prop: "public_key", minWidth: 200, slot: "publicKey" },
   { label: "创建时间", prop: "created_at", minWidth: 160, slot: "createdAt" },
   { label: "操作", fixed: "right", minWidth: 80, slot: "operation" }

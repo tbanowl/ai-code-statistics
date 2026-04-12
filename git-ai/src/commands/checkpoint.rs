@@ -25,6 +25,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration as StdDuration, Instant, SystemTime, UNIX_EPOCH};
+use unicode_normalization::UnicodeNormalization;
 
 /// Per-file line statistics (in-memory only, not persisted)
 #[derive(Debug, Clone, Default)]
@@ -125,8 +126,8 @@ fn build_checkpoint_attrs(
             .external_prompt_id(&agent_id.id);
     }
 
-    // Attach custom attributes
-    attrs = attrs.custom_attributes_map(crate::config::Config::get().custom_attributes());
+    // Attach custom attributes using Config::fresh() to support runtime config updates
+    attrs = attrs.custom_attributes_map(crate::config::Config::fresh().custom_attributes());
 
     // Add repo URL
     if let Ok(Some(remote_name)) = repo.get_default_remote()
@@ -542,7 +543,10 @@ fn resolve_explicit_path_execution(
     let mut resolved_dirty_files = HashMap::new();
 
     for normalized_path in candidate_paths {
-        let status_entry = explicit_statuses.get(&normalized_path);
+        // Status output uses NFC paths; the normalized_path may be NFD on some
+        // filesystems, so look up with NFC to handle the mismatch.
+        let nfc_key: String = normalized_path.nfc().collect();
+        let status_entry = explicit_statuses.get(&nfc_key);
         if matches!(status_entry, Some(entry) if entry.kind == EntryKind::Unmerged) {
             continue;
         }

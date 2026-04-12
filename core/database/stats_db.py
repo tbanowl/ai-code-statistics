@@ -17,6 +17,7 @@ from .models import (
 
 
 class StatsDatabase(BaseDatabase):
+    
     @staticmethod
     def _parse_json_field(value: object) -> object:
         if isinstance(value, str):
@@ -65,6 +66,7 @@ class StatsDatabase(BaseDatabase):
         display_items = [stringify(item).strip() for item in value[1:]]
         display_items = [item for item in display_items if item]
         return ", ".join(display_items) if display_items else "-"
+
 
     @staticmethod
     def _metric_total(value: object) -> int:
@@ -339,25 +341,18 @@ class StatsDatabase(BaseDatabase):
                         "author": author_name,
                         "author_uid": (row.author or "").strip() or author_name,
                         "author_email": author_email,
-                        "tool_model_pairs_total": self._metric_total(
-                            row.tool_model_pairs
-                        ),
-                        "mixed_additions_total": self._metric_total(
-                            row.mixed_additions
-                        ),
+                        "tool_model_pairs_total": self._metric_total(row.tool_model_pairs),
+                        "mixed_additions_total": self._metric_total(row.mixed_additions),
                         "human_additions": int(row.human_additions or 0),
                         "ai_additions": self._metric_total(row.ai_additions),
                         "ai_accepted_lines": self._metric_total(row.ai_accepted),
-                        "total_ai_additions_total": self._metric_total(
-                            row.total_ai_additions
-                        ),
-                        "total_ai_deletions_total": self._metric_total(
-                            row.total_ai_deletions
-                        ),
+                        "total_ai_additions_total": self._metric_total(row.total_ai_additions),
+                        "total_ai_deletions_total": self._metric_total(row.total_ai_deletions),
                         "git_ai_version": row.git_ai_version,
                     }
                 )
             return items
+
 
     def get_committed_events_paginated(
         self,
@@ -433,6 +428,7 @@ class StatsDatabase(BaseDatabase):
                             row.total_ai_deletions
                         ),
                         "base_commit_sha": row.base_commit_sha or "",
+                        "git_ai_version": row.git_ai_version or "",
                     }
                 )
 
@@ -514,16 +510,15 @@ class StatsDatabase(BaseDatabase):
             return record.id
 
     def get_or_create_contributor(
-        self, name: str, email: Optional[str], contributor_uid: Optional[str] = None
+        self, name: str, email: Optional[str]
     ) -> str:
-        uid = (contributor_uid or email or name or "unknown").strip().lower()
         normalized_name = (name or "unknown").strip() or "unknown"
         normalized_email = (email or "").strip() or None
 
         with session_scope(self.engine) as session:
             row = (
                 session.query(StatsContributor)
-                .filter(StatsContributor.contributor_uid == uid)
+                .filter(StatsContributor.name == name)
                 .first()
             )
             if row:
@@ -537,7 +532,6 @@ class StatsDatabase(BaseDatabase):
                 return row.id
 
             record = StatsContributor(
-                contributor_uid=uid,
                 name=normalized_name,
                 email=normalized_email,
             )
@@ -620,13 +614,10 @@ class StatsDatabase(BaseDatabase):
             query = session.query(StatsRepository)
             if keyword:
                 like = f"%{keyword}%"
-                query = query.filter(
-                    or_(
-                        StatsRepository.repo_name.like(like),
-                        StatsRepository.repo_path.like(like),
-                    )
-                )
-            query = query.order_by(StatsRepository.created_at.desc())
+                query = query.filter(StatsRepository.repo_name.like(like))\
+                .filter(StatsRepository.repo_path.like(like))
+                
+            query = query.filter(StatsRepository.repo_name != '未知仓库').order_by(StatsRepository.created_at.desc())
             total = query.count()
             rows = query.offset((page - 1) * page_size).limit(page_size).all()
             return {
@@ -668,8 +659,7 @@ class StatsDatabase(BaseDatabase):
                 query = query.filter(
                     or_(
                         StatsContributor.name.like(like),
-                        StatsContributor.email.like(like),
-                        StatsContributor.contributor_uid.like(like),
+                        StatsContributor.email.like(like)
                     )
                 )
             query = query.order_by(StatsContributor.created_at.desc())

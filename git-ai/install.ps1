@@ -465,7 +465,7 @@ try {
 }
 
 # Verify checksum if embedded (release builds only)
-# Verify-Checksum -File $tmpFile -BinaryName $downloadedBinaryName
+Verify-Checksum -File $tmpFile -BinaryName $downloadedBinaryName
 
 $finalExe = Join-Path $installDir 'git-ai.exe'
 

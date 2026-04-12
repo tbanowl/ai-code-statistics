@@ -531,53 +531,30 @@ Set-Content -Path $gitOgShim -Value $gitOgShimContent -Encoding ASCII -Force
 try { Unblock-File -Path $gitOgShim -ErrorAction SilentlyContinue } catch { }
 
 # Login user with install token if provided
-$needLogin = $false
-Write-Host "API_BASE: $env:API_BASE"
-if ($env:INSTALL_NONCE -and $env:API_BASE) {
-    try {
-        # & $finalExe exchange-nonce | Out-Host
-        & $finalExe exchange-nonce
-        if ($LASTEXITCODE -ne 0) {
-            $needLogin = $true
-        }
-    } catch {
-        $needLogin = $true
-    }
-}
+# $needLogin = $false
+# Write-Host "API_BASE: $env:API_BASE"
+# if ($env:INSTALL_NONCE -and $env:API_BASE) {
+#     try {
+#         # & $finalExe exchange-nonce | Out-Host
+#         & $finalExe exchange-nonce
+#         if ($LASTEXITCODE -ne 0) {
+#             $needLogin = $true
+#         }
+#     } catch {
+#         $needLogin = $true
+#     }
+# }
 
 # Install hooks
 Write-Host 'Setting up IDE/agent hooks...'
 try {
+    & $finalExe uninstall-hooks
     & $finalExe install-hooks
     # & $finalExe install-hooks | Out-Host
     Write-Success 'Successfully set up IDE/agent hooks'
 } catch {
     Write-Warning "Warning: Failed to set up IDE/agent hooks. Please try running 'git-ai install-hooks' manually."
 }
-
-Write-Host "Config DSN $SENTRY_ENTERPRISE"
-try {
-    & $finalExe config set telemetry_enterprise_dsn "$SENTRY_ENTERPRISE"
-    Write-Success 'Successfully config telemetry_enterprise_dsn.'
-} catch {
-    Write-Success 'Warning: Failed config telemetry_enterprise_dsn.'
-}
-
-Write-Host "Config notes_store to rest"
-try {
-    & $finalExe config set notes_store "rest"
-    Write-Success 'Successfully config notes_store to rest.'
-} catch {
-    Write-Success 'Warning: Failed config notes_store to rest.'
-}
-
-# Write-Host "Config async_mode to true"
-# try {
-#     & $finalExe config set feature_flags.async_mode "true"
-#     Write-Success 'Successfully config notes_store to rest.'
-# } catch {
-#     Write-Success 'Warning: Failed config notes_store to rest.'
-# }
 
 # Update PATH so our shim takes precedence over any Git entries
 $skipPathUpdate = $env:GIT_AI_SKIP_PATH_UPDATE -eq '1'
@@ -695,11 +672,34 @@ try {
     Write-Host "Warning: Failed to write config.json: $($_.Exception.Message)" -ForegroundColor Yellow
 }
 
-Write-Host 'Close and reopen your terminal and IDE sessions to use git-ai.' -ForegroundColor Yellow
+# Config Init
+Write-Host "Config DSN $SENTRY_ENTERPRISE"
+try {
+    & $finalExe config set telemetry_enterprise_dsn "$SENTRY_ENTERPRISE"
+    Write-Success 'Successfully config telemetry_enterprise_dsn.'
+} catch {
+    Write-Success 'Warning: Failed config telemetry_enterprise_dsn.'
+}
+
+Write-Host "Config notes_store to rest"
+try {
+    & $finalExe config set notes_store "rest"
+    Write-Success 'Successfully config notes_store to rest.'
+} catch {
+    Write-Success 'Warning: Failed config notes_store to rest.'
+}
+
+# Write-Host "Config async_mode to true"
+# try {
+#     & $finalExe config set feature_flags.async_mode "true"
+#     Write-Success 'Successfully config notes_store to rest.'
+# } catch {
+#     Write-Success 'Warning: Failed config notes_store to rest.'
+# }
 
 # If nonce exchange failed, run interactive login
-if ($needLogin) {
-    Write-Host ''
-    Write-Host 'Launching login...'
-    & $finalExe login
-}
+Write-Host ''
+Write-Host 'Launching login...'
+& $finalExe login
+
+Write-Host 'Close and reopen your terminal and IDE sessions to use git-ai.' -ForegroundColor Yellow

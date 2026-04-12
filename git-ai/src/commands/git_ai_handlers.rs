@@ -7,8 +7,8 @@ use crate::authorship::working_log::{AgentId, CheckpointKind};
 use crate::commands;
 use crate::commands::checkpoint_agent::agent_presets::{
     AgentCheckpointFlags, AgentCheckpointPreset, AgentRunResult, AiTabPreset, ClaudePreset,
-    CodexPreset, ContinueCliPreset, CursorPreset, DroidPreset, GeminiPreset, GithubCopilotPreset,
-    WindsurfPreset,
+    CodexPreset, ContinueCliPreset, CursorPreset, DroidPreset, FirebenderPreset, GeminiPreset,
+    GithubCopilotPreset, WindsurfPreset,
 };
 use crate::commands::checkpoint_agent::agent_v1_preset::AgentV1Preset;
 use crate::commands::checkpoint_agent::amp_preset::AmpPreset;
@@ -129,6 +129,13 @@ pub fn handle_git_ai(args: &[String]) {
         "checkpoint" => {
             handle_checkpoint(&args[1..]);
         }
+        "log" => {
+            let status = commands::log::handle_log(&args[1..]);
+            if is_interactive_terminal() {
+                log_message("log", "info", None)
+            }
+            exit_with_log_status(status);
+        }
         "blame" => {
             handle_ai_blame(&args[1..]);
             if is_interactive_terminal() {
@@ -179,6 +186,9 @@ pub fn handle_git_ai(args: &[String]) {
         }
         "upgrade" => {
             commands::upgrade::run_with_args(&args[1..]);
+        }        
+        "flush-logs" => {
+            commands::flush_logs::handle_flush_logs(&args[1..]);
         }
         "flush-cas" => {
             commands::flush_cas::handle_flush_cas(&args[1..]);
@@ -250,12 +260,16 @@ fn print_help() {
     eprintln!("Commands:");
     eprintln!("  checkpoint         Checkpoint working changes and attribute author");
     eprintln!(
-        "    Presets: claude, codex, continue-cli, cursor, gemini, github-copilot, amp, windsurf, opencode, ai_tab, mock_ai"
+        "    Presets: claude, codex, continue-cli, cursor, gemini, github-copilot, amp, windsurf, opencode, ai_tab, firebender, mock_ai"
     );
     eprintln!(
         "    --hook-input <json|stdin>   JSON payload required by presets, or 'stdin' to read from stdin"
     );
     eprintln!("    mock_ai [pathspecs...]      Test preset accepting optional file pathspecs");
+    eprintln!("  log [args...]      Show commit log with AI authorship notes");
+    eprintln!(
+        "                        Proxies git log --notes=ai with all standard git log options"
+    );
     eprintln!("  blame <file>       Git blame with AI authorship overlay");
     eprintln!("  diff <commit|range>  Show diff with AI authorship annotations");
     eprintln!("    <commit>              Diff from commit's parent to commit");
@@ -536,6 +550,22 @@ fn handle_checkpoint(args: &[String]) {
                     }
                 }
             }
+            "firebender" => {
+                match FirebenderPreset.run(AgentCheckpointFlags {
+                    hook_input: hook_input.clone(),
+                }) {
+                    Ok(agent_run) => {
+                        if agent_run.repo_working_dir.is_some() {
+                            repository_working_dir = agent_run.repo_working_dir.clone().unwrap();
+                        }
+                        agent_run_result = Some(agent_run);
+                    }
+                    Err(e) => {
+                        eprintln!("Firebender preset error: {}", e);
+                        std::process::exit(0);
+                    }
+                }
+            }
             "agent-v1" => {
                 match AgentV1Preset.run(AgentCheckpointFlags {
                     hook_input: hook_input.clone(),
@@ -648,8 +678,35 @@ fn handle_checkpoint(args: &[String]) {
     }
 
     // If the working directory is not a git repository, we need to detect repos from file paths
-    // This happens in multi-repo workspaces where the workspace root contains multiple git repos
-    let needs_file_based_repo_detection = repo_result.is_err();
+    // This happens in multi-repo workspaces where the workspace root contains multiple git repos.
+    // We also trigger file-based detection when the CWD *is* a git repo but an edited file lives
+    // in a different git repo — most commonly a linked worktree created with `git worktree add`.
+    // In that case git-ai would otherwise attempt to checkpoint the file against the CWD repo,
+    // which cannot see changes inside the linked worktree's working tree.
+    let needs_file_based_repo_detection = repo_result.is_err()
+        || if let Ok(ref cwd_repo) = repo_result {
+            let edited = agent_run_result.as_ref().and_then(|r| {
+                if r.checkpoint_kind == CheckpointKind::Human {
+                    r.will_edit_filepaths.as_ref()
+                } else {
+                    r.edited_filepaths.as_ref()
+                }
+            });
+            edited
+                .map(|fs| {
+                    fs.iter().any(|f| {
+                        let pb = if std::path::Path::new(f).is_absolute() {
+                            std::path::PathBuf::from(f)
+                        } else {
+                            std::path::Path::new(&repository_working_dir).join(f)
+                        };
+                        !cwd_repo.path_is_in_workdir(&pb)
+                    })
+                })
+                .unwrap_or(false)
+        } else {
+            false
+        };
 
     if needs_file_based_repo_detection {
         // Workspace root is not a git repo - try to detect repositories from edited files
@@ -680,9 +737,12 @@ fn handle_checkpoint(args: &[String]) {
                 })
                 .collect();
 
-            // Group files by their containing repository
-            let (repo_files, orphan_files) =
-                group_files_by_repository(&absolute_files, Some(&repository_working_dir));
+            // Group files by their containing repository.
+            // Pass None as workspace_root so that find_repository_for_file can search
+            // outside the CWD boundary. This fixes issue #954 where launching from a
+            // non-git directory (e.g. /tmp) caused the workspace boundary to block
+            // discovery of repos in sibling directories.
+            let (repo_files, orphan_files) = group_files_by_repository(&absolute_files, None);
 
             if repo_files.is_empty() {
                 eprintln!(
@@ -1040,6 +1100,10 @@ fn handle_checkpoint(args: &[String]) {
                 }
             }
         }
+    }
+
+    if checkpoint_kind != CheckpointKind::Human {
+        observability::spawn_background_flush();
     }
 
     if local_checkpoint_failed {
@@ -1806,10 +1870,12 @@ fn emit_no_repo_agent_metrics(agent_run_result: Option<&AgentRunResult>) {
         .model(&agent_id.model)
         .prompt_id(prompt_id)
         .external_prompt_id(&agent_id.id)
-        .custom_attributes_map(crate::config::Config::get().custom_attributes());
+        .custom_attributes_map(crate::config::Config::fresh().custom_attributes());
 
     let values = crate::metrics::AgentUsageValues::new();
     crate::metrics::record(values, attrs);
+
+    observability::spawn_background_flush();
 }
 
 fn get_all_files_for_mock_ai(working_dir: &str) -> Vec<String> {
@@ -1952,4 +2018,22 @@ fn handle_show_transcript(args: &[String]) {
             std::process::exit(1);
         }
     }
+}
+
+/// Exit mirroring the child's termination status, re-raising the original
+/// signal on Unix so the calling shell sees the correct termination reason
+/// (e.g. SIGPIPE from `git ai log | head`).
+fn exit_with_log_status(status: std::process::ExitStatus) -> ! {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(sig) = status.signal() {
+            unsafe {
+                libc::signal(sig, libc::SIG_DFL);
+                libc::raise(sig);
+            }
+            unreachable!();
+        }
+    }
+    std::process::exit(status.code().unwrap_or(1));
 }

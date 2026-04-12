@@ -52,7 +52,8 @@ const columns = [
   {
     label: "仓库名称",
     prop: "repo_name",
-    minWidth: 150
+    width: 120,
+    slot: "repoName"
   },
   {
     label: "仓库地址",
@@ -74,7 +75,7 @@ const columns = [
   {
     label: "操作",
     fixed: "right",
-    minWidth: 240,
+    width: 300,
     slot: "operation"
   }
 ];
@@ -242,6 +243,19 @@ onMounted(() => {
           @page-size-change="handleSizeChange"
           @page-current-change="handleCurrentChange"
         >
+          <template #repoName="{ row }">
+            <el-tooltip
+              v-if="row.repo_name"
+              :content="row.repo_name"
+              placement="top-start"
+              effect="dark"
+            >
+              <span class="single-line-cell cursor-help">{{
+                row.repo_name
+              }}</span>
+            </el-tooltip>
+            <span v-else class="single-line-cell">-</span>
+          </template>
           <template #statsFlag="{ row }">
             <el-switch
               v-model="row.repo_stats_flag"
@@ -370,5 +384,13 @@ onMounted(() => {
   :deep(.el-form-item) {
     margin-bottom: 12px;
   }
+}
+
+.single-line-cell {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

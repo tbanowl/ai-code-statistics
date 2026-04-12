@@ -81,11 +81,11 @@ class DailyAggregationTask(BaseTask):
             )
 
             for key, stats in aggregated.items():
-                repo_path, author_name, author_email, author_uid = key
+                repo_path, author_name, author_email = key
 
                 repo_id = stats_db.get_or_create_repository(repo_path)
                 contributor_id = stats_db.get_or_create_contributor(
-                    author_name, author_email, contributor_uid=author_uid
+                    author_name, author_email
                 )
                 stats_db.ensure_repo_contributor_link(repo_id, contributor_id)
 
@@ -106,8 +106,7 @@ class DailyAggregationTask(BaseTask):
             repo_path = event.get("repo_url", "")
             author_name = event.get("author", "")
             author_email = event.get("author_email")
-            author_uid = event.get("author_uid") or author_name
-            key = (repo_path, author_name, author_email, author_uid)
+            key = (repo_path, author_name, author_email)
 
             if key not in aggregated:
                 aggregated[key] = {

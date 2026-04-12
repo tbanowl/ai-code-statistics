@@ -21,7 +21,6 @@ __pycache__/
 .Python
 *.egg-info/
 dist/
-build/
 
 # 测试
 .pytest_cache/

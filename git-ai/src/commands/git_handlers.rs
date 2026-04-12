@@ -186,14 +186,30 @@ pub fn handle_git(args: &[String]) {
     }
 
     let mut parsed_args = parse_git_cli_args(args);
+    debug_log(&format!("[handle-git] parsed_args {:?}", parsed_args));
 
+    // Command no hooks
+    if is_command_skip_hooks(&parsed_args) {
+        let orig_args: Vec<String> = std::env::args().skip(1).collect();
+        proxy_to_git(&orig_args, true, None, None);
+        return;
+    }
+
+    let find_repository_start = Instant::now();
     let mut repository_option = find_repository(&parsed_args.global_args).ok();
+    let find_repository_duration = find_repository_start.elapsed();
+    debug_log(&format!("[handle-git] find_repository {}ms", find_repository_duration.as_millis()));
 
+    let check_hooks_start = Instant::now();
     let has_repo = repository_option.is_some();
 
+    let get_config_start = Instant::now();
     let config = config::Config::get();
+    debug_log(&format!("[handle-git] get_config_start {}ms", get_config_start.elapsed().as_millis()));
 
+    let is_allowed_repository_start = Instant::now();
     let skip_hooks = !config.is_allowed_repository(&repository_option);
+    debug_log(&format!("[handle-git] is_allowed_repository_start {}ms", is_allowed_repository_start.elapsed().as_millis()));
 
     if skip_hooks {
         debug_log(
@@ -212,6 +228,8 @@ pub fn handle_git(args: &[String]) {
         clone_hooks::post_clone_hook(&parsed_args, exit_status);
         exit_with_status(exit_status);
     }
+    let check_hooks_duration = check_hooks_start.elapsed();
+    debug_log(&format!("[handle-git] check_hooks_duration {}ms", check_hooks_duration.as_millis()));
 
     // run with hooks
     let exit_status = if !parsed_args.is_help && has_repo && !skip_hooks {
@@ -227,9 +245,12 @@ pub fn handle_git(args: &[String]) {
 
         let repository = repository_option.as_mut().unwrap();
 
+        let resolve_alias_invocation_start = Instant::now();
         if let Some(resolved) = resolve_alias_invocation(&parsed_args, repository) {
             parsed_args = resolved;
         }
+        let resolve_alias_invocation_duration = resolve_alias_invocation_start.elapsed();
+        debug_log(&format!("[handle-git] resolve_alias_invocation_start {}ms", resolve_alias_invocation_duration.as_millis()));
 
         let pre_command_start = Instant::now();
         run_pre_command_hooks(&mut command_hooks_context, &mut parsed_args, repository);
@@ -280,6 +301,16 @@ pub fn handle_git(args: &[String]) {
     exit_with_status(exit_status);
 }
 
+fn is_command_skip_hooks(parsed_args: &ParsedGitInvocation) -> bool {
+    return match parsed_args.command.as_deref() {
+        Some("commit") | Some("pull") | Some("push") | Some("reset") | Some("merge") 
+        | Some("rebase") | Some("cherry-pick") | Some("stash") | Some("checkout") 
+        | Some("switch") | Some("update-ref") | Some("clone") 
+        => false,
+        _ => true
+    }
+}
+
 /// Handle alias invocations
 #[cfg(feature = "test-support")]
 pub fn resolve_alias_invocation(
@@ -303,13 +334,15 @@ fn resolve_alias_impl(
 ) -> Option<ParsedGitInvocation> {
     let mut current = parsed_args.clone();
     let mut seen: HashSet<String> = HashSet::new();
-
     loop {
+        let resolve_alias_start = Instant::now();
         let command = match current.command.as_deref() {
             Some(command) => command,
             None => return Some(current),
         };
+        debug_log(&format!("[resolve_alias_impl] command [{}] cost {}ms", &command, resolve_alias_start.elapsed().as_millis()));
 
+        let config_get_str_start = Instant::now();
         if !seen.insert(command.to_string()) {
             return None;
         }
@@ -319,17 +352,24 @@ fn resolve_alias_impl(
             Ok(Some(value)) => value,
             _ => return Some(current),
         };
+        debug_log(&format!("[resolve_alias_impl] config_get_str {}ms", config_get_str_start.elapsed().as_millis()));
 
+        let parse_alias_tokens_start = Instant::now();
         let alias_tokens = parse_alias_tokens(&alias_value)?;
+        debug_log(&format!("[resolve_alias_impl] parse_alias_tokens_start {}ms", parse_alias_tokens_start.elapsed().as_millis()));
 
+        let expanded_args_start = Instant::now();
         let mut expanded_args = Vec::new();
         expanded_args.extend(current.global_args.iter().cloned());
         expanded_args.extend(alias_tokens);
 
         // Append the original command args after the alias expansion
         expanded_args.extend(current.command_args.iter().cloned());
+        debug_log(&format!("[resolve_alias_impl] expanded_args_start {}ms", expanded_args_start.elapsed().as_millis()));
 
+        let parse_git_cli_args2_start = Instant::now();
         current = parse_git_cli_args(&expanded_args);
+        debug_log(&format!("[resolve_alias_impl] parse_git_cli_args2_start {}ms", parse_git_cli_args2_start.elapsed().as_millis()));
     }
 }
 
@@ -836,6 +876,12 @@ fn proxy_to_git(
             }
             cmd.args(args);
             cmd.env(ENV_SKIP_MANAGED_HOOKS, "1");
+            // Strip git-ai control vars so they don't leak into git subprocesses
+            // (e.g. alias scripts).  git-ai already consumed them; real git
+            // should not see them.  Notably, GIT_AI_ASYNC_MODE is read by the
+            // wrapper's FeatureFlags but must not appear inside alias scripts
+            // where tests like t0001-init.sh check for "no extra GIT_*" vars.
+            cmd.env_remove("GIT_AI_ASYNC_MODE");
             if suppress_trace2 {
                 cmd.env("GIT_TRACE2_EVENT", "0");
             }
@@ -869,6 +915,7 @@ fn proxy_to_git(
             }
             cmd.args(args);
             cmd.env(ENV_SKIP_MANAGED_HOOKS, "1");
+            cmd.env_remove("GIT_AI_ASYNC_MODE");
             if suppress_trace2 {
                 cmd.env("GIT_TRACE2_EVENT", "0");
             }

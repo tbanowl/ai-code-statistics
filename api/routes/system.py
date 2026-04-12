@@ -20,6 +20,7 @@ def _menu_to_frontend(menu):
         "id": menu.id,
         "parentId": menu.parent_id,
         "title": menu.title,
+        "name": menu.router_name,
         "path": menu.path,
         "component": menu.component,
         "icon": menu.icon,
@@ -92,7 +93,7 @@ def login():
     if not user or not _db.verify_password(user, password):
         return jsonify({"code": 400, "message": "用户名或密码错误"})
     roles = _db.get_user_roles(user.id)
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now()
     access_token = jwt.encode(
         {
             "userId": user.id,
@@ -135,7 +136,7 @@ def refresh_token():
         payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
     except Exception:
         return jsonify({"code": 401, "message": "refreshToken无效"})
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now()
     user_id = payload["userId"]
     roles = _db.get_user_roles(user_id)
     access_token = jwt.encode(
@@ -246,14 +247,14 @@ def user_add():
     return jsonify({"code": 0, "message": "操作成功"})
 
 
-@system_bp.route("/user/<int:user_id>", methods=["PUT"])
+@system_bp.route("/user/<user_id>", methods=["PUT"])
 @_token_required
 def user_update(user_id):
     _db.update_user(user_id, request.get_json(force=True, silent=True) or {})
     return jsonify({"code": 0, "message": "操作成功"})
 
 
-@system_bp.route("/user/<int:user_id>", methods=["DELETE"])
+@system_bp.route("/user/<user_id>", methods=["DELETE"])
 @_token_required
 def user_delete(user_id):
     _db.delete_user(user_id)
@@ -296,7 +297,7 @@ def list_all_role():
 def list_role_ids():
     data = request.get_json(force=True, silent=True) or {}
     user_id = data.get("userId")
-    ids = _db.get_role_ids_by_user(int(user_id)) if user_id is not None else []
+    ids = _db.get_role_ids_by_user(user_id) if user_id is not None else []
     return jsonify({"code": 0, "message": "操作成功", "data": ids})
 
 
@@ -335,14 +336,14 @@ def role_add():
     return jsonify({"code": 0, "message": "操作成功"})
 
 
-@system_bp.route("/role/<int:role_id>", methods=["PUT"])
+@system_bp.route("/role/<role_id>", methods=["PUT"])
 @_token_required
 def role_update(role_id):
     _db.update_role(role_id, request.get_json(force=True, silent=True) or {})
     return jsonify({"code": 0, "message": "操作成功"})
 
 
-@system_bp.route("/role/<int:role_id>", methods=["DELETE"])
+@system_bp.route("/role/<role_id>", methods=["DELETE"])
 @_token_required
 def role_delete(role_id):
     _db.delete_role(role_id)
@@ -357,7 +358,7 @@ def role_set_menus():
     return jsonify({"code": 0, "message": "操作成功"})
 
 
-@system_bp.route("/role/<int:role_id>/menu-ids", methods=["GET"])
+@system_bp.route("/role/<role_id>/menu-ids", methods=["GET"])
 @_token_required
 def role_menu_ids(role_id):
     ids = _db.get_menu_ids_by_role(role_id)
@@ -386,14 +387,14 @@ def menu_add():
     return jsonify({"code": 0, "message": "操作成功"})
 
 
-@system_bp.route("/menu/<int:menu_id>", methods=["PUT"])
+@system_bp.route("/menu/<menu_id>", methods=["PUT"])
 @_token_required
 def menu_update(menu_id):
     _db.update_menu(menu_id, request.get_json(force=True, silent=True) or {})
     return jsonify({"code": 0, "message": "操作成功"})
 
 
-@system_bp.route("/menu/<int:menu_id>", methods=["DELETE"])
+@system_bp.route("/menu/<menu_id>", methods=["DELETE"])
 @_token_required
 def menu_delete(menu_id):
     _db.delete_menu(menu_id)
@@ -426,14 +427,14 @@ def dept_add():
     return jsonify({"code": 0, "message": "操作成功"})
 
 
-@system_bp.route("/dept/<int:dept_id>", methods=["PUT"])
+@system_bp.route("/dept/<dept_id>", methods=["PUT"])
 @_token_required
 def dept_update(dept_id):
     _db.update_dept(dept_id, request.get_json(force=True, silent=True) or {})
     return jsonify({"code": 0, "message": "操作成功"})
 
 
-@system_bp.route("/dept/<int:dept_id>", methods=["DELETE"])
+@system_bp.route("/dept/<dept_id>", methods=["DELETE"])
 @_token_required
 def dept_delete(dept_id):
     _db.delete_dept(dept_id)

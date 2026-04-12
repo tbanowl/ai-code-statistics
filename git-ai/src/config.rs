@@ -76,8 +76,8 @@ pub struct Config {
     update_channel: UpdateChannel,
     feature_flags: FeatureFlags,
     api_base_url: String,
-    prompt_storage: String,
     notes_store: String,
+    prompt_storage: String,
     default_prompt_storage: Option<String>,
     #[serde(serialize_with = "serialize_masked_api_key")]
     api_key: Option<String>,
@@ -215,6 +215,7 @@ impl Config {
 
     pub fn is_allowed_repository(&self, repository: &Option<Repository>) -> bool {
         // Fetch remotes once and reuse for both exclude and allow checks
+
         let remotes = repository
             .as_ref()
             .and_then(|repo| repo.remotes_with_urls().ok());
@@ -631,15 +632,15 @@ fn build_config() -> Config {
     let notes_store = env::var("GIT_AI_NOTES_STORE")
         .ok()
         .or_else(|| file_cfg.as_ref().and_then(|c| c.notes_store.clone()))
-        .unwrap_or_else(|| "git".to_string());
+        .unwrap_or_else(|| "rest".to_string());
     let notes_store = match notes_store.as_str() {
         "git" | "rest" => notes_store,
         other => {
             eprintln!(
-                "Warning: Invalid notes_store value '{}', using 'git'",
+                "Warning: Invalid notes_store value '{}', using 'rest'",
                 other
             );
-            "git".to_string()
+            "rest".to_string()
         }
     };
 
@@ -822,8 +823,15 @@ fn resolve_git_path(file_cfg: &Option<FileConfig>) -> String {
         }
     }
 
-    // 2) Probe common locations across platforms
+    // 2) Probe common locations across platforms.
+    // Also check ~/.local/bin/git — the XDG user binary dir used by the Linux installer.
+    // All candidates are guarded by path_is_git_ai_binary so that a git-ai shim at any
+    // of these locations can never be returned as the "real git" (fork bomb prevention).
+    #[cfg(not(windows))]
+    let local_bin_git = format!("{}/.local/bin/git", home_dir().display());
     let candidates: &[&str] = &[
+        #[cfg(not(windows))]
+        local_bin_git.as_str(), // Linux/macOS user install (~/.local/bin/git-ai)
         // macOS Homebrew (ARM and Intel)
         "/opt/homebrew/bin/git",
         "/usr/local/bin/git",
@@ -837,7 +845,11 @@ fn resolve_git_path(file_cfg: &Option<FileConfig>) -> String {
         r"C:\\Program Files (x86)\\Git\\bin\\git.exe",
     ];
 
-    if let Some(found) = candidates.iter().map(Path::new).find(|p| is_executable(p)) {
+    if let Some(found) = candidates
+        .iter()
+        .map(Path::new)
+        .find(|p| is_executable(p) && !path_is_git_ai_binary(p))
+    {
         return found.to_string_lossy().to_string();
     }
 
@@ -1014,6 +1026,13 @@ fn path_is_git_ai_binary(path: &Path) -> bool {
     false
 }
 
+/// Returns true if `p` is an executable git binary that is NOT git-ai.
+/// Used by test infrastructure to probe for the real git binary independently
+/// of `Config::get()` (which reads HOME and must not be called before HOME is isolated).
+pub fn is_real_git_candidate(p: &Path) -> bool {
+    is_executable(p) && !path_is_git_ai_binary(p)
+}
+
 /// Apply test config patch from environment variable (test-only)
 /// Reads GIT_AI_TEST_CONFIG_PATCH env var containing JSON and applies patches to config
 #[cfg(any(test, feature = "test-support"))]
@@ -1110,7 +1129,7 @@ mod tests {
             feature_flags: FeatureFlags::default(),
             api_base_url: DEFAULT_API_BASE_URL.to_string(),
             prompt_storage: "default".to_string(),
-            notes_store: "git".to_string(),
+            notes_store: "rest".to_string(),
             default_prompt_storage: None,
             api_key: None,
             quiet: false,
@@ -1122,7 +1141,7 @@ mod tests {
     #[test]
     fn test_notes_store_defaults_to_git_in_test_helpers() {
         let config = create_test_config(vec![], vec![]);
-        assert_eq!(config.notes_store(), "git");
+        assert_eq!(config.notes_store(), "rest");
     }
 
     #[test]
@@ -1226,7 +1245,7 @@ mod tests {
             feature_flags: FeatureFlags::default(),
             api_base_url: DEFAULT_API_BASE_URL.to_string(),
             prompt_storage: "default".to_string(),
-            notes_store: "git".to_string(),
+            notes_store: "rest".to_string(),
             default_prompt_storage: None,
             api_key: None,
             quiet: false,
@@ -1345,7 +1364,7 @@ mod tests {
             feature_flags: FeatureFlags::default(),
             api_base_url: DEFAULT_API_BASE_URL.to_string(),
             prompt_storage: prompt_storage.to_string(),
-            notes_store: "git".to_string(),
+            notes_store: "rest".to_string(),
             default_prompt_storage: default_prompt_storage.map(|s| s.to_string()),
             api_key: None,
             quiet: false,

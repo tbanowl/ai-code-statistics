@@ -13,6 +13,7 @@ use crate::git::sync_authorship::{fetch_authorship_notes, push_authorship_notes}
 use crate::utils::debug_log;
 #[cfg(windows)]
 use crate::utils::is_interactive_terminal;
+use unicode_normalization::UnicodeNormalization;
 
 use gix_index::entry::Stage;
 use regex::Regex;
@@ -21,6 +22,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Instant;
 
 #[cfg(windows)]
 use crate::utils::CREATE_NO_WINDOW;
@@ -2216,18 +2218,20 @@ impl Repository {
         args.push("diff".to_string());
         args.push("-U0".to_string()); // Zero context lines
         args.push("--no-color".to_string());
-        args.push("--no-renames".to_string());
+        // Use permissive rename detection to properly handle renames
+        args.push("--find-renames=1%".to_string());
         args.push(from_ref.to_string());
         args.push(to_ref.to_string());
 
-        // Add pathspecs if provided (only as CLI args when under threshold)
+        // Add pathspecs if provided (only as CLI args when under threshold).
+        // Force post-filtering when any pathspec contains non-ASCII characters,
+        // because NFC-normalised pathspecs may not match NFD entries in git's
+        // index on macOS when core.precomposeunicode is false.
         let needs_post_filter = if let Some(paths) = pathspecs {
-            // for case where pathspec filter provided BUT not pathspecs.
-            // otherwise it would default to full repo
             if paths.is_empty() {
                 return Ok(HashMap::new());
             }
-            if paths.len() > MAX_PATHSPEC_ARGS {
+            if paths.len() > MAX_PATHSPEC_ARGS || has_non_ascii_pathspec(paths) {
                 true
             } else {
                 args.push("--".to_string());
@@ -2246,7 +2250,8 @@ impl Repository {
         let mut result = parse_diff_added_lines(&diff_output)?;
 
         if needs_post_filter && let Some(paths) = pathspecs {
-            result.retain(|path, _| paths.contains(path));
+            let nfc_paths: HashSet<String> = paths.iter().map(|s| s.nfc().collect()).collect();
+            result.retain(|path, _| nfc_paths.contains(path));
         }
 
         Ok(result)
@@ -2263,7 +2268,8 @@ impl Repository {
         args.push("diff".to_string());
         args.push("--name-only".to_string());
         args.push("-z".to_string()); // NUL-separated output for proper UTF-8 handling
-        args.push("--no-renames".to_string());
+        // Use permissive rename detection to properly handle renames
+        args.push("--find-renames=1%".to_string());
         args.push(from_ref.to_string());
         args.push(to_ref.to_string());
 
@@ -2294,17 +2300,16 @@ impl Repository {
         args.push("diff".to_string());
         args.push("-U0".to_string()); // Zero context lines
         args.push("--no-color".to_string());
-        args.push("--no-renames".to_string());
+        // Use permissive rename detection to properly handle renames
+        args.push("--find-renames=1%".to_string());
         args.push(from_ref.to_string());
 
-        // Add pathspecs if provided (only as CLI args when under threshold)
+        // See diff_added_lines for why non-ASCII pathspecs need post-filtering.
         let needs_post_filter = if let Some(paths) = pathspecs {
-            // for case where pathspec filter provided BUT not pathspecs.
-            // otherwise it would default to full repo
             if paths.is_empty() {
                 return Ok(HashMap::new());
             }
-            if paths.len() > MAX_PATHSPEC_ARGS {
+            if paths.len() > MAX_PATHSPEC_ARGS || has_non_ascii_pathspec(paths) {
                 true
             } else {
                 args.push("--".to_string());
@@ -2323,7 +2328,8 @@ impl Repository {
         let mut result = parse_diff_added_lines(&diff_output)?;
 
         if needs_post_filter && let Some(paths) = pathspecs {
-            result.retain(|path, _| paths.contains(path));
+            let nfc_paths: HashSet<String> = paths.iter().map(|s| s.nfc().collect()).collect();
+            result.retain(|path, _| nfc_paths.contains(path));
         }
 
         Ok(result)
@@ -2347,14 +2353,12 @@ impl Repository {
         args.push("--no-renames".to_string());
         args.push(from_ref.to_string());
 
-        // Add pathspecs if provided (only as CLI args when under threshold)
+        // See diff_added_lines for why non-ASCII pathspecs need post-filtering.
         let needs_post_filter = if let Some(paths) = pathspecs {
-            // for case where pathspec filter provided BUT not pathspecs.
-            // otherwise it would default to full repo
             if paths.is_empty() {
                 return Ok((HashMap::new(), HashMap::new()));
             }
-            if paths.len() > MAX_PATHSPEC_ARGS {
+            if paths.len() > MAX_PATHSPEC_ARGS || has_non_ascii_pathspec(paths) {
                 true
             } else {
                 args.push("--".to_string());
@@ -2374,8 +2378,9 @@ impl Repository {
             parse_diff_added_lines_with_insertions(&diff_output)?;
 
         if needs_post_filter && let Some(paths) = pathspecs {
-            all_added.retain(|path, _| paths.contains(path));
-            pure_insertions.retain(|path, _| paths.contains(path));
+            let nfc_paths: HashSet<String> = paths.iter().map(|s| s.nfc().collect()).collect();
+            all_added.retain(|path, _| nfc_paths.contains(path));
+            pure_insertions.retain(|path, _| nfc_paths.contains(path));
         }
 
         Ok((all_added, pure_insertions))
@@ -2392,6 +2397,8 @@ impl Repository {
 }
 
 pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError> {
+    let find_repository_start = Instant::now();
+    let exec_git_rev_parse_start = Instant::now();
     let mut rev_parse_args = global_args.to_owned();
     rev_parse_args.push("rev-parse".to_string());
     // Use --git-dir instead of --absolute-git-dir for compatibility with Git < 2.13
@@ -2430,7 +2437,15 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
     let git_common_dir_str = lines.next().ok_or_else(|| {
         GitAiError::Generic("Missing --git-common-dir output from git rev-parse".to_string())
     })?;
+    
+    debug_log(&format!("[find_repository] exec_git_rev_parse {}ms", exec_git_rev_parse_start.elapsed().as_millis()));
+
+    let resolve_command_base_dir_start = Instant::now();
     let command_base_dir = resolve_command_base_dir(global_args)?;
+    debug_log(&format!("[find_repository] resolve_command_base_dir {}ms", resolve_command_base_dir_start.elapsed().as_millis()));
+
+    
+    let check_git_dir_start = Instant::now();
     let git_dir = if Path::new(git_dir_str).is_relative() {
         command_base_dir.join(git_dir_str)
     } else {
@@ -2463,12 +2478,15 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
             ))
         })?
     } else {
+        let exec_git_rev_parse2_start = Instant::now();
         let mut top_level_args = global_args.to_owned();
         top_level_args.push("rev-parse".to_string());
         top_level_args.push("--show-toplevel".to_string());
         let output = exec_git(&top_level_args)?;
+        debug_log(&format!("[find_repository] exec_git_rev_parse2 {}ms", exec_git_rev_parse2_start.elapsed().as_millis()));
         PathBuf::from(String::from_utf8(output.stdout)?.trim())
     };
+    debug_log(&format!("[find_repository] check_git_dir {}ms", check_git_dir_start.elapsed().as_millis()));
 
     if !workdir.is_dir() {
         return Err(GitAiError::Generic(format!(
@@ -2477,6 +2495,7 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
         )));
     }
 
+    let normalized_global_args_start = Instant::now();
     // Ensure all internal git commands use a stable repository root consistently.
     let mut normalized_global_args = global_args.to_owned();
     let command_root = if is_bare {
@@ -2493,7 +2512,10 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
     {
         normalized_global_args[1] = command_root;
     }
+    debug_log(&format!("[find_repository] normalized_global_args cost {}ms", normalized_global_args_start.elapsed().as_millis()));
 
+    
+    let canonical_workdir_start = Instant::now();
     // Canonicalize workdir for reliable path comparisons (especially on Windows)
     // On Windows, canonical paths use the \\?\ UNC prefix, which makes path.starts_with()
     // comparisons work correctly. We store both regular and canonical versions.
@@ -2504,13 +2526,18 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
             e
         ))
     })?;
+    debug_log(&format!("[find_repository] canonical_workdir cost {}ms", canonical_workdir_start.elapsed().as_millis()));
 
+    let worktree_storage_ai_dir_start = Instant::now();
     let worktree_ai_dir = worktree_storage_ai_dir(&git_dir, &git_common_dir);
     let storage = if worktree_ai_dir == git_dir.join("ai") {
         RepoStorage::for_repo_path(&git_dir, &workdir)?
     } else {
         RepoStorage::for_isolated_worktree_storage(&worktree_ai_dir, &workdir)?
     };
+    debug_log(&format!("[find_repository] worktree_storage_ai_dir cost {}ms", worktree_storage_ai_dir_start.elapsed().as_millis()));
+    
+    debug_log(&format!("[find_repository] cost {}ms", find_repository_start.elapsed().as_millis()));
 
     Ok(Repository {
         global_args: normalized_global_args,
@@ -2911,11 +2938,16 @@ pub fn discover_repository_in_path_no_git_exec(path: &Path) -> Result<Repository
     )
 }
 
-/// Check if any directory between `workdir` and `file_path` contains a `.git/`
-/// directory, indicating a nested independent git repo.
+/// Check if any directory between `workdir` and `file_path` contains a `.git`
+/// entry that represents a **separate** git repository boundary.
 ///
-/// Only `.git` directories count -- `.git` files indicate submodules, which are
-/// transparent to the parent repo.
+/// `.git` directories (nested independent repos) and `.git` files that point
+/// to a *linked worktree* (i.e., `gitdir: .../worktrees/…`) are treated as
+/// boundaries — a file inside such a directory belongs to a different repo.
+///
+/// `.git` files that point to a *submodule* (i.e., `gitdir: .git/modules/…`)
+/// are intentionally transparent: the parent repo tracks the submodule's
+/// files, so they should still be considered part of the parent's workdir.
 fn has_intervening_git_dir(file_path: &Path, workdir: &Path) -> bool {
     let Ok(relative) = file_path.strip_prefix(workdir) else {
         return false;
@@ -2935,11 +2967,40 @@ fn has_intervening_git_dir(file_path: &Path, workdir: &Path) -> bool {
         }
         let potential_git = workdir.join(parent).join(".git");
         if potential_git.is_dir() {
+            // A .git directory always indicates a separate independent repo.
             return true;
+        }
+        if potential_git.is_file() {
+            // A .git file is either a submodule pointer or a linked-worktree
+            // pointer.  Only linked worktrees (gitdir points to …/worktrees/…)
+            // represent a separate working-tree boundary; submodule pointers
+            // (gitdir points to …/modules/…) are transparent to the parent.
+            if is_linked_worktree_git_file(&potential_git) {
+                return true;
+            }
         }
         current = parent;
     }
     false
+}
+
+/// Returns `true` if `git_file` is a `.git` file that points to a linked
+/// worktree (i.e., the `gitdir:` target path contains `/worktrees/`).
+fn is_linked_worktree_git_file(git_file: &Path) -> bool {
+    let Ok(contents) = std::fs::read_to_string(git_file) else {
+        return false;
+    };
+    // Format: "gitdir: <path>\n"
+    let Some(gitdir) = contents
+        .lines()
+        .find_map(|l| l.strip_prefix("gitdir:").map(str::trim))
+    else {
+        return false;
+    };
+    // A linked worktree's gitdir resolves to something like
+    // `/repo/.git/worktrees/<name>`.  A submodule's gitdir looks like
+    // `../.git/modules/<name>`.
+    gitdir.contains("/.git/worktrees/")
 }
 
 pub fn find_repository_in_path(path: &str) -> Result<Repository, GitAiError> {
@@ -3378,15 +3439,23 @@ fn parse_diff_added_lines_with_insertions(
     Ok((all_lines, insertion_lines))
 }
 
+/// Returns true if any path in the set contains non-ASCII characters.
+/// Used to decide whether git pathspecs need post-filtering instead of CLI args,
+/// since NFC-normalised pathspecs may not match NFD entries in git's index.
+fn has_non_ascii_pathspec(paths: &HashSet<String>) -> bool {
+    paths.iter().any(|s| !s.is_ascii())
+}
+
 fn normalize_diff_path_token(path: &str) -> String {
     let unescaped = crate::utils::unescape_git_path(path.trim_end());
     let prefixes = ["a/", "b/", "c/", "w/", "i/", "o/"];
-    for prefix in prefixes {
-        if let Some(stripped) = unescaped.strip_prefix(prefix) {
-            return stripped.to_string();
-        }
-    }
-    unescaped
+    let stripped = prefixes
+        .iter()
+        .find_map(|prefix| unescaped.strip_prefix(prefix))
+        .unwrap_or(&unescaped);
+    // Apply NFC normalization so decomposed (NFD) paths from git diff match
+    // NFC paths used internally (see normalize_to_posix).
+    stripped.nfc().collect()
 }
 
 fn parse_new_file_path_from_plus_header_line(line: &str) -> Option<Option<String>> {
@@ -4022,6 +4091,114 @@ index 0000000..abc1234 100644
                 .starts_with(common_dir.join("ai").join("worktrees")),
             "discovered worktree storage should be isolated under common-dir/ai/worktrees: {}",
             discovered.storage.working_logs.display()
+        );
+    }
+
+    #[test]
+    fn path_is_in_workdir_returns_false_for_linked_worktree_file() {
+        // Sibling worktree: the worktree lives OUTSIDE the main repo's working tree.
+        // path_is_in_workdir returns false purely because the path doesn't
+        // start_with(workdir) — no .git file inspection is needed.  This test
+        // passes even without the is_linked_worktree_git_file fix.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let main_repo = temp.path().join("main");
+        let worktree = temp.path().join("linked");
+
+        fs::create_dir_all(&main_repo).expect("create main repo dir");
+        run_git(&main_repo, &["init"]);
+        run_git(&main_repo, &["config", "user.name", "Test User"]);
+        run_git(&main_repo, &["config", "user.email", "test@example.com"]);
+        // Write a file so the sanity-check path exists on disk — path_is_in_workdir
+        // calls path.canonicalize() which only resolves symlinks for existing paths
+        // (on macOS /var/... is a symlink to /private/var/...; on Windows temp paths
+        // may use short names that differ from the canonical workdir stored by git).
+        fs::write(main_repo.join("README.md"), "# main\n").expect("write README");
+        run_git(&main_repo, &["worktree", "add", worktree.to_str().unwrap()]);
+
+        let dot_git = worktree.join(".git");
+        assert!(
+            dot_git.is_file(),
+            ".git should be a file in a linked worktree"
+        );
+
+        let main = find_repository_in_path(main_repo.to_str().unwrap()).expect("find main repo");
+
+        let wt_file = worktree.join("somefile.rs");
+        assert!(
+            !main.path_is_in_workdir(&wt_file),
+            "sibling linked worktree file should not be in main repo workdir"
+        );
+
+        // Use an existing file so path.canonicalize() resolves symlinks correctly.
+        let main_file = main_repo.join("README.md");
+        assert!(
+            main.path_is_in_workdir(&main_file),
+            "main repo file should be in main repo workdir"
+        );
+    }
+
+    #[test]
+    fn path_is_in_workdir_returns_false_for_nested_linked_worktree_file() {
+        // Nested worktree: the worktree lives INSIDE the main repo's working tree
+        // (e.g. main_repo/.worktrees/feature).  This is the exact Bug-A / Bug-B
+        // scenario: path starts_with(workdir) so the starts_with check passes,
+        // and only is_linked_worktree_git_file makes path_is_in_workdir return
+        // false.  This test FAILS without the fix.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let main_repo = temp.path().join("main");
+        let worktree = main_repo.join(".worktrees").join("feature");
+
+        fs::create_dir_all(&main_repo).expect("create main repo dir");
+        run_git(&main_repo, &["init"]);
+        run_git(&main_repo, &["config", "user.name", "Test User"]);
+        run_git(&main_repo, &["config", "user.email", "test@example.com"]);
+        // git worktree add requires at least one commit
+        fs::write(main_repo.join("README.md"), "# test\n").expect("write README");
+        run_git(&main_repo, &["add", "."]);
+        run_git(&main_repo, &["commit", "-m", "initial"]);
+        run_git(
+            &main_repo,
+            &["worktree", "add", "--detach", worktree.to_str().unwrap()],
+        );
+
+        let dot_git = worktree.join(".git");
+        assert!(
+            dot_git.is_file(),
+            ".git should be a file in a nested worktree"
+        );
+        let gitfile_content = fs::read_to_string(&dot_git).expect("read .git file");
+        assert!(
+            gitfile_content.contains("/worktrees/"),
+            ".git file should reference /worktrees/: {}",
+            gitfile_content.trim()
+        );
+
+        let main = find_repository_in_path(main_repo.to_str().unwrap()).expect("find main repo");
+
+        // The nested worktree file is physically under main_repo/ but must NOT
+        // be reported as part of the main repo's working tree.
+        let wt_file = worktree.join("somefile.rs");
+        assert!(
+            !main.path_is_in_workdir(&wt_file),
+            "nested linked worktree file should not be in main repo workdir \
+             (path starts_with workdir, but .git file marks a repo boundary)"
+        );
+
+        // Sanity: file is in the worktree's own workdir.
+        let wt_repo =
+            find_repository_in_path(worktree.to_str().unwrap()).expect("find nested worktree");
+        assert!(
+            wt_repo.path_is_in_workdir(&wt_file),
+            "nested worktree file should be in the worktree's own workdir"
+        );
+
+        // Sanity: a normal file in the main repo is still in the main workdir.
+        // Use README.md which already exists so path.canonicalize() resolves
+        // symlinks correctly (macOS /var/... → /private/var/...; Windows short names).
+        let main_file = main_repo.join("README.md");
+        assert!(
+            main.path_is_in_workdir(&main_file),
+            "main repo file should be in main repo workdir"
         );
     }
 

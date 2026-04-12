@@ -7,7 +7,7 @@ from core.config.logging import Logger
 from core.scheduler.registry import register_all
 from core.scheduler.tasks.base import BaseTask
 from core.database import SchedulerDatabase
-
+from core.utils.scheduler_util import convert_corn
 
 # 模块级变量，用于存储调度器实例（供任务执行函数使用）
 _scheduler_instance: Optional['AICodeScheduler'] = None
@@ -56,6 +56,7 @@ class AICodeScheduler:
             job_defaults=job_defaults,
             timezone=timezone
         )
+        self.scheduler
 
     def _setup_jobstore(self) -> Dict[str, Any]:
         """
@@ -213,10 +214,12 @@ class AICodeScheduler:
                 "id": job.id,
                 "name": job.name,
                 "next_run_time": job.next_run_time,
-                "trigger": str(job.trigger),
+                "corn": convert_corn(job.trigger),
+                "status": "running" if job.pending else "idle"
             }
             for job in self.scheduler.get_jobs()
         ]
+        
 
     def trigger_job_with_execution(
         self, job_id: str, context: Optional[Dict] = None

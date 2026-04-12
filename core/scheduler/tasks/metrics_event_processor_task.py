@@ -45,8 +45,7 @@ class MetricsEventProcessorTask(BaseTask):
             author_name, author_email = MetricsEventProcessorTask._parse_author(
                 author_raw
             )
-            author_uid = (author_raw or author_name or "unknown").strip() or "unknown"
-            pair_key = (repo_path, author_uid)
+            pair_key = (repo_path, author_name)
 
             if pair_key in seen_pairs:
                 continue
@@ -54,8 +53,7 @@ class MetricsEventProcessorTask(BaseTask):
             repo_id = stats_db.get_or_create_repository(repo_path)
             contributor_id = stats_db.get_or_create_contributor(
                 author_name,
-                author_email,
-                contributor_uid=author_uid,
+                author_email
             )
             stats_db.ensure_repo_contributor_link(repo_id, contributor_id)
             seen_pairs.add(pair_key)

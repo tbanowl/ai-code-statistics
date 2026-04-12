@@ -10,125 +10,6 @@ class SystemDatabase(BaseDatabase):
         super().__init__()
         Base.metadata.create_all(self.engine)
 
-    def init_default_data(self):
-        with session_scope(self.engine) as session:
-            if session.execute(select(SysUser).limit(1)).first():
-                return
-            dept = SysDept(name="总公司", sort=0)
-            session.add(dept)
-            session.flush()
-
-            role = SysRole(name="超级管理员", code="admin")
-            session.add(role)
-            session.flush()
-
-            user = SysUser(
-                username="admin",
-                password=generate_password_hash("admin123"),
-                nickname="管理员",
-                dept_id=dept.id,
-            )
-            session.add(user)
-            session.flush()
-
-            session.add(SysUserRole(user_id=user.id, role_id=role.id))
-
-            menus = [
-                SysMenu(
-                    parent_id=0,
-                    title="系统管理",
-                    path="/system",
-                    icon="ri:settings-3-line",
-                    rank=1,
-                    menu_type=0,
-                ),
-            ]
-            session.add_all(menus)
-            session.flush()
-
-            sub_menus = [
-                SysMenu(
-                    parent_id=menus[0].id,
-                    title="用户管理",
-                    path="/system/user/index",
-                    component="system/user/index",
-                    icon="ri:admin-line",
-                    rank=1,
-                    menu_type=1,
-                ),
-                SysMenu(
-                    parent_id=menus[0].id,
-                    title="角色管理",
-                    path="/system/role/index",
-                    component="system/role/index",
-                    icon="ri:admin-fill",
-                    rank=2,
-                    menu_type=1,
-                ),
-                SysMenu(
-                    parent_id=menus[0].id,
-                    title="菜单管理",
-                    path="/system/menu/index",
-                    component="system/menu/index",
-                    icon="ep:menu",
-                    rank=3,
-                    menu_type=1,
-                ),
-                SysMenu(
-                    parent_id=menus[0].id,
-                    title="部门管理",
-                    path="/system/dept/index",
-                    component="system/dept/index",
-                    icon="ri:git-branch-line",
-                    rank=4,
-                    menu_type=1,
-                ),
-            ]
-            session.add_all(sub_menus)
-            session.flush()
-
-            repo_menu = SysMenu(
-                parent_id=0,
-                title="仓库管理",
-                path="/repo-manage",
-                icon="ri:git-repository-line",
-                rank=2,
-                menu_type=0,
-            )
-            session.add(repo_menu)
-            session.flush()
-
-            repo_sub_menus = [
-                SysMenu(
-                    parent_id=repo_menu.id,
-                    title="仓库列表",
-                    path="/repo-manage/list",
-                    component="repo-manage/list/index",
-                    icon="ri:git-repository-fill",
-                    rank=1,
-                    menu_type=1,
-                ),
-                SysMenu(
-                    parent_id=repo_menu.id,
-                    title="SSH Key 管理",
-                    path="/repo-manage/ssh-key",
-                    component="repo-manage/ssh-key/index",
-                    icon="ri:key-line",
-                    rank=2,
-                    menu_type=1,
-                ),
-            ]
-            session.add_all(repo_sub_menus)
-            session.flush()
-
-            all_menu_ids = (
-                [menus[0].id]
-                + [m.id for m in sub_menus]
-                + [repo_menu.id]
-                + [m.id for m in repo_sub_menus]
-            )
-            for menu_id in all_menu_ids:
-                session.add(SysRoleMenu(role_id=role.id, menu_id=menu_id))
 
     def get_user_by_username(self, username: str) -> Optional[SysUser]:
         with session_scope(self.engine) as session:
@@ -139,7 +20,7 @@ class SystemDatabase(BaseDatabase):
     def verify_password(self, user: SysUser, password: str) -> bool:
         return check_password_hash(user.password, password)
 
-    def get_user_roles(self, user_id: int) -> List[str]:
+    def get_user_roles(self, user_id: str) -> List[str]:
         with session_scope(self.engine) as session:
             rows = (
                 session.execute(
@@ -230,7 +111,7 @@ class SystemDatabase(BaseDatabase):
                 session.add(SysUserRole(user_id=user.id, role_id=role_id))
             return user
 
-    def update_user(self, user_id: int, data: Dict):
+    def update_user(self, user_id: str, data: Dict):
         with session_scope(self.engine) as session:
             user = session.get(SysUser, user_id)
             if not user:
@@ -240,7 +121,7 @@ class SystemDatabase(BaseDatabase):
                     setattr(user, field, data[field])
             if "deptId" in data or "parentId" in data:
                 next_dept_id = data.get("deptId", data.get("parentId"))
-                user.dept_id = 0 if next_dept_id in (None, "") else int(next_dept_id)
+                user.dept_id = "0" if next_dept_id in (None, "") else next_dept_id
             if "roleIds" in data:
                 session.execute(
                     delete(SysUserRole).where(SysUserRole.user_id == user_id)
@@ -260,7 +141,7 @@ class SystemDatabase(BaseDatabase):
             if user:
                 user.password = generate_password_hash(password)
 
-    def get_role_ids_by_user(self, user_id: int) -> List[int]:
+    def get_role_ids_by_user(self, user_id: str) -> List[str]:
         with session_scope(self.engine) as session:
             return list(
                 session.execute(
@@ -342,7 +223,7 @@ class SystemDatabase(BaseDatabase):
             for menu_id in menu_ids:
                 session.add(SysRoleMenu(role_id=role_id, menu_id=menu_id))
 
-    def get_menu_ids_by_role(self, role_id: int) -> List[int]:
+    def get_menu_ids_by_role(self, role_id: str) -> List[str]:
         with session_scope(self.engine) as session:
             return list(
                 session.execute(
@@ -362,16 +243,17 @@ class SystemDatabase(BaseDatabase):
     def create_menu(self, data: Dict) -> SysMenu:
         with session_scope(self.engine) as session:
             menu = SysMenu(
-                parent_id=data.get("parentId", 0),
+                parent_id=data.get("parentId", "0"),
                 title=data["title"],
+                router_name=data["name"],
                 path=data.get("path"),
                 component=data.get("component"),
                 icon=data.get("icon"),
                 rank=data.get("rank", 0),
                 menu_type=data.get("menuType", 0),
                 status=data.get("status", 1),
-                show_link=data.get("showLink", 1),
-                keep_alive=data.get("keepAlive", 0),
+                show_link=data.get("showLink", True),
+                keep_alive=data.get("keepAlive", False),
             )
             menu.show_link = 1 if data.get("showLink", True) else 0
             menu.keep_alive = 1 if data.get("keepAlive", False) else 0
@@ -386,6 +268,7 @@ class SystemDatabase(BaseDatabase):
             field_map = {
                 "parentId": "parent_id",
                 "title": "title",
+                "router_name":"name",
                 "path": "path",
                 "component": "component",
                 "icon": "icon",

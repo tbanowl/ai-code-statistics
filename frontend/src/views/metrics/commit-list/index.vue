@@ -12,8 +12,6 @@ defineOptions({
   name: "MetricsCommitList"
 });
 
-const formRef = ref();
-const tableRef = ref();
 const loading = ref(false);
 const dataList = ref<CommittedReportItem[]>([]);
 const dateRange = ref<[Date, Date] | []>([]);
@@ -32,23 +30,10 @@ const pagination = ref({
 });
 
 const columns = computed(() => [
-  { label: "仓库地址", prop: "repo_url", width: 180, slot: "repoUrl" },
+  { label: "仓库地址", prop: "repo_url", width: 300, slot: "repoUrl" },
   { label: "提交者", prop: "author", minWidth: 140 },
   { label: "分支", prop: "branch", minWidth: 140, maxWidth: 200 },
   { label: "提交时间", prop: "timestamp", width: 170, slot: "timestamp" },
-  { label: "人工添加行数", prop: "human_additions", width: 120 },
-  {
-    label: "Git diff 删除行数",
-    prop: "git_diff_deleted_lines",
-    width: 140
-  },
-  { label: "Git diff 添加行数", prop: "git_diff_added_lines", width: 140 },
-  {
-    label: "第一个检查点时间",
-    prop: "first_checkpoint_ts",
-    width: 170,
-    slot: "firstCheckpointTs"
-  },
   { label: "提交主题", prop: "commit_subject", minWidth: 120, maxWidth: 200 },
   {
     label: "提交正文",
@@ -57,18 +42,32 @@ const columns = computed(() => [
     maxWidth: 200,
     slot: "commitBody"
   },
-  { label: "工具", prop: "tool_model_pairs", width: 180 },
+  { label: "人工添加行数", prop: "human_additions", width: 120 },
+  {
+    label: "Git diff 删除行数",
+    prop: "git_diff_deleted_lines",
+    width: 140
+  },
+  { label: "Git diff 添加行数", prop: "git_diff_added_lines", width: 140 },
+  { label: "工具&模型", prop: "tool_model_pairs", width: 180 },
   { label: "混编行数", prop: "mixed_additions", width: 110 },
   { label: "AI 添加行数", prop: "ai_additions", width: 110 },
   { label: "AI 接受行数", prop: "ai_accepted", width: 110 },
   { label: "AI 累积总添加行数", prop: "total_ai_additions", width: 150 },
   { label: "AI 累积总删除行数", prop: "total_ai_deletions", width: 150 },
   {
+    label: "第一个检查点时间",
+    prop: "first_checkpoint_ts",
+    width: 170,
+    slot: "firstCheckpointTs"
+  },
+  {
     label: "Commit SHA",
     prop: "base_commit_sha",
     minWidth: 180,
     slot: "baseCommitSha"
-  }
+  },
+  { label: "Git-AI 版本", prop: "git_ai_version", width: 100 }
 ]);
 
 const defaultDateRange = (): [Date, Date] => {
