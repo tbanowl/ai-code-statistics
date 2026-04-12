@@ -1,0 +1,22 @@
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.6-2",
+  "base_commit_sha": "ebfc01a6d62fcdc3ec9d16eb1ac8bd4e098ab598",
+  "prompts": {
+    "e12fd58357acd12b": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_280649a67ffeDIGDua3m9DiHwO",
+        "model": "anthropic/claude-opus-4-6"
+      },
+      "human_author": "ZhangLei <tbanowl@gmail.com>",
+      "messages": [],
+      "total_additions": 260,
+      "total_deletions": 12,
+      "accepted_lines": 298,
+      "overriden_lines": 8,
+      "messages_url": "http://localhost:8888/cas/c45c7fe547179e45ba37878cd5f952b6b5a496502b87ece3667bc419782737ce"
+    }
+  }
+}
