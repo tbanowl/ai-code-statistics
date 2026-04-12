@@ -3,7 +3,7 @@ Git AI 代码统计 - 独立 Web 应用 v2.0
 统计 GitLab/GitHub 仓库中 AI 生成代码的占比。
 """
 
-from flask import Flask, send_from_directory, jsonify
+from flask import Flask, send_from_directory
 import os
 import sys
 from core.config.loader import load_config_by_path
