@@ -1,0 +1,30 @@
+frontend/src/views/repo-manage/list/index.vue
+  e12fd58357acd12b 2,9-12,24-26,47-57,59-68,170,174,184-256,424,426-433,446,448,454-473,477-485,489-527
+core/database/blame_stats_db.py
+  e12fd58357acd12b 251-303
+api/routes/stats_repo.py
+  e12fd58357acd12b 349-418
+frontend/src/api/repo.ts
+  e12fd58357acd12b 60-71
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.6-2",
+  "base_commit_sha": "9bff2ffa9d973785c20df59c6398b8709c7f0c3d",
+  "prompts": {
+    "e12fd58357acd12b": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_280649a67ffeDIGDua3m9DiHwO",
+        "model": "anthropic/claude-opus-4-6"
+      },
+      "human_author": "ZhangLei <tbanowl@gmail.com>",
+      "messages": [],
+      "total_additions": 53,
+      "total_deletions": 22,
+      "accepted_lines": 319,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8888/cas/6274f2d0d06e95d97aa8181babf471024f86b49d70d3b90e93d3ce9c287ac16e"
+    }
+  }
+}
