@@ -233,6 +233,7 @@ CREATE TABLE IF NOT EXISTS authorship_notes (
     repo_url VARCHAR(200) NOT NULL COMMENT '仓库 URL',
     branch VARCHAR(100) NOT NULL COMMENT '分支名称',
     commit_sha VARCHAR(40) NOT NULL COMMENT '提交 SHA',
+    commit_time BIGINT NOT NULL DEFAULT 0 COMMENT '提交时间戳（秒）',
     note_blob_oid VARCHAR(40) COMMENT 'Note Blob OID',
     author_name VARCHAR(100) NOT NULL COMMENT '作者名称',
     author_email VARCHAR(100) NOT NULL COMMENT '作者邮箱',

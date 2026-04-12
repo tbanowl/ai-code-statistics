@@ -8,6 +8,7 @@ from core.scheduler.registry import register_all
 from core.scheduler.tasks.base import BaseTask
 from core.database import SchedulerDatabase
 from core.utils.scheduler_util import convert_corn
+import threading
 
 # 模块级变量，用于存储调度器实例（供任务执行函数使用）
 _scheduler_instance: Optional['AICodeScheduler'] = None
@@ -209,16 +210,23 @@ class AICodeScheduler:
         return None
 
     def get_all_jobs(self) -> list:
-        return [
-            {
+        jobs = []
+        job_ids = set()
+        for job in self.scheduler.get_jobs():
+            jobs.append({
                 "id": job.id,
                 "name": job.name,
                 "next_run_time": job.next_run_time,
                 "corn": convert_corn(job.trigger),
-                "status": "running" if job.pending else "idle"
-            }
-            for job in self.scheduler.get_jobs()
-        ]
+                "status": "idle",  # 默认状态，后续会根据执行记录更新
+            })
+            job_ids.add(job.id)
+        running_jobs = self.scheduler_db.get_running_jobs(list(job_ids))  # 预加载执行记录，避免后续查询时重复访问数据库
+        if not running_jobs:
+            return jobs
+        for job in jobs:
+            job["status"] = "running" if job["id"] in [r[0] for r in running_jobs] else "idle"
+        return jobs
         
 
     def trigger_job_with_execution(
@@ -262,7 +270,15 @@ class AICodeScheduler:
         original_before_execute = task_instance.before_execute
         task_instance.before_execute = lambda: context or {}
         try:
-            task_instance.run(execution_id=execution_id)
+            # 触发任务（异步，避免长时间任务阻塞请求）
+            def _run_async():
+                try:
+                    task_instance.run(execution_id=execution_id)
+                except Exception as e:
+                    self.logger.error(f"异步任务执行异常: {job_id}", e)
+
+            thread = threading.Thread(target=_run_async, daemon=True)
+            thread.start()
             self.logger.info(f"已触发任务: {job_id}")
         except Exception as e:
             self.logger.info("任务执行失败: {job_id}", e)

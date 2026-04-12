@@ -14,7 +14,6 @@ from .models import AuthorshipNotes, gen_xid
 class AuthorshipNotesDatabase(BaseDatabase):
     """Authorship Notes 数据库操作类"""
 
-
     def create_or_update_note(
         self,
         repo_url: str,
@@ -156,9 +155,9 @@ class AuthorshipNotesDatabase(BaseDatabase):
                     note.note_content = note_data["content"]
                     note.author_name = note_data["author_name"]
                     note.author_email = note_data["author_email"]
+                    note.commit_time = note_data.get("commit_time", 0)
                     updated += 1
                 else:
-                    # 创建
                     note = AuthorshipNotes(
                         id=gen_xid(),
                         repo_url=repo_url,
@@ -170,6 +169,7 @@ class AuthorshipNotesDatabase(BaseDatabase):
                         note_content=note_data["content"],
                         author_name=note_data["author_name"],
                         author_email=note_data["author_email"],
+                        commit_time=note_data.get("commit_time"),
                     )
                     session.add(note)
                     existing_shas.add(commit_sha)
@@ -177,21 +177,16 @@ class AuthorshipNotesDatabase(BaseDatabase):
 
         return {"created": created, "updated": updated}
 
-    def list_notes(self, repo_url: str) -> List[str]:
-        """列出仓库中所有有注释的提交 SHA
-
-        Args:
-            repo_url: 仓库远程 URL
-
-        Returns:
-            list: 提交 SHA 列表
-        """
+    def list_notes(
+        self, repo_url: str, since_commit_time: int | None = None
+    ) -> List[str]:
         with session_scope(self.engine) as session:
-            stmt = (
-                select(AuthorshipNotes.commit_sha)
-                .where(AuthorshipNotes.repo_url == repo_url)
-                .order_by(AuthorshipNotes.commit_sha)
+            stmt = select(AuthorshipNotes.commit_sha).where(
+                AuthorshipNotes.repo_url == repo_url
             )
+            if since_commit_time is not None:
+                stmt = stmt.where(AuthorshipNotes.commit_time >= since_commit_time)
+            stmt = stmt.order_by(AuthorshipNotes.commit_sha)
             return list(session.execute(stmt).scalars().all())
 
     def search_notes(self, repo_url: str, pattern: str) -> List[str]:

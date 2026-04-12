@@ -57,9 +57,10 @@ class NotesRestService:
         """批量推送（创建/更新）notes"""
         return self.database.batch_push_notes(repo_url=repo_url, notes_data=notes_data)
 
-    def list_notes(self, repo_url: str):
-        """列出仓库中所有有注释的提交 SHA"""
-        return self.database.list_notes(repo_url=repo_url)
+    def list_notes(self, repo_url: str, since_commit_time: int | None = None):
+        return self.database.list_notes(
+            repo_url=repo_url, since_commit_time=since_commit_time
+        )
 
     def search_notes(self, repo_url: str, pattern: str):
         """在注释内容中搜索"""

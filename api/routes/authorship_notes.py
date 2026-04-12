@@ -6,12 +6,16 @@ from core.middleware.auth import auth_required
 from core.services.notes_service import NotesRestService
 
 git_notes_rest_bp = Blueprint("notes_rest", __name__, url_prefix="/worker/notes")
-authorship_notes_rest_bp = Blueprint("authorship_notes_rest", __name__, url_prefix="/worker/authorship_notes")
+authorship_notes_rest_bp = Blueprint(
+    "authorship_notes_rest", __name__, url_prefix="/worker/authorship_notes"
+)
 logger = Logger.get_logger("api.notes")
+
+service = NotesRestService(db_url=os.environ.get("DB_URL"))
 
 
 def get_notes_service() -> NotesRestService:
-    return NotesRestService(db_url=os.environ.get("DB_URL"))
+    return service
 
 
 def ok_response(data):
@@ -211,6 +215,7 @@ def batch_push_notes():
             {
                 "branch": "main",
                 "commit_sha": "abc123...",
+                "commit_time": 1711670400,
                 "note_blob_oid": "abc3434",
                 "author_name": "John Doe",
                 "author_email": "john@example.com",
@@ -271,7 +276,10 @@ def list_notes():
         if "repo_url" not in payload:
             return error_response("缺少必需字段: repo_url", 400)
 
-        commit_shas = get_notes_service().list_notes(repo_url=payload["repo_url"])
+        since_commit_time = payload.get("since_commit_time")
+        commit_shas = get_notes_service().list_notes(
+            repo_url=payload["repo_url"], since_commit_time=since_commit_time
+        )
 
         return ok_response({"commit_shas": commit_shas})
 

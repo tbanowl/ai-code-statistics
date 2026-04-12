@@ -104,6 +104,24 @@ class SchedulerDatabase(BaseDatabase):
                 .first()
             )
             return execution.to_dict() if execution else None
+    
+    
+
+    def get_running_jobs(self, job_ids: list) -> Optional[list]:
+        """
+        获取正在运行的任务执行记录（pending 或 running）。
+
+        Args:
+            job_ids: 任务 ID 列表
+
+        Returns:
+            执行记录字典，或 None
+        """
+        with session_scope(self.engine) as session:
+            return session.query(TaskExecution.job_id)\
+                .filter(TaskExecution.job_id.in_(job_ids))\
+                .filter(TaskExecution.status.in_(["pending", "running"]))\
+                .all()
 
     def get_task_execution(self, execution_id: str | None) -> Optional[Dict]:
         """

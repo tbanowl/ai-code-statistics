@@ -417,6 +417,7 @@ class AuthorshipNotes(ModelBase):
     author_name: Mapped[str] = mapped_column(Text, nullable=False)
     author_email: Mapped[str] = mapped_column(Text, nullable=False)
     note_content: Mapped[str] = mapped_column(Text, nullable=False)
+    commit_time: Mapped[int] = mapped_column(BigInteger, nullable=True, index=True)
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
     updated_at: Mapped[int] = mapped_column(
         BigInteger, nullable=False, default=now_ts, onupdate=now_ts

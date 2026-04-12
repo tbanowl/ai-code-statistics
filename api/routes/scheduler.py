@@ -74,13 +74,13 @@ def trigger_job():
             return jsonify({'success': False, 'error': 'jobId 不能为空'})
         scheduler = get_scheduler()
         if scheduler is None:
-            return jsonify({'success': False, 'error': '调度器未启用'}), 503
+            return jsonify({'success': False, 'error': '调度器未启用'})
 
         # 检查任务是否在注册表中
         from core.scheduler.registry import TaskRegistry
         task_class = TaskRegistry.get(job_id)
         if not task_class:
-            return jsonify({'success': False, 'error': '任务不存在'}), 404
+            return jsonify({'success': False, 'error': '任务不存在'})
 
         # 触发任务
         execution_id = scheduler.trigger_job_with_execution(job_id)
@@ -92,8 +92,8 @@ def trigger_job():
                 return jsonify({
                     'success': False,
                     'error': '任务正在执行中'
-                }), 409
-            return jsonify({'success': False, 'error': '任务触发失败'}), 500
+                })
+            return jsonify({'success': False, 'error': '任务触发失败'})
 
         return jsonify({
             'success': True,
@@ -106,7 +106,7 @@ def trigger_job():
 
     except Exception as e:
         logging.error('手动触发任务失败', e)
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': str(e)})
 
 
 @scheduler_bp.route('/jobs/history/executions', methods=['GET'])

@@ -140,11 +140,14 @@ pub struct CAPromptStoreReadResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AuthorshipNotesListRequest {
     pub repo_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since_commit_time: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AuthorshipNotesListData {
     pub commit_shas: Vec<String>,
+    pub note_blob_oids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -187,6 +190,7 @@ pub struct AuthorshipNotesPushItem {
     pub author_name: String,
     pub author_email: String,
     pub content: String,
+    pub commit_time: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

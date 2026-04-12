@@ -241,6 +241,10 @@ pub fn notes_add_batch(repo: &Repository, entries: &[(String, String)]) -> Resul
     let mut fast_import_args = repo.global_args_for_exec();
     fast_import_args.push("fast-import".to_string());
     fast_import_args.push("--quiet".to_string());
+    debug_log(&format!(
+        "Executing git fast-import with script: {}",
+        String::from_utf8_lossy(&script)
+    ));
     exec_git_stdin(&fast_import_args, &script)?;
     crate::authorship::git_ai_hooks::post_notes_updated(repo, &deduped_entries);
 
@@ -357,10 +361,12 @@ pub enum CommitAuthorship {
     NoLog {
         sha: String,
         git_author: String,
+        commit_time: i64,
     },
     Log {
         sha: String,
         git_author: String,
+        commit_time: i64,
         authorship_log: AuthorshipLog,
     },
 }
@@ -377,7 +383,7 @@ pub fn get_commits_with_notes_from_list(
     let mut args = repo.global_args_for_exec();
     args.push("rev-list".to_string());
     args.push("--no-walk".to_string());
-    args.push("--pretty=format:%H%n%an%n%ae".to_string());
+    args.push("--pretty=format:%H%n%an%n%ae%n%ct".to_string());
     for sha in commit_shas {
         args.push(sha.clone());
     }
@@ -386,7 +392,7 @@ pub fn get_commits_with_notes_from_list(
     let stdout = String::from_utf8(output.stdout)
         .map_err(|_| GitAiError::Generic("Failed to parse git rev-list output".to_string()))?;
 
-    let mut commit_authors = HashMap::new();
+    let mut commit_authors: HashMap<String, (String, i64)> = HashMap::new();
     let lines: Vec<&str> = stdout.lines().collect();
     let mut i = 0;
     while i < lines.len() {
@@ -394,13 +400,14 @@ pub fn get_commits_with_notes_from_list(
         // Skip commit headers (start with "commit ")
         if line.starts_with("commit ") {
             i += 1;
-            if i + 2 < lines.len() {
+            if i + 3 < lines.len() {
                 let sha = lines[i].to_string();
                 let name = lines[i + 1].to_string();
                 let email = lines[i + 2].to_string();
+                let commit_time: i64 = lines[i + 3].parse().unwrap_or(0);
                 let author = format!("{} <{}>", name, email);
-                commit_authors.insert(sha, author);
-                i += 3;
+                commit_authors.insert(sha, (author, commit_time));
+                i += 4;
             } else {
                 break;
             }
@@ -412,22 +419,24 @@ pub fn get_commits_with_notes_from_list(
     // Build the result Vec
     let mut result = Vec::new();
     for sha in commit_shas {
-        let git_author = commit_authors
+        let (git_author, commit_time) = commit_authors
             .get(sha)
             .cloned()
-            .unwrap_or_else(|| "Unknown".to_string());
+            .unwrap_or_else(|| ("Unknown".to_string(), 0));
 
         // Check if this commit has a note by trying to show it
         if let Some(authorship_log) = get_authorship(repo, sha) {
             result.push(CommitAuthorship::Log {
                 sha: sha.clone(),
                 git_author,
+                commit_time,
                 authorship_log,
             });
         } else {
             result.push(CommitAuthorship::NoLog {
                 sha: sha.clone(),
                 git_author,
+                commit_time,
             });
         }
     }
@@ -1170,6 +1179,7 @@ mod tests {
                     sha,
                     git_author: _,
                     authorship_log: _,
+                    commit_time: _,
                 } => {
                     // This is expected - verify SHA matches
                     let expected_sha = &commit_list[idx];
