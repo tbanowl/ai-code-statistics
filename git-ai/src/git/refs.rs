@@ -241,10 +241,7 @@ pub fn notes_add_batch(repo: &Repository, entries: &[(String, String)]) -> Resul
     let mut fast_import_args = repo.global_args_for_exec();
     fast_import_args.push("fast-import".to_string());
     fast_import_args.push("--quiet".to_string());
-    debug_log(&format!(
-        "Executing git fast-import with script: {}",
-        String::from_utf8_lossy(&script)
-    ));
+
     exec_git_stdin(&fast_import_args, &script)?;
     crate::authorship::git_ai_hooks::post_notes_updated(repo, &deduped_entries);
 
