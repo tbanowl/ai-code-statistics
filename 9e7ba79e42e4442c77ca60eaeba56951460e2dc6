@@ -1,0 +1,40 @@
+.sisyphus/plans/incremental-notes-sync.md
+  10ea508e06d3fb57 1-163
+core/services/notes_service.py
+  10ea508e06d3fb57 60-63
+core/database/authorship_notes_db.py
+  10ea508e06d3fb57 172,180-182,184-185,187-189
+core/database/models.py
+  10ea508e06d3fb57 420
+git-ai/src/api/types.rs
+  10ea508e06d3fb57 143-144,193
+api/routes/authorship_notes.py
+  10ea508e06d3fb57 9-11,279-282
+git-ai/src/git/sync_authorship.rs
+  10ea508e06d3fb57 2-4,520-533,539-544,567-571,603,626,629-633,635-638,640,654,657,668,733-735,745-747
+git-ai/src/git/refs.rs
+  10ea508e06d3fb57 364,369,386,395,403,407,409-410,422,425,432,439
+git-ai/src/authorship/range_authorship.rs
+  10ea508e06d3fb57 159
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.6-2",
+  "base_commit_sha": "9e7ba79e42e4442c77ca60eaeba56951460e2dc6",
+  "prompts": {
+    "10ea508e06d3fb57": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_27ef93165ffe8uTdSC9wnIfKQN",
+        "model": "anthropic/claude-opus-4-6"
+      },
+      "human_author": "ZhangLei <tbanowl@gmail.com>",
+      "messages": [],
+      "total_additions": 8,
+      "total_deletions": 26,
+      "accepted_lines": 249,
+      "overriden_lines": 0,
+      "messages_url": "http://localhost:8888/cas/385792472e40a95939221f294af6653acc2cd794d80b75b18d5ddf1795d1bfa3"
+    }
+  }
+}
