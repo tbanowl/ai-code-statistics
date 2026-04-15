@@ -186,7 +186,6 @@ pub fn handle_git(args: &[String]) {
     }
 
     let mut parsed_args = parse_git_cli_args(args);
-    debug_log(&format!("[handle-git] parsed_args {:?}", parsed_args));
 
     // Command no hooks
     if is_command_skip_hooks(&parsed_args) {

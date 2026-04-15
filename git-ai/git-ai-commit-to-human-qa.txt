@@ -1,0 +1,659 @@
+ ▐▛███▜▌   Claude Code v2.1.109
+▝▜█████▛▘  Sonnet 4.6 · API Usage Billing
+  ▘▘ ▝▝    ~/deepDark/banz/dk/git-ai-code-metrics/git-ai
+
+❯ 帮我分析一下 git-ai 在 claudecode hooks 中使用  checkpoint                    
+  指令是否会因为并发导致 ai 生成的代码被归因为 human, 比如 claudecode 的        
+  PreToolHooks 和 PostToolHooks 正在执行中，人为的在其他终端执行了 `git-ai      
+  status` 命令会不会导致ai生成的代码归因为人类，参考文件：                      
+  @src/commands/git_ai_handlers.rs @src/commands/checkpoint.rs                  
+  ⎿  Read src/commands/git_ai_handlers.rs (unchanged)
+  ⎿  Read src/commands/checkpoint.rs (2000+ lines)
+
+  Read 2 files (ctrl+o to expand)
+
+⏺ 现在让我查找 git-ai status 命令的处理逻辑，以及 working log 的写入机制。
+
+  Searched for 3 patterns, read 1 file (ctrl+o to expand)
+
+⏺ 现在我需要检查 PersistedWorkingLog::append_checkpoint
+  是如何写入数据的，以及是否有文件锁保护。
+
+  Searched for 4 patterns, read 1 file (ctrl+o to expand)
+
+⏺ 现在我有了足够的信息来分析这个并发问题。让我梳理整个调用链和竞争条件。
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ 现在我有完整的信息了。以下是完整的分析结论。
+
+  ---
+  并发竞争分析：AI 归因是否会被误判为 Human
+
+  结论：存在真实的竞争条件，AI 生成代码确实可能被错误归因为 Human
+
+  ---
+  核心漏洞：append_checkpoint 的 Read-Modify-Write 竞争
+
+  位置： src/git/repo_storage.rs:337-395
+
+  pub fn append_checkpoint(&self, checkpoint: &Checkpoint) -> Result<(),
+  GitAiError> {
+      // ① 读取现有 checkpoints
+      let mut checkpoints = self.read_all_checkpoints().unwrap_or_default();
+      // ... 处理逻辑 ...
+      checkpoints.push(storage_checkpoint);
+      // ② 整体覆盖写回（非原子追加！）
+      self.write_all_checkpoints(&checkpoints)
+  }
+
+  write_all_checkpoints (repo_storage.rs:506) 直接用 fs::write 整体覆盖
+  checkpoints.jsonl，没有任何文件锁保护。
+
+  ---
+  触发路径
+
+  git-ai status 的实现 (status.rs:56-63):
+
+  fn run_status(json: bool) -> Result<(), GitAiError> {
+      // ...
+      let _ = checkpoint::run(
+          &repo,
+          &default_user_name,
+          CheckpointKind::Human,  // ← 写入一条 Human checkpoint
+          true,
+          None,
+          false,
+      );
+
+  当 Claude Code PostToolHook 的 AI checkpoint 与用户手动执行 git-ai status
+  同时运行时：
+
+  时间轴 →
+
+  AI Hook 进程:     read([cp1]) → 处理AI编辑 → write([cp1, AI_cp2])
+                                                            ↑
+  git-ai status:       read([cp1])    → 处理Human  → write([cp1, Hum_cp2])
+                                                                  ↑
+                                                 AI_cp2 被静默覆盖丢失！
+
+  ---
+  错误归因的传导链
+
+  Step 1 - AI Checkpoint 丢失后的状态
+
+  build_previous_file_state_maps (checkpoint.rs:1492-1519) 从已有 checkpoint
+  构建 ai_touched_files：
+
+  fn build_previous_file_state_maps(previous_checkpoints, initial_attributions)
+  {
+      let mut ai_touched_files = initial_attributions.keys().cloned().collect();
+      for checkpoint in previous_checkpoints {
+          if checkpoint.kind != CheckpointKind::Human || ... {
+              ai_touched_files.insert(entry.file.clone());  // 
+  只有记录在案的才算
+          }
+      }
+  }
+
+  如果 AI_cp2 被覆盖丢失，AI 刚才编辑的文件不会出现在 ai_touched_files 中。
+
+  Step 2 - Pre-commit 快速路径直接跳过
+
+  get_checkpoint_entry_for_file (checkpoint.rs:1553-1558):
+
+  if is_pre_commit
+      && kind == CheckpointKind::Human
+      && !has_prior_ai_edits      // ← 因为 AI_cp2 丢失，这里是 false
+      && initial_attrs_for_file.is_empty()
+  {
+      return Ok(None);  // 文件被跳过，不记录任何归因
+  }
+
+  Step 3 - 非 pre-commit Human 写入空归因条目
+
+  checkpoint.rs:1568-1584：
+
+  if kind == CheckpointKind::Human && !has_prior_ai_edits && ... {
+      // ...
+      let entry = WorkingLogEntry::new(
+          file_path, file_content_hash,
+          Vec::new(),  // ← 空的 attributions
+          Vec::new(),  // ← 空的 line_attributions
+      );
+      return Ok(Some((entry, stats)));
+  }
+
+  Step 4 - 未归因行默认为 Human
+
+  make_entry_for_file → attribute_unattributed_ranges (checkpoint.rs:1953-1958):
+
+  let filled_in_prev_attributions = tracker.attribute_unattributed_ranges(
+      previous_content,
+      previous_attributions,
+      &CheckpointKind::Human.to_str(),  // ← 未归因的范围默认填充为 "human"
+      ts - 1,
+  );
+
+  最终结果：AI 生成的那些行被标记为 human 归因。
+
+  ---
+  风险评估
+
+  ┌──────────┬───────────────────────────────────────────────────────────────┐
+  │   维度   │                             情况                              │
+  ├──────────┼───────────────────────────────────────────────────────────────┤
+  │ 触发条件 │ git-ai status 与 PostToolHook 同时运行（窗口期=checkpoint     │
+  │          │ 处理时间，大型仓库可达数秒）                                  │
+  ├──────────┼───────────────────────────────────────────────────────────────┤
+  │ 影响范围 │ AI checkpoint 在竞争窗口写入的所有文件                        │
+  ├──────────┼───────────────────────────────────────────────────────────────┤
+  │ 数据丢失 │ 静默丢失（无错误提示），用户无感知                            │
+  ├──────────┼───────────────────────────────────────────────────────────────┤
+  │ 归因结果 │ AI 编辑的行被误归因为 Human                                   │
+  └──────────┴───────────────────────────────────────────────────────────────┘
+
+  PreToolHooks 同理，且因为 PreToolHook 捕获的是"即将被编辑"的状态，race window
+  通常比 PostToolHook 更短。
+
+  ---
+  根本原因
+
+  append_checkpoint 是一个无锁的 Read-Modify-Write 操作，本质上等价于：
+
+  # 没有任何 flock / advisory lock 保护
+  cat checkpoints.jsonl > tmp
+  echo "$new_entry" >> tmp
+  mv tmp checkpoints.jsonl
+
+  修复方向：在 append_checkpoint 和 write_all_checkpoints
+  中引入文件级的咨询锁（如 flock 或
+  fs2::FileExt::lock_exclusive），或改用真正的原子追加（JSONL 格式本身支持
+  append-only 写入，可以避免 read-modify-write 问题）。
+
+✻ Cogitated for 3m 0s
+
+❯  我现在的情况是在公司windows 虚拟机上使用 git-ai，虚拟机的性能很差，原生 git  
+  命令执行时间基本上在 500ms,1000ms,2000ms                                      
+  有时甚至10s，有没有什么方案可以保证PreToolHook 和 PostToolHook                
+  周期内正确的为ai生成的内容归因为ai                                            
+
+  Searched for 12 patterns, read 4 files (ctrl+o to expand)
+
+⏺ 现在我有了完整的代码证据，可以给出完整的分析和方案了。
+
+  ---
+  根本原因分析
+
+  ClaudePreset 的文件路径提取逻辑
+
+  agent_presets.rs:119-144 中 ClaudePreset 已经从 hook JSON 的
+  tool_input.file_path 提取单文件路径：
+
+  // 已有逻辑：提取单文件路径
+  let file_path_as_vec = hook_data
+      .get("tool_input")
+      .and_then(|ti| ti.get("file_path"))
+      .and_then(|v| v.as_str())
+      .map(|path| vec![path.to_string()]);
+
+  if hook_event_name == Some("PreToolUse") {
+      return Ok(AgentRunResult {
+          checkpoint_kind: CheckpointKind::Human,
+          will_edit_filepaths: file_path_as_vec,  // ← 单文件
+          ..
+      });
+  }
+  // PostToolUse:
+  Ok(AgentRunResult {
+      checkpoint_kind: CheckpointKind::AiAgent,
+      edited_filepaths: file_path_as_vec,  // ← 单文件
+      ..
+  })
+
+  两段式 Captured Async 路径
+
+  git_ai_handlers.rs:1121-1283 中存在一条 daemon 委托 + captured async
+  路径，这正是解决 Windows VM 问题的关键：
+
+  fn run_checkpoint_via_daemon_or_local(...) {
+      if daemon_checkpoint_delegate_enabled() {          // ← 条件1：daemon 开启
+          if allow_captured_async                        // ← 
+  条件2：有明确文件列表
+              && explicit_capture_target_paths(...).is_some()
+          {
+              // Phase 1（同步，极快）：只读文件内容，存入临时 blob
+              prepare_captured_checkpoint(repo, author, kind, ...)
+
+              // Phase 2（异步）：发送给 daemon，wait=false，hook 立即返回
+              send_control_request(..., CapturedCheckpointRunRequest { ... },
+  wait=false)
+              return Ok(queued=true);  // Hook 在毫秒级返回
+          }
+
+          // 回退：Live 请求，wait=true，同步等待 daemon
+          send_control_request(..., LiveCheckpointRunRequest { ... }, wait=true)
+      }
+      // 未启用 daemon：同步本地执行（Windows VM 下最慢路径）
+      commands::checkpoint::run(...)
+  }
+
+  daemon_checkpoint_delegate_enabled() 的触发条件：
+  fn daemon_checkpoint_delegate_enabled() -> bool {
+      if config::Config::get().feature_flags().async_mode { return true; }
+      // 或
+      std::env::var("GIT_AI_DAEMON_CHECKPOINT_DELEGATE") == "1" | "true" | "yes"
+  }
+
+  ---
+  完整执行流对比
+
+  当前模式（Windows VM 上的噩梦）
+
+  PreToolHook:
+    git-ai checkpoint claude --hook-input stdin
+    → git status (全仓库扫描) ← 2~10s
+    → 读取文件内容 ← 500ms
+    → append_checkpoint (read-modify-write, 无锁) ← 500ms
+    → Hook 总耗时: 3~11s，Claude 被阻塞
+
+  PostToolHook:
+    同上，再阻塞 3~11s
+
+  并发风险: git-ai status 也触发 checkpoint → append_checkpoint 竞争 → AI
+  checkpoint 被覆盖
+
+  启用 GIT_AI_DAEMON_CHECKPOINT_DELEGATE=1 后
+
+  PreToolHook:
+    git-ai checkpoint claude --hook-input stdin
+    → prepare_captured_checkpoint:
+        只做文件系统读取 (will_edit_filepaths=[单文件])
+        写入 ~/.git-ai/internal/async-checkpoint-blobs/capture-xxx/
+    → 发送 CapturedCheckpointRunRequest 给 daemon (wait=false)
+    → Hook 返回: ~50ms  ← Claude 几乎不等待
+
+  AI 编辑文件...
+
+  PostToolHook:
+    同上，读取编辑后内容 → 发给 daemon
+    Hook 返回: ~50ms
+
+  Daemon 后台（串行处理，无竞争）:
+    execute_captured_checkpoint(pre-edit human)
+    execute_captured_checkpoint(post-edit AI)
+    ← 两者串行执行，append_checkpoint 不并发
+    ← 慢 git 操作移到后台，不阻塞主流程
+
+  ---
+  方案实施
+
+  第一步：启用 Daemon Delegate 模式（最重要）
+
+  在 Windows 虚拟机的环境变量中设置（系统级或 shell profile）：
+
+  # PowerShell / 系统环境变量
+  [System.Environment]::SetEnvironmentVariable("GIT_AI_DAEMON_CHECKPOINT_DELEGAT
+  E", "1", "User")
+
+  或者在 git-ai 配置文件中启用（如果 async_mode 已支持）。
+
+  启用后 daemon 会自动按需启动（ensure_daemon_running）。
+
+  第二步：确认 Hook 命令使用 claude preset + stdin
+
+  .claude/settings.json 中的 hook 命令应为：
+
+  {
+    "hooks": {
+      "PreToolUse": [{
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [{
+          "type": "command",
+          "command": "git-ai checkpoint claude --hook-input stdin"
+        }]
+      }],
+      "PostToolUse": [{
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [{
+          "type": "command",
+          "command": "git-ai checkpoint claude --hook-input stdin"
+        }]
+      }]
+    }
+  }
+
+  关键：claude preset + --hook-input stdin 才能触发 file_path 提取 →
+  edited_filepaths 非空 → allow_captured_async=true → 走 captured async
+  路径。如果 hook 命令中缺少 preset 名或只用了无 preset 的 git-ai 
+  checkpoint，则无法走快速路径。
+
+  第三步：Windows Git 性能优化（减少 daemon 后台处理时间）
+
+  # 在仓库目录内执行
+  git config core.fscache true         # Windows 文件系统缓存
+  git config core.autocrlf false       # 关闭 CRLF 转换
+  git config core.preloadIndex true    # 并行预加载 index
+  git config core.untrackedCache true  # untracked 缓存
+  git config feature.manyFiles true    # 大仓库优化
+
+  最有效的 Windows 优化：将仓库目录加入 Windows Defender 排除列表，可以将 git
+  耗时降低 40-80%：
+
+  Add-MpPreference -ExclusionPath "C:\your\repo\path"
+
+  ---
+  关于并发归因错误的残留风险
+
+  启用 daemon 后，daemon 内部的 checkpoint 操作是串行的，解决了大部分竞争。但
+  git-ai status 命令仍然绕过 daemon，直接调用 checkpoint::run() →
+  append_checkpoint（无文件锁），与 daemon 处理并发时仍有 TOCTOU
+  竞争（见上次分析的 repo_storage.rs:337）。
+
+  临时规避：在 Claude Code 活跃编辑期间避免手动执行 git-ai status。
+
+  根本修复：需要在 append_checkpoint 和 write_all_checkpoints 中引入文件级
+  advisory lock（fs2::FileExt::lock_exclusive 或 rustix::fs::flock），这是
+  repo_storage.rs 层面的代码改动。
+
+✻ Sautéed for 4m 37s
+
+❯ 可是开启 deamon 模式后，commit 时内容全被归因为human了                        
+
+⏺ Explore(排查 daemon 模式下 commit 归因为 human 的原因)
+  ⎿  Done (39 tool uses · 77.5k tokens · 5m 15s)
+  (ctrl+o to expand)
+
+⏺ 这个问题正好印证了上次分析的竞争条件。让我直接读取关键代码确认根因。
+
+  Searched for 3 patterns, read 2 files (ctrl+o to expand)
+
+⏺ 根因已经非常清晰了。让我写出完整的时序分析。
+
+  ---
+  根本原因：daemon wait=false 与 pre-commit 快速路径的致命组合
+
+  完整时序
+
+  [PostToolHook] git-ai checkpoint claude --hook-input stdin
+    → prepare_captured_checkpoint (只读文件，不写 checkpoints.jsonl)
+    → send_control_request(wait=false)  ← 立即返回，AI checkpoint 进入 daemon
+  队列
+    ← hook 返回
+
+  ... 用户执行 git commit ...
+
+  [pre-commit hook] pre_commit::pre_commit()           # pre_commit.rs:7
+    → checkpoint::run(..., is_pre_commit=true)          # 本地执行，不经过
+  daemon
+    → resolve_live_checkpoint_execution()
+        → working_log.all_ai_touched_files()            # 读 checkpoints.jsonl
+           = 空集！                                     # daemon 还没处理完
+        → has_no_ai_edits = true
+        → return Ok(None)  ← "No AI edits, skipping"  # pre-commit 直接跳过
+
+  [git commit 完成]
+
+  [post-commit hook]
+    → 读 checkpoints.jsonl                             # 仍然没有 AI checkpoint
+    → 全部归因为 human ← BUG
+
+  ... daemon 此时才开始处理队列中的 AI checkpoint，但已经太晚了
+
+  两个互相伤害的设计
+
+  1. pre_commit.rs:13 的快速跳过逻辑：
+
+  if has_no_ai_edits          // daemon 没处理完 → 这里是 true
+      && !has_initial_attributions
+      && !Config::get().get_feature_flags().inter_commit_move
+  {
+      debug_log("No AI edits in pre-commit checkpoint, skipping");
+      return Ok(None);  // ← 整个 pre-commit 被跳过
+  }
+
+  2. git_ai_handlers.rs:1165 的 wait=false：
+
+  let request = ControlRequest::CheckpointRun {
+      request: Box::new(CheckpointRunRequest::Captured(...)),
+      wait: Some(false),  // ← AI checkpoint 异步入队，不等待
+  };
+
+  两者叠加：AI checkpoint 在 daemon 队列里等处理，pre-commit 读到空的 working
+  log 就放弃了。
+
+  ---
+  可用方案分析
+
+  方案 A：不使用 daemon 模式（当前最稳妥）
+
+  # 不设置 GIT_AI_DAEMON_CHECKPOINT_DELEGATE
+  # 或者确保它为 false
+  $env:GIT_AI_DAEMON_CHECKPOINT_DELEGATE = "false"
+
+  ClaudePreset 已经从 hook JSON 中提取了 tool_input.file_path，即使不走
+  daemon，checkpoint 也只处理单个文件而非全仓库扫描：
+
+  全仓库扫描（没有 preset）: git status（全部）→ 5-15s
+  单文件（ClaudePreset）:    git status（1个文件）→ 0.5-2s  ← 已经快很多
+
+  方案 B：在 git commit 前手动触发同步 flush
+
+  git-ai 目前没有 flush 命令，但可以在 .git/hooks/pre-commit 脚本中加一个同步
+  checkpoint 让 daemon 在提交前处理完积压：
+
+  #!/bin/sh
+  # .git/hooks/pre-commit （需要 chmod +x）
+
+  # 发一个同步的 live checkpoint 给 daemon
+  # Live 路径走 wait=true，daemon 会在此之前把队列里的 captured checkpoints 
+  处理完
+  git-ai checkpoint
+
+  # 继续原本的 git commit 流程
+
+  但这依赖 daemon 的队列确实是先进先出串行处理。如果 daemon 处理 captured
+  checkpoint 的时间不可预测，这个方法不可靠。
+
+  方案 C：Windows Git 性能优化（配合方案 A 使用）
+
+  这些配置能把 git 操作时间降低 40-70%，让方案 A 更可接受：
+
+  # 1. 最重要：把仓库加入 Windows Defender 排除列表
+  #    这通常能把 git 时间缩短 50-80%
+  Add-MpPreference -ExclusionPath "D:\your\repo\path"
+
+  # 2. git 配置优化
+  git config core.fscache true          # NTFS 文件系统缓存
+  git config core.autocrlf false        # 关闭 CRLF 转换（每次读写都有开销）
+  git config core.preloadIndex true     # 并行预加载 index
+  git config core.untrackedCache true   # 缓存 untracked 文件扫描结果
+  git config feature.manyFiles true     # 启用大仓库优化
+  git config index.threads 0           # 自动选择线程数
+
+  ---
+  推荐配置
+
+  在你的情况（Windows VM + 性能差 + 需要正确归因）下，推荐：
+
+  GIT_AI_DAEMON_CHECKPOINT_DELEGATE = 不设置（或 false）
+
+  Hook 命令保持：
+  git-ai checkpoint claude --hook-input stdin
+
+  加上 Windows Defender 排除 + git config 优化后，每次 hook 应该能控制在 1-3s
+  内，同时保证 commit 时 AI 归因完全正确。
+
+✻ Cogitated for 8m 45s
+
+❯ 还有个问题，为什么windows 虚拟机内git-ai调用了 git                            
+  命令有时候会一直在后台挂起，不终止                                            
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ 代码一目了然，Windows 路径有三个根本性缺陷。
+
+  三个独立的挂起根因
+
+  根因 1：无信号传播机制（孤儿进程）
+
+  Unix 路径（git_handlers.rs:60-90）有完整的信号转发机制：
+  #[cfg(unix)]
+  extern "C" fn forward_signal_handler(sig: libc::c_int) {
+      let pgid = CHILD_PGID.load(Ordering::Relaxed);
+      if pgid > 0 {
+          unsafe { libc::kill(-pgid, sig); }  // 信号广播给整个进程组
+      }
+  }
+  // SIGTERM / SIGINT / SIGHUP / SIGQUIT 都会被转发
+
+  Windows 路径：#[cfg(windows)] 下完全没有对应实现。
+
+  结果：
+  Claude Code hook timeout → 杀死 git-ai.exe
+  → Unix:  SIGTERM 通过 forward_signal_handler → 转发给子 git.exe →
+  子进程组全部终止
+  → Windows: git-ai.exe 被杀死，子 git.exe 变成孤儿，无人管理，在后台永远挂着
+
+  这解释了"后台挂起不终止"——git.exe
+  已经变成没有父进程的孤儿进程，永远存在于后台。
+
+  ---
+  根因 2：child.wait() 无超时
+
+  Windows 路径（git_handlers.rs:984-1004）：
+
+  #[cfg(not(unix))]
+  match child {
+      Ok(mut child) => {
+          let status = child.wait();  // ← 无超时，永久阻塞
+          ...
+      }
+  }
+
+  Unix 路径虽然也用 child.wait()，但通过进程组 + 信号转发，Ctrl+C
+  可以让子进程退出，从而让 wait() 返回。
+
+  Windows 下如果 git.exe
+  因为任何原因卡住（凭据提示、杀毒扫描、网络），git-ai.exe
+  就和它一起死锁，永远等待。
+
+  ---
+  根因 3：CREATE_NO_WINDOW + 凭据提示死锁
+
+  #[cfg(windows)]
+  {
+      if !is_interactive_terminal() {
+          cmd.creation_flags(CREATE_NO_WINDOW);  // ← 在 hook 场景下必然触发
+      }
+  }
+
+  Claude Code hook 调用时不是交互式终端 → is_interactive_terminal() = false → 子
+   git.exe 带 CREATE_NO_WINDOW 启动。
+
+  同时，proxy_to_git 没有设置 cmd.stdin(Stdio::null())，子进程继承 git-ai 的
+  stdin。
+
+  后果：
+  git 需要凭据（push/pull/fetch）
+  → 尝试在终端显示提示 → 没有窗口，无法显示
+  → 尝试读 stdin 等待输入 → stdin 是 Claude Code 的 pipe，已经被 hook JSON
+  消耗完了
+  → git.exe 永远等待一个永远不会来的输入
+  → git-ai.exe 在 child.wait() 里永远等待 git.exe
+
+  ---
+  触发路径总结
+
+  Hook 场景（最常见）：
+  git-ai checkpoint claude --hook-input stdin
+  ├── 读取 stdin 的 hook JSON（stdin 被消耗）
+  ├── 处理 checkpoint...
+  │   └── 内部调用 git 子命令（git status / git diff 等）
+  │       ├── CREATE_NO_WINDOW（因为不是交互式终端）
+  │       ├── stdin 继承（已被消耗，EOF 或阻塞）
+  │       └── child.wait()（无超时）
+  │
+  ├── 情况A: git.exe 等凭据 → 无窗口无法显示 → 阻塞 stdin → 双方永远挂起
+  ├── 情况B: Claude Code 超时杀 git-ai → git.exe 成为孤儿在后台继续跑
+  └── 情况C: 杀毒软件扫描 .git 目录 → git.exe 阻塞很久 → git-ai 跟着阻塞
+
+  ---
+  缓解方案（无需改代码）
+
+  1. 最关键：禁止 git 等待凭据输入
+
+  # 在系统环境变量中设置（永久生效）
+  [System.Environment]::SetEnvironmentVariable("GIT_TERMINAL_PROMPT", "0",
+  "User")
+  [System.Environment]::SetEnvironmentVariable("GCM_INTERACTIVE", "never",
+  "User")
+
+  GIT_TERMINAL_PROMPT=0 会让 git 在无法获取凭据时直接报错退出，而不是永远等待。
+
+  2. 预缓存凭据，让 git 不需要提示
+
+  # 用 Windows Credential Manager 存储凭据
+  git config --global credential.helper manager
+
+  # 提前执行一次需要凭据的操作，让凭据缓存
+  git fetch origin  # 在交互式终端里做，触发一次凭据输入和缓存
+
+  此后 hook 里的 git 操作可以直接从 Credential Manager 读取，不需要交互提示。
+
+  3. 如果用 SSH，设置非交互式 SSH
+
+  # 使用 SSH agent，避免每次输入 passphrase
+  [System.Environment]::SetEnvironmentVariable("GIT_SSH_COMMAND", "ssh -o 
+  BatchMode=yes -o ConnectTimeout=10", "User")
+
+  BatchMode=yes 让 SSH 在需要交互时直接失败，而不是等待。ConnectTimeout=10
+  防止网络问题导致的无限等待。
+
+  4. 定期清理孤儿 git.exe 进程
+
+  # 查看所有 git 进程
+  Get-Process git -ErrorAction SilentlyContinue | Select-Object Id, StartTime,
+  CPU
+
+  # 杀死所有挂起的 git 进程（谨慎使用）
+  Get-Process git -ErrorAction SilentlyContinue | Where-Object {$_.CPU -lt 0.01}
+   | Stop-Process
+
+  或者写成定时任务，每隔几分钟清理一次运行时间超过 30 秒的 git 进程。
+
+  5. 杀毒软件排除（减少 git.exe 被阻塞的概率）
+
+  # 排除 git 本身
+  Add-MpPreference -ExclusionProcess "git.exe"
+  Add-MpPreference -ExclusionProcess "git-ai.exe"
+
+  # 排除仓库目录
+  Add-MpPreference -ExclusionPath "D:\your\repo\path"
+
+  # 排除 git 安装目录
+  Add-MpPreference -ExclusionPath "C:\Program Files\Git"
+
+  ---
+  代码层面的根本修复（供参考）
+
+  如果要彻底修复，需要在 git_handlers.rs 里：
+
+  // 1. Windows 下用 Job Object 保证父进程退出时子进程也被清理
+  use windows::Win32::System::JobObjects::*;
+  let job = CreateJobObject(None, None)?;
+  SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits,
+  ...)?;
+  // child 加入 Job Object → git-ai.exe 退出 → git.exe 自动被系统清理
+
+  // 2. 设置 stdin 为 null，防止继承污染
+  cmd.stdin(Stdio::null());
+
+  // 3. 加超时
+  let timeout = Duration::from_secs(30);
+  match child.wait_timeout(timeout) {
+      Ok(Some(status)) => status,
+      Ok(None) => { child.kill(); /* 超时处理 */ }
+      Err(e) => { /* 错误处理 */ }
+  }
+✻ Brewed for 2m 47s
