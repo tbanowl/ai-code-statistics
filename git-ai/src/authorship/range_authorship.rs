@@ -156,9 +156,9 @@ pub fn range_authorship(
             commits_without_authorship_with_authors: commit_authorship
                 .iter()
                 .filter_map(|ca| match ca {
-                    CommitAuthorship::NoLog { sha, git_author, .. } => {
-                        Some((sha.clone(), git_author.clone()))
-                    }
+                    CommitAuthorship::NoLog {
+                        sha, git_author, ..
+                    } => Some((sha.clone(), git_author.clone())),
                     _ => None,
                 })
                 .collect(),

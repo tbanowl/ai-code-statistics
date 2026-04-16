@@ -2437,14 +2437,19 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
     let git_common_dir_str = lines.next().ok_or_else(|| {
         GitAiError::Generic("Missing --git-common-dir output from git rev-parse".to_string())
     })?;
-    
-    debug_log(&format!("[find_repository] exec_git_rev_parse {}ms", exec_git_rev_parse_start.elapsed().as_millis()));
+
+    debug_log(&format!(
+        "[find_repository] exec_git_rev_parse {}ms",
+        exec_git_rev_parse_start.elapsed().as_millis()
+    ));
 
     let resolve_command_base_dir_start = Instant::now();
     let command_base_dir = resolve_command_base_dir(global_args)?;
-    debug_log(&format!("[find_repository] resolve_command_base_dir {}ms", resolve_command_base_dir_start.elapsed().as_millis()));
+    debug_log(&format!(
+        "[find_repository] resolve_command_base_dir {}ms",
+        resolve_command_base_dir_start.elapsed().as_millis()
+    ));
 
-    
     let check_git_dir_start = Instant::now();
     let git_dir = if Path::new(git_dir_str).is_relative() {
         command_base_dir.join(git_dir_str)
@@ -2483,10 +2488,16 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
         top_level_args.push("rev-parse".to_string());
         top_level_args.push("--show-toplevel".to_string());
         let output = exec_git(&top_level_args)?;
-        debug_log(&format!("[find_repository] exec_git_rev_parse2 {}ms", exec_git_rev_parse2_start.elapsed().as_millis()));
+        debug_log(&format!(
+            "[find_repository] exec_git_rev_parse2 {}ms",
+            exec_git_rev_parse2_start.elapsed().as_millis()
+        ));
         PathBuf::from(String::from_utf8(output.stdout)?.trim())
     };
-    debug_log(&format!("[find_repository] check_git_dir {}ms", check_git_dir_start.elapsed().as_millis()));
+    debug_log(&format!(
+        "[find_repository] check_git_dir {}ms",
+        check_git_dir_start.elapsed().as_millis()
+    ));
 
     if !workdir.is_dir() {
         return Err(GitAiError::Generic(format!(
@@ -2512,9 +2523,11 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
     {
         normalized_global_args[1] = command_root;
     }
-    debug_log(&format!("[find_repository] normalized_global_args cost {}ms", normalized_global_args_start.elapsed().as_millis()));
+    debug_log(&format!(
+        "[find_repository] normalized_global_args cost {}ms",
+        normalized_global_args_start.elapsed().as_millis()
+    ));
 
-    
     let canonical_workdir_start = Instant::now();
     // Canonicalize workdir for reliable path comparisons (especially on Windows)
     // On Windows, canonical paths use the \\?\ UNC prefix, which makes path.starts_with()
@@ -2526,7 +2539,10 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
             e
         ))
     })?;
-    debug_log(&format!("[find_repository] canonical_workdir cost {}ms", canonical_workdir_start.elapsed().as_millis()));
+    debug_log(&format!(
+        "[find_repository] canonical_workdir cost {}ms",
+        canonical_workdir_start.elapsed().as_millis()
+    ));
 
     let worktree_storage_ai_dir_start = Instant::now();
     let worktree_ai_dir = worktree_storage_ai_dir(&git_dir, &git_common_dir);
@@ -2535,9 +2551,15 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
     } else {
         RepoStorage::for_isolated_worktree_storage(&worktree_ai_dir, &workdir)?
     };
-    debug_log(&format!("[find_repository] worktree_storage_ai_dir cost {}ms", worktree_storage_ai_dir_start.elapsed().as_millis()));
-    
-    debug_log(&format!("[find_repository] cost {}ms", find_repository_start.elapsed().as_millis()));
+    debug_log(&format!(
+        "[find_repository] worktree_storage_ai_dir cost {}ms",
+        worktree_storage_ai_dir_start.elapsed().as_millis()
+    ));
+
+    debug_log(&format!(
+        "[find_repository] cost {}ms",
+        find_repository_start.elapsed().as_millis()
+    ));
 
     Ok(Repository {
         global_args: normalized_global_args,

@@ -36,6 +36,8 @@ use std::os::windows::process::CommandExt;
 use std::process::Command;
 #[cfg(unix)]
 use std::sync::atomic::{AtomicI32, Ordering};
+#[cfg(windows)]
+use std::time::Duration;
 use std::time::Instant;
 
 #[cfg(unix)]
@@ -44,6 +46,18 @@ static CHILD_PGID: AtomicI32 = AtomicI32::new(0);
 // Windows NTSTATUS for Ctrl+C interruption (STATUS_CONTROL_C_EXIT, 0xC000013A) from Windows API docs.
 #[cfg(windows)]
 const NTSTATUS_CONTROL_C_EXIT: u32 = 0xC000013A;
+
+#[cfg(windows)]
+const DEFAULT_GIT_PROXY_TIMEOUT: Duration = Duration::from_secs(300);
+
+#[cfg(windows)]
+const DEFAULT_GIT_PROXY_RETRY_COUNT: usize = 1;
+
+#[cfg(windows)]
+const GIT_PROXY_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+#[cfg(windows)]
+const GIT_PROXY_RETRY_BACKOFF: Duration = Duration::from_millis(200);
 
 /// Error type for hook panics
 #[derive(Debug)]
@@ -197,18 +211,27 @@ pub fn handle_git(args: &[String]) {
     let find_repository_start = Instant::now();
     let mut repository_option = find_repository(&parsed_args.global_args).ok();
     let find_repository_duration = find_repository_start.elapsed();
-    debug_log(&format!("[handle-git] find_repository {}ms", find_repository_duration.as_millis()));
+    debug_log(&format!(
+        "[handle-git] find_repository {}ms",
+        find_repository_duration.as_millis()
+    ));
 
     let check_hooks_start = Instant::now();
     let has_repo = repository_option.is_some();
 
     let get_config_start = Instant::now();
     let config = config::Config::get();
-    debug_log(&format!("[handle-git] get_config_start {}ms", get_config_start.elapsed().as_millis()));
+    debug_log(&format!(
+        "[handle-git] get_config_start {}ms",
+        get_config_start.elapsed().as_millis()
+    ));
 
     let is_allowed_repository_start = Instant::now();
     let skip_hooks = !config.is_allowed_repository(&repository_option);
-    debug_log(&format!("[handle-git] is_allowed_repository_start {}ms", is_allowed_repository_start.elapsed().as_millis()));
+    debug_log(&format!(
+        "[handle-git] is_allowed_repository_start {}ms",
+        is_allowed_repository_start.elapsed().as_millis()
+    ));
 
     if skip_hooks {
         debug_log(
@@ -228,7 +251,10 @@ pub fn handle_git(args: &[String]) {
         exit_with_status(exit_status);
     }
     let check_hooks_duration = check_hooks_start.elapsed();
-    debug_log(&format!("[handle-git] check_hooks_duration {}ms", check_hooks_duration.as_millis()));
+    debug_log(&format!(
+        "[handle-git] check_hooks_duration {}ms",
+        check_hooks_duration.as_millis()
+    ));
 
     // run with hooks
     let exit_status = if !parsed_args.is_help && has_repo && !skip_hooks {
@@ -249,7 +275,10 @@ pub fn handle_git(args: &[String]) {
             parsed_args = resolved;
         }
         let resolve_alias_invocation_duration = resolve_alias_invocation_start.elapsed();
-        debug_log(&format!("[handle-git] resolve_alias_invocation_start {}ms", resolve_alias_invocation_duration.as_millis()));
+        debug_log(&format!(
+            "[handle-git] resolve_alias_invocation_start {}ms",
+            resolve_alias_invocation_duration.as_millis()
+        ));
 
         let pre_command_start = Instant::now();
         run_pre_command_hooks(&mut command_hooks_context, &mut parsed_args, repository);
@@ -302,12 +331,11 @@ pub fn handle_git(args: &[String]) {
 
 fn is_command_skip_hooks(parsed_args: &ParsedGitInvocation) -> bool {
     return match parsed_args.command.as_deref() {
-        Some("commit") | Some("pull") | Some("push") | Some("reset") | Some("merge") 
-        | Some("rebase") | Some("cherry-pick") | Some("stash") | Some("checkout") 
-        | Some("switch") | Some("update-ref") | Some("clone") 
-        => false,
-        _ => true
-    }
+        Some("commit") | Some("pull") | Some("push") | Some("reset") | Some("merge")
+        | Some("rebase") | Some("cherry-pick") | Some("stash") | Some("checkout")
+        | Some("switch") | Some("update-ref") | Some("clone") => false,
+        _ => true,
+    };
 }
 
 /// Handle alias invocations
@@ -339,7 +367,11 @@ fn resolve_alias_impl(
             Some(command) => command,
             None => return Some(current),
         };
-        debug_log(&format!("[resolve_alias_impl] command [{}] cost {}ms", &command, resolve_alias_start.elapsed().as_millis()));
+        debug_log(&format!(
+            "[resolve_alias_impl] command [{}] cost {}ms",
+            &command,
+            resolve_alias_start.elapsed().as_millis()
+        ));
 
         let config_get_str_start = Instant::now();
         if !seen.insert(command.to_string()) {
@@ -351,11 +383,17 @@ fn resolve_alias_impl(
             Ok(Some(value)) => value,
             _ => return Some(current),
         };
-        debug_log(&format!("[resolve_alias_impl] config_get_str {}ms", config_get_str_start.elapsed().as_millis()));
+        debug_log(&format!(
+            "[resolve_alias_impl] config_get_str {}ms",
+            config_get_str_start.elapsed().as_millis()
+        ));
 
         let parse_alias_tokens_start = Instant::now();
         let alias_tokens = parse_alias_tokens(&alias_value)?;
-        debug_log(&format!("[resolve_alias_impl] parse_alias_tokens_start {}ms", parse_alias_tokens_start.elapsed().as_millis()));
+        debug_log(&format!(
+            "[resolve_alias_impl] parse_alias_tokens_start {}ms",
+            parse_alias_tokens_start.elapsed().as_millis()
+        ));
 
         let expanded_args_start = Instant::now();
         let mut expanded_args = Vec::new();
@@ -364,11 +402,17 @@ fn resolve_alias_impl(
 
         // Append the original command args after the alias expansion
         expanded_args.extend(current.command_args.iter().cloned());
-        debug_log(&format!("[resolve_alias_impl] expanded_args_start {}ms", expanded_args_start.elapsed().as_millis()));
+        debug_log(&format!(
+            "[resolve_alias_impl] expanded_args_start {}ms",
+            expanded_args_start.elapsed().as_millis()
+        ));
 
         let parse_git_cli_args2_start = Instant::now();
         current = parse_git_cli_args(&expanded_args);
-        debug_log(&format!("[resolve_alias_impl] parse_git_cli_args2_start {}ms", parse_git_cli_args2_start.elapsed().as_millis()));
+        debug_log(&format!(
+            "[resolve_alias_impl] parse_git_cli_args2_start {}ms",
+            parse_git_cli_args2_start.elapsed().as_millis()
+        ));
     }
 }
 
@@ -982,18 +1026,37 @@ fn proxy_to_git(
 
     #[cfg(not(unix))]
     match child {
-        Ok(mut child) => {
-            let status = child.wait();
-            match status {
-                Ok(status) => {
-                    if exit_on_completion {
-                        exit_with_status(status);
-                    }
-                    status
+        Ok(child) => {
+            #[cfg(windows)]
+            {
+                let status = wait_for_git_with_retry_windows(
+                    child,
+                    args,
+                    child_hooks_path_override,
+                    wrapper_invocation_id,
+                    suppress_trace2,
+                );
+                if exit_on_completion {
+                    exit_with_status(status);
                 }
-                Err(e) => {
-                    eprintln!("Failed to wait for git process: {}", e);
-                    std::process::exit(1);
+                status
+            }
+
+            #[cfg(not(windows))]
+            {
+                let mut child = child;
+                let status = child.wait();
+                match status {
+                    Ok(status) => {
+                        if exit_on_completion {
+                            exit_with_status(status);
+                        }
+                        status
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to wait for git process: {}", e);
+                        std::process::exit(1);
+                    }
                 }
             }
         }
@@ -1002,6 +1065,208 @@ fn proxy_to_git(
             std::process::exit(1);
         }
     }
+}
+
+#[cfg(windows)]
+fn wait_for_git_with_retry_windows(
+    mut child: std::process::Child,
+    args: &[String],
+    child_hooks_path_override: Option<&str>,
+    wrapper_invocation_id: Option<&str>,
+    suppress_trace2: bool,
+) -> std::process::ExitStatus {
+    let max_retries = git_proxy_retry_count();
+    let timeout = git_proxy_timeout();
+    let mut attempt = 0usize;
+
+    loop {
+        match wait_for_git_process_windows(&mut child, timeout) {
+            Ok(status) => return status,
+            Err(WaitForGitProcessError::Wait(err)) => {
+                eprintln!("Failed to wait for git process: {}", err);
+                std::process::exit(1);
+            }
+            Err(WaitForGitProcessError::TimedOut) => {
+                if attempt >= max_retries {
+                    eprintln!(
+                        "git command timed out after {}ms on Windows and exceeded {} retry attempt(s)",
+                        timeout.as_millis(),
+                        max_retries
+                    );
+                    std::process::exit(1);
+                }
+
+                let next_attempt = attempt + 2;
+                debug_log(&format!(
+                    "git command timed out after {}ms on Windows; retrying attempt {}/{}",
+                    timeout.as_millis(),
+                    next_attempt,
+                    max_retries + 1
+                ));
+                std::thread::sleep(GIT_PROXY_RETRY_BACKOFF);
+                child = spawn_git_child_windows(
+                    args,
+                    child_hooks_path_override,
+                    wrapper_invocation_id,
+                    suppress_trace2,
+                    true,
+                );
+                attempt += 1;
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+enum WaitForGitProcessError {
+    TimedOut,
+    Wait(std::io::Error),
+}
+
+#[cfg(windows)]
+fn wait_for_git_process_windows(
+    child: &mut std::process::Child,
+    timeout: Duration,
+) -> Result<std::process::ExitStatus, WaitForGitProcessError> {
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) => {}
+            Err(err) => return Err(WaitForGitProcessError::Wait(err)),
+        }
+
+        if Instant::now() >= deadline {
+            let pid = child.id();
+            debug_log(&format!(
+                "git process {} timed out after {}ms on Windows; terminating process tree",
+                pid,
+                timeout.as_millis()
+            ));
+            if let Err(err) = kill_process_tree_windows(pid) {
+                eprintln!("Failed to terminate timed out git process {}: {}", pid, err);
+                std::process::exit(1);
+            }
+
+            match child.wait() {
+                Ok(status) => {
+                    debug_log(&format!(
+                        "git process {} terminated after timeout with status {}",
+                        pid, status
+                    ));
+                }
+                Err(err) => {
+                    eprintln!(
+                        "Failed to wait for timed out git process {} after termination: {}",
+                        pid, err
+                    );
+                    std::process::exit(1);
+                }
+            }
+
+            return Err(WaitForGitProcessError::TimedOut);
+        }
+
+        std::thread::sleep(GIT_PROXY_POLL_INTERVAL);
+    }
+}
+
+#[cfg(windows)]
+fn spawn_git_child_windows(
+    args: &[String],
+    child_hooks_path_override: Option<&str>,
+    wrapper_invocation_id: Option<&str>,
+    suppress_trace2: bool,
+    is_retry: bool,
+) -> std::process::Child {
+    let mut cmd = Command::new(config::Config::get().git_cmd());
+    if let Some(hooks_path) = child_hooks_path_override
+        && !has_explicit_hooks_path_override(args)
+    {
+        cmd.arg("-c").arg(format!("core.hooksPath={}", hooks_path));
+    }
+    cmd.args(args);
+    cmd.env(ENV_SKIP_MANAGED_HOOKS, "1");
+    cmd.env_remove("GIT_AI_ASYNC_MODE");
+    if suppress_trace2 {
+        cmd.env("GIT_TRACE2_EVENT", "0");
+    }
+    if let Some(id) = wrapper_invocation_id {
+        cmd.env("GIT_AI_WRAPPER_INVOCATION_ID", id);
+        cmd.env("GIT_TRACE2_ENV_VARS", "GIT_AI_WRAPPER_INVOCATION_ID");
+    }
+
+    if !is_interactive_terminal() {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    match cmd.spawn() {
+        Ok(child) => child,
+        Err(err) => {
+            if is_retry {
+                eprintln!("Failed to retry git command after timeout: {}", err);
+            } else {
+                eprintln!("Failed to execute git command: {}", err);
+            }
+            std::process::exit(1);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn kill_process_tree_windows(pid: u32) -> Result<(), String> {
+    let output = Command::new("taskkill")
+        .args(["/F", "/T", "/PID", &pid.to_string()])
+        .output()
+        .map_err(|e| format!("failed to run taskkill: {}", e))?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr_trimmed = stderr.trim();
+    if stderr_trimmed.contains("not found")
+        || stderr_trimmed.contains("There is no running instance")
+    {
+        return Ok(());
+    }
+
+    Err(format!(
+        "taskkill /F /T /PID {} failed: {}",
+        pid, stderr_trimmed
+    ))
+}
+
+#[cfg(windows)]
+fn git_proxy_timeout() -> Duration {
+    parse_git_proxy_timeout_ms(std::env::var("GIT_AI_GIT_PROXY_TIMEOUT_MS").ok().as_deref())
+}
+
+#[cfg(windows)]
+fn git_proxy_retry_count() -> usize {
+    parse_git_proxy_retry_count(
+        std::env::var("GIT_AI_GIT_PROXY_RETRY_COUNT")
+            .ok()
+            .as_deref(),
+    )
+}
+
+#[cfg(windows)]
+fn parse_git_proxy_timeout_ms(value: Option<&str>) -> Duration {
+    value
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .map(Duration::from_millis)
+        .unwrap_or(DEFAULT_GIT_PROXY_TIMEOUT)
+}
+
+#[cfg(windows)]
+fn parse_git_proxy_retry_count(value: Option<&str>) -> usize {
+    value
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_GIT_PROXY_RETRY_COUNT)
 }
 
 // Exit mirroring the child's termination: same signal if signaled, else exit code
@@ -1222,5 +1487,51 @@ mod tests {
             .status()
             .expect("failed to run success test");
         assert!(!super::exit_status_was_interrupted(&status));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn parse_git_proxy_timeout_ms_uses_default_for_missing_invalid_and_zero_values() {
+        assert_eq!(
+            super::parse_git_proxy_timeout_ms(None),
+            super::DEFAULT_GIT_PROXY_TIMEOUT
+        );
+        assert_eq!(
+            super::parse_git_proxy_timeout_ms(Some("abc")),
+            super::DEFAULT_GIT_PROXY_TIMEOUT
+        );
+        assert_eq!(
+            super::parse_git_proxy_timeout_ms(Some("0")),
+            super::DEFAULT_GIT_PROXY_TIMEOUT
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn parse_git_proxy_timeout_ms_accepts_positive_values() {
+        assert_eq!(
+            super::parse_git_proxy_timeout_ms(Some("2500")),
+            std::time::Duration::from_millis(2500)
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn parse_git_proxy_retry_count_uses_default_for_missing_or_invalid_values() {
+        assert_eq!(
+            super::parse_git_proxy_retry_count(None),
+            super::DEFAULT_GIT_PROXY_RETRY_COUNT
+        );
+        assert_eq!(
+            super::parse_git_proxy_retry_count(Some("abc")),
+            super::DEFAULT_GIT_PROXY_RETRY_COUNT
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn parse_git_proxy_retry_count_accepts_zero_and_positive_values() {
+        assert_eq!(super::parse_git_proxy_retry_count(Some("0")), 0);
+        assert_eq!(super::parse_git_proxy_retry_count(Some("3")), 3);
     }
 }

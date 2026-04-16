@@ -186,7 +186,7 @@ pub fn handle_git_ai(args: &[String]) {
         }
         "upgrade" => {
             commands::upgrade::run_with_args(&args[1..]);
-        }        
+        }
         "flush-logs" => {
             commands::flush_logs::handle_flush_logs(&args[1..]);
         }

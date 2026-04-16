@@ -1,7 +1,7 @@
 use crate::git::refs::{
-    copy_ref, fallback_merge_notes_ours, get_commits_with_notes_from_list, merge_notes_from_ref,
-    note_blob_oids_for_commits, notes_add_batch, ref_exists, show_authorship_note,
-    tracking_ref_for_remote, CommitAuthorship, AI_AUTHORSHIP_PUSH_REFSPEC,
+    AI_AUTHORSHIP_PUSH_REFSPEC, CommitAuthorship, copy_ref, fallback_merge_notes_ours,
+    get_commits_with_notes_from_list, merge_notes_from_ref, note_blob_oids_for_commits,
+    notes_add_batch, ref_exists, show_authorship_note, tracking_ref_for_remote,
 };
 use crate::{
     api::{ApiClient, ApiContext},
@@ -154,7 +154,7 @@ pub fn fetch_authorship_notes(
             ))
         })?;
         return rest_fetch_authorship_notes(repository, &api, &normalized_repo_url);
-    } 
+    }
     // Generate tracking ref for this remote
     let tracking_ref = tracking_ref_for_remote(remote_name);
 
@@ -730,9 +730,10 @@ mod tests {
             "+refs/notes/ai:refs/notes/ai-remote/origin",
         );
 
-        assert!(args
-            .windows(2)
-            .any(|pair| pair[0] == "-c" && pair[1] == disabled_hooks));
+        assert!(
+            args.windows(2)
+                .any(|pair| pair[0] == "-c" && pair[1] == disabled_hooks)
+        );
         assert!(args.contains(&"fetch".to_string()));
     }
 
@@ -742,9 +743,10 @@ mod tests {
         let args =
             build_authorship_push_args(vec!["-C".to_string(), "/tmp/repo".to_string()], "origin");
 
-        assert!(args
-            .windows(2)
-            .any(|pair| pair[0] == "-c" && pair[1] == disabled_hooks));
+        assert!(
+            args.windows(2)
+                .any(|pair| pair[0] == "-c" && pair[1] == disabled_hooks)
+        );
         assert!(args.contains(&"push".to_string()));
     }
 
