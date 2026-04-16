@@ -16,7 +16,7 @@ use crate::error::GitAiError;
 use crate::git::repo_storage::PersistedWorkingLog;
 use crate::git::repository::Repository;
 use crate::git::status::{EntryKind, StatusCode};
-use crate::utils::{debug_log, normalize_to_posix};
+use crate::utils::{LockFile, debug_log, normalize_to_posix};
 use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -49,6 +49,8 @@ use crate::authorship::working_log::AgentId;
 /// This is half of the server-side bucketing window.
 #[cfg_attr(any(test, feature = "test-support"), allow(dead_code))]
 const AGENT_USAGE_MIN_INTERVAL_SECS: u64 = 150;
+const CHECKPOINT_LOCK_POLL_INTERVAL: StdDuration = StdDuration::from_millis(50);
+const DEFAULT_CHECKPOINT_LOCK_TIMEOUT: StdDuration = StdDuration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -104,6 +106,48 @@ struct ResolvedCheckpointExecution {
 pub(crate) enum BaseOverrideResolutionPolicy {
     AllowFallback,
     RequireExplicitSnapshot,
+}
+
+fn checkpoint_lock_path(repo: &Repository) -> PathBuf {
+    repo.storage.ai_dir.join("checkpoint.lock")
+}
+
+fn parse_checkpoint_lock_timeout_ms(value: Option<&str>) -> StdDuration {
+    value
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .map(StdDuration::from_millis)
+        .unwrap_or(DEFAULT_CHECKPOINT_LOCK_TIMEOUT)
+}
+
+fn checkpoint_lock_timeout() -> StdDuration {
+    parse_checkpoint_lock_timeout_ms(
+        std::env::var("GIT_AI_CHECKPOINT_LOCK_TIMEOUT_MS")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn acquire_checkpoint_lock(repo: &Repository) -> Result<LockFile, GitAiError> {
+    let lock_path = checkpoint_lock_path(repo);
+    let timeout = checkpoint_lock_timeout();
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        if let Some(lock) = LockFile::try_acquire(&lock_path) {
+            return Ok(lock);
+        }
+
+        if Instant::now() >= deadline {
+            return Err(GitAiError::Generic(format!(
+                "timed out after {}ms acquiring checkpoint lock at {}",
+                timeout.as_millis(),
+                lock_path.display()
+            )));
+        }
+
+        std::thread::sleep(CHECKPOINT_LOCK_POLL_INTERVAL);
+    }
 }
 
 /// Build EventAttributes with repo metadata.
@@ -360,6 +404,7 @@ pub(crate) fn run_with_base_commit_override_with_policy(
 ) -> Result<(usize, usize, usize), GitAiError> {
     let checkpoint_start = Instant::now();
     debug_log("[BENCHMARK] Starting checkpoint run");
+    let _checkpoint_lock = acquire_checkpoint_lock(repo)?;
     let resolved = resolve_live_checkpoint_execution(
         repo,
         kind,
@@ -1099,6 +1144,7 @@ pub fn execute_captured_checkpoint(
 ) -> Result<(usize, usize, usize), GitAiError> {
     let checkpoint_start = Instant::now();
     debug_log("[BENCHMARK] Starting captured checkpoint replay");
+    let _checkpoint_lock = acquire_checkpoint_lock(repo)?;
 
     let manifest = load_captured_checkpoint_manifest(capture_id)?;
     validate_captured_checkpoint_manifest_repo(repo, &manifest)?;
@@ -3083,5 +3129,55 @@ mod tests {
             latest_stats.deletions_sloc, 0,
             "Whitespace deletions ignored"
         );
+    }
+
+    #[test]
+    fn test_checkpoint_lock_path_uses_repo_ai_dir() {
+        let tmp_repo = TmpRepo::new().expect("tmp repo should create");
+        let repo = tmp_repo.gitai_repo();
+
+        assert_eq!(
+            checkpoint_lock_path(repo),
+            repo.storage.ai_dir.join("checkpoint.lock")
+        );
+    }
+
+    #[test]
+    fn test_parse_checkpoint_lock_timeout_ms_uses_default_for_missing_invalid_and_zero_values() {
+        assert_eq!(
+            parse_checkpoint_lock_timeout_ms(None),
+            DEFAULT_CHECKPOINT_LOCK_TIMEOUT
+        );
+        assert_eq!(
+            parse_checkpoint_lock_timeout_ms(Some("abc")),
+            DEFAULT_CHECKPOINT_LOCK_TIMEOUT
+        );
+        assert_eq!(
+            parse_checkpoint_lock_timeout_ms(Some("0")),
+            DEFAULT_CHECKPOINT_LOCK_TIMEOUT
+        );
+    }
+
+    #[test]
+    fn test_parse_checkpoint_lock_timeout_ms_accepts_positive_values() {
+        assert_eq!(
+            parse_checkpoint_lock_timeout_ms(Some("2500")),
+            StdDuration::from_millis(2500)
+        );
+    }
+
+    #[test]
+    fn test_acquire_checkpoint_lock_blocks_second_holder_until_release() {
+        let tmp_repo = TmpRepo::new().expect("tmp repo should create");
+        let repo = tmp_repo.gitai_repo();
+
+        let first = acquire_checkpoint_lock(repo).expect("first lock should succeed");
+        let second = LockFile::try_acquire(&checkpoint_lock_path(repo));
+        assert!(second.is_none(), "second lock should be blocked");
+
+        drop(first);
+
+        let third = LockFile::try_acquire(&checkpoint_lock_path(repo));
+        assert!(third.is_some(), "lock should be released after drop");
     }
 }
