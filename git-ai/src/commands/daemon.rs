@@ -235,9 +235,9 @@ fn daemon_startup_is_blocked(config: &DaemonConfig) -> bool {
 }
 
 pub(crate) fn daemon_is_up(config: &DaemonConfig) -> bool {
-    local_socket_connects_with_timeout(&config.control_socket_path, Duration::from_millis(100))
+    local_socket_connects_with_timeout(&config.control_socket_path, Duration::from_millis(500))
         .is_ok()
-        && local_socket_connects_with_timeout(&config.trace_socket_path, Duration::from_millis(100))
+        && local_socket_connects_with_timeout(&config.trace_socket_path, Duration::from_millis(500))
             .is_ok()
 }
 

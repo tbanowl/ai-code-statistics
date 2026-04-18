@@ -83,22 +83,10 @@ def trigger_job():
             return jsonify({'success': False, 'error': '任务不存在'})
 
         # 触发任务
-        execution_id = scheduler.trigger_job_with_execution(job_id)
-
-        if execution_id is None:
-            # 检查是否是因为正在执行而失败
-            running = scheduler.scheduler_db.get_running_task_execution(job_id)
-            if running:
-                return jsonify({
-                    'success': False,
-                    'error': '任务正在执行中'
-                })
-            return jsonify({'success': False, 'error': '任务触发失败'})
-
+        scheduler.trigger_job_with_execution(job_id)
         return jsonify({
             'success': True,
             'data': {
-                'execution_id': execution_id,
                 'status': 'pending',
                 'job_id': job_id
             }

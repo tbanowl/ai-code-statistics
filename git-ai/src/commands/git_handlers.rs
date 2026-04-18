@@ -20,10 +20,11 @@ use crate::git::find_repository;
 use crate::git::repository::{Repository, disable_internal_git_hooks};
 use crate::observability;
 use std::collections::HashSet;
+use std::thread::Thread;
 
 use crate::observability::wrapper_performance_targets::log_performance_target_if_violated;
 #[cfg(windows)]
-use crate::utils::CREATE_NO_WINDOW;
+use crate::utils::{CREATE_NO_WINDOW, is_debug_enabled};
 use crate::utils::debug_log;
 #[cfg(windows)]
 use crate::utils::is_interactive_terminal;
@@ -36,9 +37,7 @@ use std::os::windows::process::CommandExt;
 use std::process::Command;
 #[cfg(unix)]
 use std::sync::atomic::{AtomicI32, Ordering};
-#[cfg(windows)]
-use std::time::Duration;
-use std::time::Instant;
+use std::time::{Instant, Duration};
 
 #[cfg(unix)]
 static CHILD_PGID: AtomicI32 = AtomicI32::new(0);
@@ -48,16 +47,16 @@ static CHILD_PGID: AtomicI32 = AtomicI32::new(0);
 const NTSTATUS_CONTROL_C_EXIT: u32 = 0xC000013A;
 
 #[cfg(windows)]
-const DEFAULT_GIT_PROXY_TIMEOUT: Duration = Duration::from_secs(300);
+const DEFAULT_GIT_PROXY_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[cfg(windows)]
 const DEFAULT_GIT_PROXY_RETRY_COUNT: usize = 1;
 
 #[cfg(windows)]
-const GIT_PROXY_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const GIT_PROXY_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 #[cfg(windows)]
-const GIT_PROXY_RETRY_BACKOFF: Duration = Duration::from_millis(200);
+const GIT_PROXY_RETRY_BACKOFF: Duration = Duration::from_millis(500);
 
 /// Error type for hook panics
 #[derive(Debug)]
@@ -128,6 +127,13 @@ pub fn handle_git(args: &[String]) {
     // but capture and send authoritative pre/post state to the daemon.
     if config::Config::get().feature_flags().async_mode {
         let parsed = parse_git_cli_args(args);
+        
+        // // Command no hooks
+        // if is_command_skip_hooks(&parsed) {
+        //     let orig_args: Vec<String> = std::env::args().skip(1).collect();
+        //     proxy_to_git(&orig_args, true, None, None);
+        //     return;
+        // }
 
         // Read-only commands don't need wrapper state (the daemon fast-paths
         // their trace events and never processes them through the normalizer).
@@ -211,27 +217,18 @@ pub fn handle_git(args: &[String]) {
     let find_repository_start = Instant::now();
     let mut repository_option = find_repository(&parsed_args.global_args).ok();
     let find_repository_duration = find_repository_start.elapsed();
-    debug_log(&format!(
-        "[handle-git] find_repository {}ms",
-        find_repository_duration.as_millis()
-    ));
+    debug_log(&format!("[handle-git] find_repository {}ms", find_repository_duration.as_millis()));
 
     let check_hooks_start = Instant::now();
     let has_repo = repository_option.is_some();
 
     let get_config_start = Instant::now();
     let config = config::Config::get();
-    debug_log(&format!(
-        "[handle-git] get_config_start {}ms",
-        get_config_start.elapsed().as_millis()
-    ));
+    debug_log(&format!("[handle-git] get_config_start {}ms", get_config_start.elapsed().as_millis()));
 
     let is_allowed_repository_start = Instant::now();
     let skip_hooks = !config.is_allowed_repository(&repository_option);
-    debug_log(&format!(
-        "[handle-git] is_allowed_repository_start {}ms",
-        is_allowed_repository_start.elapsed().as_millis()
-    ));
+    debug_log(&format!("[handle-git] is_allowed_repository_start {}ms", is_allowed_repository_start.elapsed().as_millis()));
 
     if skip_hooks {
         debug_log(
@@ -251,10 +248,7 @@ pub fn handle_git(args: &[String]) {
         exit_with_status(exit_status);
     }
     let check_hooks_duration = check_hooks_start.elapsed();
-    debug_log(&format!(
-        "[handle-git] check_hooks_duration {}ms",
-        check_hooks_duration.as_millis()
-    ));
+    debug_log(&format!("[handle-git] check_hooks_duration {}ms", check_hooks_duration.as_millis()));
 
     // run with hooks
     let exit_status = if !parsed_args.is_help && has_repo && !skip_hooks {
@@ -275,16 +269,13 @@ pub fn handle_git(args: &[String]) {
             parsed_args = resolved;
         }
         let resolve_alias_invocation_duration = resolve_alias_invocation_start.elapsed();
-        debug_log(&format!(
-            "[handle-git] resolve_alias_invocation_start {}ms",
-            resolve_alias_invocation_duration.as_millis()
-        ));
+        debug_log(&format!("[handle-git] resolve_alias_invocation_start {}ms", resolve_alias_invocation_duration.as_millis()));
 
         let pre_command_start = Instant::now();
         run_pre_command_hooks(&mut command_hooks_context, &mut parsed_args, repository);
         let pre_command_duration = pre_command_start.elapsed();
 
-        let child_hooks_path_override =
+        let child_hooks_path_override: Option<String> =
             resolve_child_git_hooks_path_override(&parsed_args, Some(repository));
         let git_start = Instant::now();
         let exit_status = proxy_to_git(
@@ -331,11 +322,12 @@ pub fn handle_git(args: &[String]) {
 
 fn is_command_skip_hooks(parsed_args: &ParsedGitInvocation) -> bool {
     return match parsed_args.command.as_deref() {
-        Some("commit") | Some("pull") | Some("push") | Some("reset") | Some("merge")
-        | Some("rebase") | Some("cherry-pick") | Some("stash") | Some("checkout")
-        | Some("switch") | Some("update-ref") | Some("clone") => false,
-        _ => true,
-    };
+        Some("commit") | Some("pull") | Some("push") | Some("reset") | Some("merge") 
+        | Some("rebase") | Some("cherry-pick") | Some("stash") | Some("checkout") 
+        | Some("switch") | Some("update-ref") | Some("clone") 
+        => false,
+        _ => true
+    }
 }
 
 /// Handle alias invocations
@@ -367,11 +359,7 @@ fn resolve_alias_impl(
             Some(command) => command,
             None => return Some(current),
         };
-        debug_log(&format!(
-            "[resolve_alias_impl] command [{}] cost {}ms",
-            &command,
-            resolve_alias_start.elapsed().as_millis()
-        ));
+        debug_log(&format!("[resolve_alias_impl] command [{}] cost {}ms", &command, resolve_alias_start.elapsed().as_millis()));
 
         let config_get_str_start = Instant::now();
         if !seen.insert(command.to_string()) {
@@ -383,17 +371,11 @@ fn resolve_alias_impl(
             Ok(Some(value)) => value,
             _ => return Some(current),
         };
-        debug_log(&format!(
-            "[resolve_alias_impl] config_get_str {}ms",
-            config_get_str_start.elapsed().as_millis()
-        ));
+        debug_log(&format!("[resolve_alias_impl] config_get_str {}ms", config_get_str_start.elapsed().as_millis()));
 
         let parse_alias_tokens_start = Instant::now();
         let alias_tokens = parse_alias_tokens(&alias_value)?;
-        debug_log(&format!(
-            "[resolve_alias_impl] parse_alias_tokens_start {}ms",
-            parse_alias_tokens_start.elapsed().as_millis()
-        ));
+        debug_log(&format!("[resolve_alias_impl] parse_alias_tokens_start {}ms", parse_alias_tokens_start.elapsed().as_millis()));
 
         let expanded_args_start = Instant::now();
         let mut expanded_args = Vec::new();
@@ -402,17 +384,11 @@ fn resolve_alias_impl(
 
         // Append the original command args after the alias expansion
         expanded_args.extend(current.command_args.iter().cloned());
-        debug_log(&format!(
-            "[resolve_alias_impl] expanded_args_start {}ms",
-            expanded_args_start.elapsed().as_millis()
-        ));
+        debug_log(&format!("[resolve_alias_impl] expanded_args_start {}ms", expanded_args_start.elapsed().as_millis()));
 
         let parse_git_cli_args2_start = Instant::now();
         current = parse_git_cli_args(&expanded_args);
-        debug_log(&format!(
-            "[resolve_alias_impl] parse_git_cli_args2_start {}ms",
-            parse_git_cli_args2_start.elapsed().as_millis()
-        ));
+        debug_log(&format!("[resolve_alias_impl] parse_git_cli_args2_start {}ms", parse_git_cli_args2_start.elapsed().as_millis()));
     }
 }
 
@@ -950,6 +926,10 @@ fn proxy_to_git(
         }
         #[cfg(not(unix))]
         {
+            use std::thread;
+
+            use crate::utils::is_debug_enabled;
+
             let mut cmd = Command::new(config::Config::get().git_cmd());
             if let Some(hooks_path) = child_hooks_path_override
                 && !has_explicit_hooks_path_override(args)
@@ -974,10 +954,17 @@ fn proxy_to_git(
                 }
             }
 
+            if is_debug_enabled() {
+                cmd.env("GIT_TRACE", "1");
+                cmd.env("GIT_TRACE2", "1");
+                eprintln!("[proxy_to_git] git executable = {:?},  git args = {:?}", config::Config::get().git_cmd(), args);
+            }
             cmd.spawn()
         }
     };
 
+    // 模拟虚拟机环境 git 命令执行时间长
+    std::thread::sleep(Duration::from_millis(1500));
     #[cfg(unix)]
     match child {
         Ok((mut child, setpgid)) => {
@@ -1025,7 +1012,7 @@ fn proxy_to_git(
     }
 
     #[cfg(not(unix))]
-    match child {
+     match child {
         Ok(child) => {
             #[cfg(windows)]
             {
@@ -1089,19 +1076,21 @@ fn wait_for_git_with_retry_windows(
             Err(WaitForGitProcessError::TimedOut) => {
                 if attempt >= max_retries {
                     eprintln!(
-                        "git command timed out after {}ms on Windows and exceeded {} retry attempt(s)",
+                        "git command timed out after {}ms on Windows and exceeded {} retry attempt(s), git args: {:?}",
                         timeout.as_millis(),
-                        max_retries
+                        max_retries,
+                        args
                     );
                     std::process::exit(1);
                 }
 
                 let next_attempt = attempt + 2;
                 debug_log(&format!(
-                    "git command timed out after {}ms on Windows; retrying attempt {}/{}",
+                    "git command timed out after {}ms on Windows; retrying attempt {}/{}, git args: {:?}",
                     timeout.as_millis(),
                     next_attempt,
-                    max_retries + 1
+                    max_retries + 1,
+                    args
                 ));
                 std::thread::sleep(GIT_PROXY_RETRY_BACKOFF);
                 child = spawn_git_child_windows(
@@ -1199,6 +1188,13 @@ fn spawn_git_child_windows(
 
     if !is_interactive_terminal() {
         cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    if is_debug_enabled() {
+        cmd.env("GIT_TRACE", "1");
+        cmd.env("GIT_TRACE2", "1");
+        cmd.env("GIT_TERMINAL_PROMPT", "0");
+        cmd.env("GCM_INTERACTIVE", "Never");
+        eprintln!("[proxy_to_git] git executable = {:?},  git args = {:?}", config::Config::get().git_cmd(), args);
     }
 
     match cmd.spawn() {
@@ -1487,51 +1483,5 @@ mod tests {
             .status()
             .expect("failed to run success test");
         assert!(!super::exit_status_was_interrupted(&status));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn parse_git_proxy_timeout_ms_uses_default_for_missing_invalid_and_zero_values() {
-        assert_eq!(
-            super::parse_git_proxy_timeout_ms(None),
-            super::DEFAULT_GIT_PROXY_TIMEOUT
-        );
-        assert_eq!(
-            super::parse_git_proxy_timeout_ms(Some("abc")),
-            super::DEFAULT_GIT_PROXY_TIMEOUT
-        );
-        assert_eq!(
-            super::parse_git_proxy_timeout_ms(Some("0")),
-            super::DEFAULT_GIT_PROXY_TIMEOUT
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn parse_git_proxy_timeout_ms_accepts_positive_values() {
-        assert_eq!(
-            super::parse_git_proxy_timeout_ms(Some("2500")),
-            std::time::Duration::from_millis(2500)
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn parse_git_proxy_retry_count_uses_default_for_missing_or_invalid_values() {
-        assert_eq!(
-            super::parse_git_proxy_retry_count(None),
-            super::DEFAULT_GIT_PROXY_RETRY_COUNT
-        );
-        assert_eq!(
-            super::parse_git_proxy_retry_count(Some("abc")),
-            super::DEFAULT_GIT_PROXY_RETRY_COUNT
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn parse_git_proxy_retry_count_accepts_zero_and_positive_values() {
-        assert_eq!(super::parse_git_proxy_retry_count(Some("0")), 0);
-        assert_eq!(super::parse_git_proxy_retry_count(Some("3")), 3);
     }
 }

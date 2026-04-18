@@ -1,12 +1,12 @@
-use crate::utils::debug_performance_log;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
-use std::time::Instant;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
+use crate::utils::debug_performance_log;
 
 #[cfg(not(any(test, feature = "test-support")))]
 use crate::metrics::METRICS_API_VERSION;
@@ -145,8 +145,8 @@ fn append_envelope(envelope: LogEnvelope) {
         };
         if let Some(te) = telemetry_envelope {
             crate::daemon::telemetry_handle::submit_telemetry(vec![te]);
-        }
-
+        }        
+        
         return;
     }
 
@@ -175,6 +175,8 @@ fn append_envelope(envelope: LogEnvelope) {
         }
     }
 }
+
+
 
 /// Submit telemetry envelopes via the best available path:
 /// 1. External daemon control socket (wrapper processes)
@@ -332,6 +334,7 @@ fn should_spawn_background_flush() -> bool {
     let _ = std::fs::write(&marker, now_secs.to_string());
     true
 }
+
 
 /// Log a batch of metric events (via daemon telemetry worker).
 ///

@@ -355,6 +355,15 @@ class StatsDailyStat(ModelBase):
 # ============================================================================
 
 
+class TaskRunning(ModelBase):
+    """任务执行记录表"""
+
+    __tablename__ = "task_running"
+
+    job_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    started_at: Mapped[int] = mapped_column(BigInteger, default=now_ts)
+
+
 class TaskExecution(ModelBase):
     """任务执行记录表"""
 

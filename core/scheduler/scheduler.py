@@ -30,8 +30,8 @@ def _run_task_with_execution(job_id: str):
         _scheduler_instance.logger.warning(f"任务实例不存在: {job_id}")
         return
 
-    execution_id = _scheduler_instance.scheduler_db.create_task_execution(job_id)
-    task_instance.run(execution_id=execution_id)
+    # execution_id = _scheduler_instance.scheduler_db.create_task_execution(job_id)
+    task_instance.run(job_id=job_id)
 
 
 class AICodeScheduler:
@@ -231,33 +231,13 @@ class AICodeScheduler:
 
     def trigger_job_with_execution(
         self, job_id: str, context: Optional[Dict] = None
-    ) -> Optional[str]:
-        """手动触发任务并创建执行记录，返回 execution_id"""
+    ):
+        """手动触发任务并创建执行记录"""
         # 检查任务是否存在
         job = self.scheduler.get_job(job_id)
         if not job:
             self.logger.warning(f"进程中任务不存在: {job_id}")
             return None
-
-        # 检查是否有正在运行的任务
-        running = self.scheduler_db.get_running_task_execution(job_id)
-        if running:
-            timeout_minutes = self.config.get("scheduler", {})\
-                .get("jobs", {})\
-                .get("metrics_event_processor", {})\
-                .get("timeout_minutes", 10) * 60 * 1000
-            created_at = running.get("created_at") or 0
-            now_ms = int(datetime.now().timestamp() * 1000)
-            if created_at and now_ms - created_at > timeout_minutes:
-                self.logger.warning(
-                    f"任务 {job_id} 存在过期执行记录，自动标记失败: {running.get('id')}"
-                )
-                self.scheduler_db.update_task_execution_status(
-                    str(running.get("id")), "failed"
-                )
-            else:
-                self.logger.warning(f"任务 {job_id} 正在执行中，跳过触发")
-                return None
 
         # 获取任务实例
         task_instance = self.task_instances.get(job_id)
@@ -265,24 +245,7 @@ class AICodeScheduler:
             self.logger.warning(f"任务不存在: {job_id}")
             return
 
-        execution_id = self.scheduler_db.create_task_execution(job_id)
-        self.logger.info(f"创建任务执行记录: {job_id} -> execution_id={execution_id}")
-        original_before_execute = task_instance.before_execute
-        task_instance.before_execute = lambda: context or {}
         try:
-            # 触发任务（异步，避免长时间任务阻塞请求）
-            def _run_async():
-                try:
-                    task_instance.run(execution_id=execution_id)
-                except Exception as e:
-                    self.logger.error(f"异步任务执行异常: {job_id}", e)
-
-            thread = threading.Thread(target=_run_async, daemon=True)
-            thread.start()
-            self.logger.info(f"已触发任务: {job_id}")
+            task_instance.run(job_id, context, True)
         except Exception as e:
             self.logger.info("任务执行失败: {job_id}", e)
-        finally:
-            task_instance.before_execute = original_before_execute
-
-        return execution_id

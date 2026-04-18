@@ -19,6 +19,10 @@ export async function getPluginsList(
   VITE_COMPRESSION: ViteCompression
 ): Promise<PluginOption[]> {
   const lifecycle = process.env.npm_lifecycle_event;
+
+  // 内网环境图标配置：检查 VITE_INLINE_ICONS 环境变量
+  const inlineIcons = process.env.VITE_INLINE_ICONS === "true";
+
   return [
     tailwindcss(),
     vue({
@@ -60,9 +64,14 @@ export async function getPluginsList(
     // svg组件化支持
     svgLoader(),
     // 自动按需加载图标
+    // 内网环境配置：设置 VITE_INLINE_ICONS=true 可内嵌所有图标
     Icons({
       compiler: "vue3",
-      scale: 1
+      scale: 1,
+      // 内嵌所有图标（适用于完全离线环境，会增加打包体积约 10-20 MB）
+      autoImport: "vue3",
+      // 确保编译包含所有使用的图标数据
+      include: ["**/*.vue", "**/*.ts", "**/*.tsx"]
     }),
     VITE_CDN ? (await import("./cdn")).cdn : null,
     configCompressPlugin(VITE_COMPRESSION),

@@ -1,0 +1,879 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "API Documentation",
+    "version": "1.0.0",
+    "description": ""
+  },
+  "basePath": "/",
+  "schemes": [
+    "http",
+    "https"
+  ],
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "paths": {
+    "/api/stats/repositories": {
+      "get": {
+        "summary": "get_repositories",
+        "description": "",
+        "tags": [
+          "stats"
+        ]
+      }
+    },
+    "/api/stats/repositories/consolidation-report": {
+      "get": {
+        "summary": "get_repository_consolidation_report",
+        "description": "",
+        "tags": [
+          "stats"
+        ]
+      }
+    },
+    "/api/stats/stats/contributors": {
+      "get": {
+        "summary": "get_contributors",
+        "description": "",
+        "tags": [
+          "stats"
+        ]
+      }
+    },
+    "/api/stats/": {
+      "get": {
+        "summary": "get_stats",
+        "description": "",
+        "tags": [
+          "stats"
+        ]
+      }
+    },
+    "/api/stats/daily": {
+      "get": {
+        "summary": "get_daily_stats",
+        "description": "",
+        "tags": [
+          "stats"
+        ]
+      }
+    },
+    "/api/stats/aggregate": {
+      "get": {
+        "summary": "get_stats_aggregate_compat",
+        "description": "",
+        "tags": [
+          "stats"
+        ]
+      }
+    },
+    "/api/stats/stats/aggregate": {
+      "post": {
+        "summary": "trigger_aggregate",
+        "description": "",
+        "tags": [
+          "stats"
+        ]
+      }
+    },
+    "/api/git-ai/dsn/store/": {
+      "get": {
+        "summary": "",
+        "description": "git ai 收集的信息",
+        "tags": [
+          "git_ai"
+        ]
+      }
+    },
+    "/worker/metrics/upload": {
+      "post": {
+        "summary": "上传 metrics 数据",
+        "description": "接收 Git-AI 客户端上传的代码指标事件数据",
+        "tags": [
+          "metrics"
+        ],
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": [
+                "v",
+                "events"
+              ],
+              "properties": {
+                "v": {
+                  "type": "integer",
+                  "description": "协议版本 (当前仅支持 1)",
+                  "enum": [
+                    1
+                  ]
+                },
+                "events": {
+                  "type": "array",
+                  "description": "事件列表",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "event_type": {
+                        "type": "string",
+                        "enum": [
+                          "committed",
+                          "checkpoint",
+                          "agent_usage",
+                          "install_hooks"
+                        ],
+                        "description": "事件类型"
+                      },
+                      "timestamp": {
+                        "type": "integer",
+                        "description": "Unix 时间戳"
+                      },
+                      "repo_url": {
+                        "type": "string",
+                        "description": "仓库 URL"
+                      },
+                      "human_additions": {
+                        "type": "integer",
+                        "description": "人工添加的代码行数"
+                      },
+                      "ai_additions": {
+                        "type": "object",
+                        "description": "AI 工具添加的代码行数 (按工具/模型分组)"
+                      },
+                      "human_deletions": {
+                        "type": "integer",
+                        "description": "人工删除的代码行数"
+                      },
+                      "ai_deletions": {
+                        "type": "object",
+                        "description": "AI 工具删除的代码行数 (按工具/模型分组)"
+                      },
+                      "tool": {
+                        "type": "string",
+                        "description": "使用的 AI 工具"
+                      },
+                      "model": {
+                        "type": "string",
+                        "description": "使用的 AI 模型"
+                      },
+                      "user": {
+                        "type": "string",
+                        "description": "用户名/作者名"
+                      },
+                      "agent_task_id": {
+                        "type": "string",
+                        "description": "Agent 任务 ID"
+                      },
+                      "checkpoint_id": {
+                        "type": "string",
+                        "description": "检查点 ID"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "处理成功（可能包含部分错误）",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "errors": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  },
+                  "description": "错误列表（如果有）"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "版本不支持"
+          },
+          "500": {
+            "description": "服务器内部错误"
+          }
+        }
+      }
+    },
+    "/worker/cas/upload": {
+      "post": {
+        "summary": "上传 CAS 对象",
+        "description": "批量上传 CAS 内容对象",
+        "tags": [
+          "cas"
+        ],
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "objects": {
+                  "type": "array",
+                  "description": "对象列表",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "hash",
+                      "data"
+                    ],
+                    "properties": {
+                      "hash": {
+                        "type": "string",
+                        "description": "对象哈希值"
+                      },
+                      "data": {
+                        "type": "string",
+                        "description": "对象内容 (Base64 编码)"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "上传结果",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "results": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  },
+                  "description": "各对象的上传结果"
+                },
+                "success_count": {
+                  "type": "integer",
+                  "description": "成功上传的数量"
+                },
+                "failure_count": {
+                  "type": "integer",
+                  "description": "失败的数量"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器内部错误"
+          }
+        }
+      }
+    },
+    "/worker/cas/": {
+      "get": {
+        "summary": "读取 CAS 对象",
+        "description": "根据哈希值批量读取 CAS 对象内容",
+        "tags": [
+          "cas"
+        ],
+        "parameters": [
+          {
+            "name": "hashes",
+            "in": "query",
+            "type": "string",
+            "required": true,
+            "description": "哈希值列表，逗号分隔 (最多 100 个)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "读取结果",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "results": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  },
+                  "description": "各对象的读取结果"
+                },
+                "success_count": {
+                  "type": "integer",
+                  "description": "成功读取的数量"
+                },
+                "failure_count": {
+                  "type": "integer",
+                  "description": "失败的数量"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "哈希值数量超过限制"
+          },
+          "500": {
+            "description": "服务器内部错误"
+          }
+        }
+      }
+    },
+    "/worker/oauth/device/code": {
+      "post": {
+        "summary": "获取设备授权码",
+        "description": "创建设备授权流程，返回设备码和用户验证码",
+        "tags": [
+          "oauth"
+        ],
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "description": "可选的客户端参数"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "授权码创建成功",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "device_code": {
+                  "type": "string",
+                  "description": "设备码 (用于后续轮询获取令牌)"
+                },
+                "user_code": {
+                  "type": "string",
+                  "description": "用户验证码 (用户需要在浏览器中输入)"
+                },
+                "verification_uri": {
+                  "type": "string",
+                  "description": "用户验证 URI"
+                },
+                "expires_in": {
+                  "type": "integer",
+                  "description": "过期时间 (秒)"
+                },
+                "interval": {
+                  "type": "integer",
+                  "description": "轮询间隔 (秒)"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器内部错误"
+          }
+        }
+      }
+    },
+    "/worker/oauth/verify_device": {
+      "get": {
+        "summary": "验证设备授权",
+        "description": "验证设备授权状态 (预留接口)",
+        "tags": [
+          "oauth"
+        ],
+        "responses": {
+          "200": {
+            "description": "验证结果"
+          },
+          "500": {
+            "description": "服务器内部错误"
+          }
+        }
+      }
+    },
+    "/worker/oauth/token": {
+      "post": {
+        "summary": "交换令牌",
+        "description": "使用设备码或刷新令牌交换访问令牌",
+        "tags": [
+          "oauth"
+        ],
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": [
+                "grant_type",
+                "client_id"
+              ],
+              "properties": {
+                "grant_type": {
+                  "type": "string",
+                  "enum": [
+                    "urn:ietf:params:oauth:grant-type:device_code",
+                    "refresh_token"
+                  ],
+                  "description": "授权类型"
+                },
+                "device_code": {
+                  "type": "string",
+                  "description": "设备码 (当 grant_type 为 device_code 时需要)"
+                },
+                "refresh_token": {
+                  "type": "string",
+                  "description": "刷新令牌 (当 grant_type 为 refresh_token 时需要)"
+                },
+                "install_nonce": {
+                  "type": "string",
+                  "description": "安装随机数 (可选)"
+                },
+                "client_id": {
+                  "type": "string",
+                  "description": "客户端 ID"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "令牌交换成功",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "access_token": {
+                  "type": "string",
+                  "description": "访问令牌"
+                },
+                "refresh_token": {
+                  "type": "string",
+                  "description": "刷新令牌"
+                },
+                "expires_in": {
+                  "type": "integer",
+                  "description": "过期时间 (秒)"
+                },
+                "token_type": {
+                  "type": "string",
+                  "description": "令牌类型 (通常是 \"Bearer\")"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "令牌请求失败",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "error": {
+                  "type": "string",
+                  "description": "错误代码"
+                },
+                "error_description": {
+                  "type": "string",
+                  "description": "错误描述"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器内部错误"
+          }
+        }
+      }
+    },
+    "/worker/releases/": {
+      "get": {
+        "summary": "获取发布信息",
+        "description": "获取各发布渠道的版本和校验和信息",
+        "tags": [
+          "releases"
+        ],
+        "responses": {
+          "200": {
+            "description": "发布信息",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "channels": {
+                  "type": "object",
+                  "properties": {
+                    "latest": {
+                      "type": "object",
+                      "description": "最新稳定版",
+                      "properties": {
+                        "version": {
+                          "type": "string",
+                          "description": "版本号"
+                        },
+                        "checksum": {
+                          "type": "string",
+                          "description": "校验和"
+                        }
+                      }
+                    },
+                    "next": {
+                      "type": "object",
+                      "description": "下一个版本",
+                      "properties": {
+                        "version": {
+                          "type": "string",
+                          "description": "版本号"
+                        },
+                        "checksum": {
+                          "type": "string",
+                          "description": "校验和"
+                        }
+                      }
+                    },
+                    "enterprise-latest": {
+                      "type": "object",
+                      "description": "企业版最新稳定版",
+                      "properties": {
+                        "version": {
+                          "type": "string",
+                          "description": "版本号"
+                        },
+                        "checksum": {
+                          "type": "string",
+                          "description": "校验和"
+                        }
+                      }
+                    },
+                    "enterprise-next": {
+                      "type": "object",
+                      "description": "企业版下一个版本",
+                      "properties": {
+                        "version": {
+                          "type": "string",
+                          "description": "版本号"
+                        },
+                        "checksum": {
+                          "type": "string",
+                          "description": "校验和"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器内部错误"
+          }
+        }
+      }
+    },
+    "/api/v1/scheduler/jobs": {
+      "get": {
+        "summary": "获取所有任务",
+        "description": "获取所有注册的定时任务列表",
+        "tags": [
+          "scheduler"
+        ],
+        "responses": {
+          "200": {
+            "description": "任务列表",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "success": {
+                  "type": "boolean"
+                },
+                "data": {
+                  "type": "object",
+                  "properties": {
+                    "jobs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      },
+                      "description": "任务列表"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "调度器未启用"
+          },
+          "500": {
+            "description": "服务器内部错误"
+          }
+        }
+      }
+    },
+    "/api/v1/scheduler/jobs/status": {
+      "get": {
+        "summary": "获取任务状态",
+        "description": "获取指定任务的当前状态",
+        "tags": [
+          "scheduler"
+        ],
+        "parameters": [
+          {
+            "name": "jobId",
+            "in": "query",
+            "type": "string",
+            "required": true,
+            "description": "任务 ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "任务状态",
+            "schema": {
+              "$ref": "#/definitions/SuccessResponse"
+            }
+          },
+          "400": {
+            "description": "jobId 不能为空"
+          },
+          "404": {
+            "description": "任务不存在"
+          },
+          "503": {
+            "description": "调度器未启用"
+          },
+          "500": {
+            "description": "服务器内部错误"
+          }
+        }
+      }
+    },
+    "/api/v1/scheduler/jobs/trigger": {
+      "post": {
+        "summary": "手动触发任务",
+        "description": "手动触发指定任务执行",
+        "tags": [
+          "scheduler"
+        ],
+        "parameters": [
+          {
+            "name": "jobId",
+            "in": "query",
+            "type": "string",
+            "required": true,
+            "description": "任务 ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "触发成功",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "success": {
+                  "type": "boolean"
+                },
+                "data": {
+                  "type": "object",
+                  "properties": {
+                    "execution_id": {
+                      "type": "integer"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "job_id": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "jobId 不能为空"
+          },
+          "404": {
+            "description": "任务不存在"
+          },
+          "409": {
+            "description": "任务正在执行中"
+          },
+          "503": {
+            "description": "调度器未启用"
+          },
+          "500": {
+            "description": "任务触发失败"
+          }
+        }
+      }
+    },
+    "/api/v1/scheduler/jobs/history/executions": {
+      "get": {
+        "summary": "获取任务执行历史",
+        "description": "获取指定任务的执行历史记录",
+        "tags": [
+          "scheduler"
+        ],
+        "parameters": [
+          {
+            "name": "jobId",
+            "in": "query",
+            "type": "string",
+            "required": true,
+            "description": "任务 ID"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "type": "integer",
+            "default": 10,
+            "description": "返回记录数量 (最大 100)"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "type": "string",
+            "description": "过滤执行状态"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "执行历史记录",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "success": {
+                  "type": "boolean"
+                },
+                "data": {
+                  "type": "object",
+                  "properties": {
+                    "executions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "job_id": {
+                      "type": "string"
+                    },
+                    "count": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "jobId 不能为空"
+          },
+          "503": {
+            "description": "调度器未启用"
+          },
+          "500": {
+            "description": "服务器内部错误"
+          }
+        }
+      }
+    },
+    "/api/v1/scheduler/jobs/execution-detail": {
+      "get": {
+        "summary": "获取任务执行详情",
+        "description": "获取指定任务执行的详细信息",
+        "tags": [
+          "scheduler"
+        ],
+        "parameters": [
+          {
+            "name": "jobId",
+            "in": "query",
+            "type": "string",
+            "required": true,
+            "description": "任务 ID"
+          },
+          {
+            "name": "executionId",
+            "in": "query",
+            "type": "integer",
+            "required": true,
+            "description": "执行 ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "执行详情",
+            "schema": {
+              "$ref": "#/definitions/SuccessResponse"
+            }
+          },
+          "400": {
+            "description": "执行记录不匹配"
+          },
+          "404": {
+            "description": "执行记录不存在"
+          },
+          "500": {
+            "description": "服务器内部错误"
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "SuccessResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "example": true
+        },
+        "data": {
+          "type": "object"
+        }
+      }
+    },
+    "ErrorResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "example": false
+        },
+        "error": {
+          "type": "string",
+          "example": "错误信息"
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "cas",
+      "description": "CAS API - Content Addressable Storage，用于存储和检索 Git-AI 内容"
+    },
+    {
+      "name": "scheduler",
+      "description": "调度器管理 API - 管理定时任务"
+    },
+    {
+      "name": "stats",
+      "description": "统计分析 API"
+    },
+    {
+      "name": "releases",
+      "description": "Releases API - 发布信息和版本管理"
+    },
+    {
+      "name": "metrics",
+      "description": "Metrics API - 用于 Git-AI 客户端上传代码指标数据"
+    },
+    {
+      "name": "oauth",
+      "description": "OAuth API - 设备授权和令牌管理"
+    }
+  ]
+}

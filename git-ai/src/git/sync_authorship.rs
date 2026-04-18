@@ -1,7 +1,7 @@
 use crate::git::refs::{
-    AI_AUTHORSHIP_PUSH_REFSPEC, CommitAuthorship, copy_ref, fallback_merge_notes_ours,
-    get_commits_with_notes_from_list, merge_notes_from_ref, note_blob_oids_for_commits,
-    notes_add_batch, ref_exists, show_authorship_note, tracking_ref_for_remote,
+    copy_ref, fallback_merge_notes_ours, get_commits_with_notes_from_list, merge_notes_from_ref,
+    note_blob_oids_for_commits, notes_add_batch, ref_exists, show_authorship_note,
+    tracking_ref_for_remote, CommitAuthorship, AI_AUTHORSHIP_PUSH_REFSPEC,
 };
 use crate::{
     api::{ApiClient, ApiContext},
@@ -154,7 +154,7 @@ pub fn fetch_authorship_notes(
             ))
         })?;
         return rest_fetch_authorship_notes(repository, &api, &normalized_repo_url);
-    }
+    } 
     // Generate tracking ref for this remote
     let tracking_ref = tracking_ref_for_remote(remote_name);
 
@@ -517,30 +517,30 @@ fn list_local_authorship_notes_with_blob_oid(
     Ok(mappings)
 }
 
-fn derive_since_commit_time(repository: &Repository) -> Option<i64> {
-    let mut args = repository.global_args_for_exec();
-    args.push("rev-list".to_string());
-    args.push("--timestamp".to_string());
-    args.push("-1".to_string());
-    args.push("@{u}".to_string());
+// fn derive_since_commit_time(repository: &Repository) -> Option<i64> {
+//     let mut args = repository.global_args_for_exec();
+//     args.push("rev-list".to_string());
+//     args.push("--timestamp".to_string());
+//     args.push("-1".to_string());
+//     args.push("@{u}".to_string());
 
-    let output = exec_git(&args).ok()?;
-    let stdout = String::from_utf8(output.stdout).ok()?;
-    let line = stdout.lines().next()?;
-    let commit_time: i64 = line.split_whitespace().next()?.parse().ok()?;
-    Some(commit_time - 86400)
-}
+//     let output = exec_git(&args).ok()?;
+//     let stdout = String::from_utf8(output.stdout).ok()?;
+//     let line = stdout.lines().next()?;
+//     let commit_time: i64 = line.split_whitespace().next()?.parse().ok()?;
+//     Some(commit_time - 86400)
+// }
 
 fn rest_fetch_authorship_notes(
     repository: &Repository,
     api: &ApiClient,
     repo_url: &str,
 ) -> Result<NotesExistence, GitAiError> {
-    let since_commit_time = derive_since_commit_time(repository);
+    // let since_commit_time = derive_since_commit_time(repository);
     let list_response =
         api.authorship_notes_list(&crate::api::types::AuthorshipNotesListRequest {
             repo_url: repo_url.to_string(),
-            since_commit_time,
+            since_commit_time: None,
         })?;
 
     if list_response.data.commit_shas.is_empty() {
@@ -730,10 +730,9 @@ mod tests {
             "+refs/notes/ai:refs/notes/ai-remote/origin",
         );
 
-        assert!(
-            args.windows(2)
-                .any(|pair| pair[0] == "-c" && pair[1] == disabled_hooks)
-        );
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0] == "-c" && pair[1] == disabled_hooks));
         assert!(args.contains(&"fetch".to_string()));
     }
 
@@ -743,10 +742,9 @@ mod tests {
         let args =
             build_authorship_push_args(vec!["-C".to_string(), "/tmp/repo".to_string()], "origin");
 
-        assert!(
-            args.windows(2)
-                .any(|pair| pair[0] == "-c" && pair[1] == disabled_hooks)
-        );
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0] == "-c" && pair[1] == disabled_hooks));
         assert!(args.contains(&"push".to_string()));
     }
 

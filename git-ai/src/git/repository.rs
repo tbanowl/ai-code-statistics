@@ -10,7 +10,7 @@ use crate::git::repo_storage::RepoStorage;
 use crate::git::rewrite_log::RewriteLogEvent;
 use crate::git::status::MAX_PATHSPEC_ARGS;
 use crate::git::sync_authorship::{fetch_authorship_notes, push_authorship_notes};
-use crate::utils::debug_log;
+use crate::utils::{debug_log, is_debug_enabled};
 #[cfg(windows)]
 use crate::utils::is_interactive_terminal;
 use unicode_normalization::UnicodeNormalization;
@@ -22,7 +22,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[cfg(windows)]
 use crate::utils::CREATE_NO_WINDOW;
@@ -2437,19 +2437,14 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
     let git_common_dir_str = lines.next().ok_or_else(|| {
         GitAiError::Generic("Missing --git-common-dir output from git rev-parse".to_string())
     })?;
-
-    debug_log(&format!(
-        "[find_repository] exec_git_rev_parse {}ms",
-        exec_git_rev_parse_start.elapsed().as_millis()
-    ));
+    
+    debug_log(&format!("[find_repository] exec_git_rev_parse {}ms", exec_git_rev_parse_start.elapsed().as_millis()));
 
     let resolve_command_base_dir_start = Instant::now();
     let command_base_dir = resolve_command_base_dir(global_args)?;
-    debug_log(&format!(
-        "[find_repository] resolve_command_base_dir {}ms",
-        resolve_command_base_dir_start.elapsed().as_millis()
-    ));
+    debug_log(&format!("[find_repository] resolve_command_base_dir {}ms", resolve_command_base_dir_start.elapsed().as_millis()));
 
+    
     let check_git_dir_start = Instant::now();
     let git_dir = if Path::new(git_dir_str).is_relative() {
         command_base_dir.join(git_dir_str)
@@ -2488,16 +2483,10 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
         top_level_args.push("rev-parse".to_string());
         top_level_args.push("--show-toplevel".to_string());
         let output = exec_git(&top_level_args)?;
-        debug_log(&format!(
-            "[find_repository] exec_git_rev_parse2 {}ms",
-            exec_git_rev_parse2_start.elapsed().as_millis()
-        ));
+        debug_log(&format!("[find_repository] exec_git_rev_parse2 {}ms", exec_git_rev_parse2_start.elapsed().as_millis()));
         PathBuf::from(String::from_utf8(output.stdout)?.trim())
     };
-    debug_log(&format!(
-        "[find_repository] check_git_dir {}ms",
-        check_git_dir_start.elapsed().as_millis()
-    ));
+    debug_log(&format!("[find_repository] check_git_dir {}ms", check_git_dir_start.elapsed().as_millis()));
 
     if !workdir.is_dir() {
         return Err(GitAiError::Generic(format!(
@@ -2523,11 +2512,9 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
     {
         normalized_global_args[1] = command_root;
     }
-    debug_log(&format!(
-        "[find_repository] normalized_global_args cost {}ms",
-        normalized_global_args_start.elapsed().as_millis()
-    ));
+    debug_log(&format!("[find_repository] normalized_global_args cost {}ms", normalized_global_args_start.elapsed().as_millis()));
 
+    
     let canonical_workdir_start = Instant::now();
     // Canonicalize workdir for reliable path comparisons (especially on Windows)
     // On Windows, canonical paths use the \\?\ UNC prefix, which makes path.starts_with()
@@ -2539,10 +2526,7 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
             e
         ))
     })?;
-    debug_log(&format!(
-        "[find_repository] canonical_workdir cost {}ms",
-        canonical_workdir_start.elapsed().as_millis()
-    ));
+    debug_log(&format!("[find_repository] canonical_workdir cost {}ms", canonical_workdir_start.elapsed().as_millis()));
 
     let worktree_storage_ai_dir_start = Instant::now();
     let worktree_ai_dir = worktree_storage_ai_dir(&git_dir, &git_common_dir);
@@ -2551,15 +2535,9 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
     } else {
         RepoStorage::for_isolated_worktree_storage(&worktree_ai_dir, &workdir)?
     };
-    debug_log(&format!(
-        "[find_repository] worktree_storage_ai_dir cost {}ms",
-        worktree_storage_ai_dir_start.elapsed().as_millis()
-    ));
-
-    debug_log(&format!(
-        "[find_repository] cost {}ms",
-        find_repository_start.elapsed().as_millis()
-    ));
+    debug_log(&format!("[find_repository] worktree_storage_ai_dir cost {}ms", worktree_storage_ai_dir_start.elapsed().as_millis()));
+    
+    debug_log(&format!("[find_repository] cost {}ms", find_repository_start.elapsed().as_millis()));
 
     Ok(Repository {
         global_args: normalized_global_args,
@@ -3189,8 +3167,20 @@ pub fn exec_git_allow_nonzero_with_profile(
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
     }
+    if is_debug_enabled() {
+        eprintln!("[exec_git] cwd = {:?}", std::env::current_dir());
+        eprintln!("[exec_git] cmd = {:?}", cmd);
 
-    cmd.output().map_err(GitAiError::IoError)
+        cmd.env("GIT_TRACE", "1");
+        cmd.env("GIT_TRACE2", "1");
+    }
+    
+    let cmd_start = Instant::now();
+    // 模拟虚拟机环境 git 命令执行时间长
+    std::thread::sleep(Duration::from_millis(1500));
+    let result = cmd.output().map_err(GitAiError::IoError);
+    debug_log(&format!("git command [{:?}] execution total {}ms", effective_args, cmd_start.elapsed().as_millis()));
+    result
 }
 
 /// Helper to execute a git command with an explicit internal profile.
@@ -3243,8 +3233,18 @@ pub fn exec_git_stdin_with_profile(
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
     }
+    if is_debug_enabled() {
+        eprintln!("[exec_git] cwd = {:?}", std::env::current_dir());
+        eprintln!("[exec_git] cmd = {:?}", cmd);
 
+        cmd.env("GIT_TRACE", "1");
+        cmd.env("GIT_TRACE2", "1");
+    }
+    let cmd_start = Instant::now();
+    std::thread::sleep(Duration::from_millis(1500));
     let mut child = cmd.spawn().map_err(GitAiError::IoError)?;
+    debug_log(&format!("git command [{:?}] execution total {}ms", effective_args, cmd_start.elapsed().as_millis()));
+
 
     // Write stdin in a separate thread to avoid deadlock: if we write all stdin
     // before reading stdout, the child's stdout pipe buffer can fill up, causing
@@ -3320,8 +3320,18 @@ pub fn exec_git_stdin_with_env_with_profile(
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
     }
+    if is_debug_enabled() {
+        eprintln!("[exec_git] cwd = {:?}", std::env::current_dir());
+        eprintln!("[exec_git] cmd = {:?}", cmd);
 
+        cmd.env("GIT_TRACE", "1");
+        cmd.env("GIT_TRACE2", "1");
+    }
+
+    let cmd_start = Instant::now();
+    std::thread::sleep(Duration::from_millis(1500));
     let mut child = cmd.spawn().map_err(GitAiError::IoError)?;
+    debug_log(&format!("git command [{:?}] execution total {}ms", effective_args, cmd_start.elapsed().as_millis()));
 
     // Write stdin in a separate thread to avoid deadlock (see exec_git_stdin_with_profile).
     let stdin_handle = child.stdin.take().map(|mut stdin| {

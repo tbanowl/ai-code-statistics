@@ -59,7 +59,7 @@ const columns = computed(() => [
   {
     label: "操作",
     fixed: "right",
-    minWidth: 150,
+    width: 200,
     slot: "operation"
   }
 ]);

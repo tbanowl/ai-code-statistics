@@ -24,7 +24,7 @@ use crate::git::repository::{CommitRange, Repository, group_files_by_repository}
 use crate::git::sync_authorship::{NotesExistence, fetch_authorship_notes, push_authorship_notes};
 use crate::observability::wrapper_performance_targets::log_performance_for_checkpoint;
 use crate::observability::{self, log_message};
-use crate::utils::is_interactive_terminal;
+    use crate::utils::{debug_log, is_interactive_terminal};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::io::IsTerminal;
@@ -186,7 +186,7 @@ pub fn handle_git_ai(args: &[String]) {
         }
         "upgrade" => {
             commands::upgrade::run_with_args(&args[1..]);
-        }
+        }        
         "flush-logs" => {
             commands::flush_logs::handle_flush_logs(&args[1..]);
         }
@@ -658,6 +658,7 @@ fn handle_checkpoint(args: &[String]) {
         }
     }
 
+    debug_log(&format!("agent run result: {:?}", &agent_run_result));
     let final_working_dir = agent_run_result
         .as_ref()
         .and_then(|r| r.repo_working_dir.clone())
@@ -1133,7 +1134,7 @@ fn run_checkpoint_via_daemon_or_local(
             let is_test = std::env::var_os("GIT_AI_TEST_DB_PATH").is_some()
                 || std::env::var_os("GITAI_TEST_DB_PATH").is_some();
             let checkpoint_daemon_timeout = if cfg!(windows) || is_test {
-                Duration::from_secs(10)
+                Duration::from_secs(60)
             } else {
                 Duration::from_secs(5)
             };

@@ -25,6 +25,7 @@ pub fn push_pre_command_hook(
         // Clone what we need for the background thread
         let global_args = repository.global_args_for_exec();
 
+
         crate::observability::spawn_background_flush();
 
         // Spawn CAS flush if prompt_storage is "default" (CAS upload mode)

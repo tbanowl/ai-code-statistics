@@ -205,20 +205,6 @@ CREATE TABLE IF NOT EXISTS stats_daily_stats (
     INDEX idx_stats_daily_stats_contributor (contributor_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='每日统计表';
 
--- 任务执行记录表
-CREATE TABLE IF NOT EXISTS task_executions (
-    id VARCHAR(20) PRIMARY KEY COMMENT '主键，使用 XID',
-    job_id VARCHAR(100) NOT NULL COMMENT '调度任务 ID',
-    status VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT '执行状态',
-    started_at BIGINT COMMENT '开始执行时间（毫秒）',
-    finished_at BIGINT COMMENT '完成时间（毫秒）',
-    execution_time_ms INT COMMENT '执行耗时（毫秒）',
-    error_message TEXT COMMENT '错误信息',
-    created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
-    updated_at BIGINT NOT NULL COMMENT '更新时间戳（毫秒）',
-    INDEX idx_task_executions_job (job_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='任务执行记录表';
-
 -- GIT AI 数据收集表
 CREATE TABLE IF NOT EXISTS telemetry_envelope (
     id VARCHAR(20) PRIMARY KEY COMMENT '主键，使用 XID',
@@ -336,6 +322,28 @@ CREATE TABLE IF NOT EXISTS apscheduler_jobs (
     job_state LONGBLOB NOT NULL COMMENT '序列化任务状态',
     INDEX idx_apscheduler_jobs_next_run_time (next_run_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='APScheduler JobStore 表';
+
+
+-- 任务执行表
+CREATE TABLE IF NOT EXISTS task_running (
+    job_id VARCHAR(100) PRIMARY KEY  COMMENT '调度任务 ID',
+    started_at BIGINT COMMENT '开始执行时间（毫秒）'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='任务执行表';
+
+
+-- 任务执行记录表
+CREATE TABLE IF NOT EXISTS task_executions (
+    id VARCHAR(20) PRIMARY KEY COMMENT '主键，使用 XID',
+    job_id VARCHAR(100) NOT NULL COMMENT '调度任务 ID',
+    status VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT '执行状态',
+    started_at BIGINT COMMENT '开始执行时间（毫秒）',
+    finished_at BIGINT COMMENT '完成时间（毫秒）',
+    execution_time_ms INT COMMENT '执行耗时（毫秒）',
+    error_message TEXT COMMENT '错误信息',
+    created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
+    updated_at BIGINT NOT NULL COMMENT '更新时间戳（毫秒）',
+    INDEX idx_task_executions_job (job_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='任务执行记录表';
 
 -- 系统管理表
 CREATE TABLE IF NOT EXISTS sys_dept (

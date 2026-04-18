@@ -36,9 +36,10 @@ init_logging(config.get("logging", {}), BASE_DIR)
 main_logger = Logger.get_logger("app")
 main_logger.info("应用启动，Git AI 代码统计工具 v2.0")
 
-# 创建 Flask 应用，设置静态文件目录为编译后的 static
+# 创建 Flask 应用，设置静态文件目录
 static_dir = os.path.abspath(os.path.join(BASE_DIR, "frontend_static"))
-app = Flask(__name__, static_folder=static_dir, static_url_path='/static')
+# 禁用 Flask 默认的静态文件处理，使用自定义路由
+app = Flask(__name__, static_folder=None, static_url_path=None)
 
 # 配置 Flask 日志
 setup_flask_logging(app, config)
@@ -89,32 +90,41 @@ def index():
     return send_from_directory(static_dir, "index.html")
 
 
-# @app.route("/<path:filename>")
-# def static_file(filename):
-#     """首页 - 返回编译后的 index.html"""
-#     return send_from_directory(static_dir, filename)
+@app.route("/favicon.ico")
+def favicon():
+    """favicon 文件"""
+    return send_from_directory(static_dir, "favicon.ico")
 
-# @app.route('/', defaults={'path': '', 'path2': '', 'path3': ''})
-# # @app.route('/<path:path>', defaults={'path2': '', 'path3': ''})
-# # @app.route('/<path:path>/<path:path2>', defaults={'path3': ''})
-# # @app.route('/<path:path>/<path:path2>/<path:path3>')
-# def index(path):
-# # def index(path, path2, path3):
-#     full_path = path
-#     # if path2:
-#     #     full_path = f"{path}/{path2}"
-#     # if path3:
-#     #     full_path = f"{full_path}/{path3}"
-#     # 判断是否为静态文件请求（有扩展名的文件）
-#     if path and os.path.exists(os.path.join(static_dir, full_path)):
-#         return send_from_directory(static_dir, full_path)
-    
-#     # 判断是否为 API 请求（已被蓝图处理，这里作为兜底）
-#     if path.startswith('api/'):
-#         return jsonify({'error': 'API endpoint not found'}), 404
-    
-#     # 其他所有请求 → 返回 index.html，交给 Vue Router 处理
-#     return send_from_directory(static_dir, 'index.html')
+
+@app.route("/static/<path:filename>")
+def serve_static(filename):
+    """提供静态文件服务 - 处理 /static/ 路径下的所有文件"""
+    return send_from_directory(os.path.join(static_dir, "static"), filename)
+
+
+@app.route("/<path:path>")
+def catch_all(path):
+    """
+    Catch-all 路由 - 处理所有未匹配的路由
+    1. 如果是静态文件，直接返回
+    2. 如果是 API 请求，返回 404
+    3. 其他情况返回 index.html (支持 Vue Router 历史)
+    """
+    # 检查是否是静态文件请求（有扩展名的文件或存在于 static 目录）
+    full_path = os.path.join(static_dir, path)
+
+    # 如果文件存在于 static_dir，直接返回
+    if os.path.isfile(full_path):
+        return send_from_directory(static_dir, path)
+
+    # 如果是 API 请求且未被蓝图处理，返回 404
+    if path.startswith("api/"):
+        main_logger.warning(f"API endpoint not found: {path}")
+        return {"error": "API endpoint not found"}, 404
+
+    # 其他所有请求 → 返回 index.html，交给 Vue Router 处理
+    main_logger.debug(f"Serving index.html for path: {path}")
+    return send_from_directory(static_dir, "index.html")
 
 
 @app.route("/health")
@@ -137,8 +147,3 @@ if __name__ == "__main__":
 
 elif __name__ == "app":
     main_logger.info("启动服务器...")
-    web_config = config.get("web", {})
-    port = web_config.get("port", 8888)
-    host = web_config.get("host", "0.0.0.0")
-    main_logger.info(f"访问地址: http://{host}:{port}")
-    main_logger.info(f"健康检查: http://{host}:{port}/health")

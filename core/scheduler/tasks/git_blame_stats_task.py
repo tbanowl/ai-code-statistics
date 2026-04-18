@@ -1,9 +1,11 @@
 """Git Blame 统计定时任务"""
 
 import os
+from os import path
 import time
 from datetime import datetime, timedelta
 from typing import Dict, Optional
+from uuid import uuid4
 from core.scheduler.tasks.base import BaseTask
 from core.scheduler.scheduled import scheduled
 from core.database import BlameStatsDatabase
@@ -148,12 +150,12 @@ class GitBlameStatsTask(BaseTask):
         Returns:
             统计结果或 None
         """
-        import tempfile
-
         temp_dir = None
         try:
-            # 创建临时目录
-            temp_dir = tempfile.mkdtemp(prefix="git_blame_")
+            # 创建临时目录 - 使用项目目录下的 code-metrics 目录
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            temp_dir = os.path.join(os.path.join(project_root, ".code-metrics"), f"git_blame_{uuid4()}")
+            os.makedirs(temp_dir, exist_ok=True)
 
             # 克隆仓库
             self.logger.info(f"克隆仓库到临时目录: {temp_dir}")

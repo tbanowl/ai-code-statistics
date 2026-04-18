@@ -43,3 +43,14 @@ pub fn get_all_installers() -> Vec<Box<dyn HookInstaller>> {
         Box::new(WindsurfInstaller),
     ]
 }
+
+
+/// Get cluade codex opencode hook installers
+pub fn get_installers() -> Vec<Box<dyn HookInstaller>> {
+    vec![
+        Box::new(ClaudeCodeInstaller),
+        Box::new(CodexInstaller),
+        Box::new(OpenCodeInstaller),
+        Box::new(JetBrainsInstaller),
+    ]
+}

@@ -77,7 +77,8 @@ swagger:
     name: API Support
   license:
     name: MIT
-
+git_ai:
+  api_key: git-ai123456789
 # 日志配置
 logging:
   # 日志目录（相对于项目根目录）

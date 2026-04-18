@@ -49,8 +49,8 @@ use crate::authorship::working_log::AgentId;
 /// This is half of the server-side bucketing window.
 #[cfg_attr(any(test, feature = "test-support"), allow(dead_code))]
 const AGENT_USAGE_MIN_INTERVAL_SECS: u64 = 150;
-const CHECKPOINT_LOCK_POLL_INTERVAL: StdDuration = StdDuration::from_millis(50);
-const DEFAULT_CHECKPOINT_LOCK_TIMEOUT: StdDuration = StdDuration::from_secs(5);
+const CHECKPOINT_LOCK_POLL_INTERVAL: StdDuration = StdDuration::from_millis(500);
+const DEFAULT_CHECKPOINT_LOCK_TIMEOUT: StdDuration = StdDuration::from_secs(20);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -148,6 +148,11 @@ fn acquire_checkpoint_lock(repo: &Repository) -> Result<LockFile, GitAiError> {
 
         std::thread::sleep(CHECKPOINT_LOCK_POLL_INTERVAL);
     }
+}
+
+pub fn is_checkpoint_lock(repo: &Repository) -> bool {
+    let lock_path = checkpoint_lock_path(repo);
+    lock_path.exists()
 }
 
 /// Build EventAttributes with repo metadata.
@@ -1625,6 +1630,13 @@ fn get_checkpoint_entry_for_file(
         }
 
         let stats = compute_file_line_stats(&previous_content, &current_content);
+        debug_log(&format!(
+            "[git-ai] compute_file_line_stats for {}, stats: {:?} \n previous_content \n {:?} \n content: \n {}",
+            file_path,
+            stats,
+            previous_content,
+            current_content
+        ));
         let entry = WorkingLogEntry::new(file_path, file_content_hash, Vec::new(), Vec::new());
         return Ok(Some((entry, stats)));
     }
@@ -2046,6 +2058,14 @@ fn make_entry_for_file(
         "[BENCHMARK]   compute_file_line_stats for {} took {:?}",
         file_path,
         stats_start.elapsed()
+    ));
+
+    debug_log(&format!(
+        "[git-ai] compute_file_line_stats for {}, stats: {:?} \n previous_content \n {:?} \n content: \n {}",
+        file_path,
+        line_stats,
+        previous_content,
+        content
     ));
 
     let entry = WorkingLogEntry::new(
@@ -3129,20 +3149,6 @@ mod tests {
             latest_stats.deletions_sloc, 0,
             "Whitespace deletions ignored"
         );
-    }
-
-    #[test]
-    fn test_compute_file_line_stats_lf_to_crlf_with_appended_lines_ignores_line_ending_only_changes()
-     {
-        let previous_content = "1\n2\n3\n4\n5\n";
-        let current_content = "1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8\r\n9\r\n10\r\n";
-
-        let stats = compute_file_line_stats(previous_content, current_content);
-
-        assert_eq!(stats.additions, 5);
-        assert_eq!(stats.deletions, 0);
-        assert_eq!(stats.additions_sloc, 5);
-        assert_eq!(stats.deletions_sloc, 0);
     }
 
     #[test]

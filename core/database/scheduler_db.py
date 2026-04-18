@@ -7,14 +7,23 @@
 from datetime import datetime
 from typing import Dict, List, Optional
 
+from apscheduler import job
+from sqlalchemy import update
+
 from .base import BaseDatabase, session_scope
-from .models import TaskExecution
+from .models import TaskExecution, TaskRunning
 
 
 class SchedulerDatabase(BaseDatabase):
     """调度器数据库操作类"""
+    
+    def create_task_running(self, job_id: str, started_at: int):
+        with session_scope(self.engine) as session:
+            running = TaskRunning(job_id=job_id, started_at=started_at)
+            session.add(running)
+        
 
-    def create_task_execution(self, job_id: str) -> str:
+    def create_task_execution(self, job_id: str, started_at: int) -> str:
         """
         创建任务执行记录，返回 execution_id。
 
@@ -25,10 +34,10 @@ class SchedulerDatabase(BaseDatabase):
             execution_id: 执行记录的 ID
         """
         with session_scope(self.engine) as session:
-            execution = TaskExecution(job_id=job_id, status="pending")
+            execution = TaskExecution(job_id=job_id, started_at = started_at, status="pending")
             session.add(execution)
             session.flush()
-            return str(execution.id)
+            return execution.id
 
     def update_task_execution_status(self, execution_id: str, status: str) -> None:
         """
@@ -52,12 +61,13 @@ class SchedulerDatabase(BaseDatabase):
                 if status == "running" and not execution.started_at:
                     execution.started_at = now_ts()
 
+
     def complete_task_execution(
         self,
-        execution_id: str,
-        started_at: datetime,
-        finished_at: datetime,
+        job_id: str,
+        finished_at: int,
         execution_time_ms: int,
+        execution_id: Optional[str] = None,
         error_message: Optional[str] = None,
     ) -> None:
         """
@@ -73,18 +83,32 @@ class SchedulerDatabase(BaseDatabase):
         from .base import now_ts
 
         with session_scope(self.engine) as session:
-            execution = (
-                session.query(TaskExecution)
-                .filter(TaskExecution.id == execution_id)
-                .first()
-            )
-            if execution:
-                execution.status = "failed" if error_message else "completed"
-                execution.started_at = int(started_at.timestamp() * 1000)
-                execution.finished_at = int(finished_at.timestamp() * 1000)
-                execution.execution_time_ms = execution_time_ms
-                execution.error_message = error_message if error_message else ""
-                execution.updated_at = now_ts()
+            if execution_id:
+                execution = (
+                    session.query(TaskExecution)
+                    .filter(TaskExecution.id == execution_id)
+                    .first()
+                )
+                if execution:
+                    execution.status = "failed" if error_message else "completed"
+                    execution.finished_at = finished_at
+                    execution.execution_time_ms = execution_time_ms
+                    execution.error_message = error_message if error_message else ""
+                    execution.updated_at = now_ts()
+            else:
+                stmt = (
+                    update(TaskExecution)
+                    .where(TaskExecution.job_id == job_id, TaskExecution.status == "pending")
+                    .values(status="failed" if error_message else "completed", 
+                            finished_at = finished_at, 
+                            execution_time_ms = execution_time_ms,
+                            error_message = error_message if error_message else "",
+                            updated_at = now_ts()
+                    )
+                )
+                session.execute(stmt)
+            session.query(TaskRunning).filter(TaskRunning.job_id == job_id).delete()
+            
 
     def get_running_task_execution(self, job_id: str) -> Optional[Dict]:
         """
@@ -98,9 +122,8 @@ class SchedulerDatabase(BaseDatabase):
         """
         with session_scope(self.engine) as session:
             execution = (
-                session.query(TaskExecution)
-                .filter(TaskExecution.job_id == job_id)
-                .filter(TaskExecution.status.in_(["pending", "running"]))
+                session.query(TaskRunning)
+                .filter(TaskRunning.job_id == job_id)
                 .first()
             )
             return execution.to_dict() if execution else None
@@ -118,9 +141,8 @@ class SchedulerDatabase(BaseDatabase):
             执行记录字典，或 None
         """
         with session_scope(self.engine) as session:
-            return session.query(TaskExecution.job_id)\
-                .filter(TaskExecution.job_id.in_(job_ids))\
-                .filter(TaskExecution.status.in_(["pending", "running"]))\
+            return session.query(TaskRunning.job_id)\
+                .filter(TaskRunning.job_id.in_(job_ids))\
                 .all()
 
     def get_task_execution(self, execution_id: str | None) -> Optional[Dict]:

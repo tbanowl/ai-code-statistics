@@ -12,6 +12,29 @@ $SENTRY_ENTERPRISE = "http://dsn-key@10.251.12.24:30939/git-ai/dsn"
 # [Environment]::SetEnvironmentVariable('GIT_AI_DEBUG', 1, 'User')
 # [Environment]::SetEnvironmentVariable('GIT_AI_DEBUG_PERFORMANCE', 2, 'User')
 
+# $gitAiDaemonHome = [Environment]::GetEnvironmentVariable('GIT_AI_DAEMON_HOME', 'User')
+# if ([string]::IsNullOrWhiteSpace($gitAiDaemonHome)) {
+#     try {
+#         if (Test-Path "Q:\") {
+#             $daemonHomePath = "Q:\ProgramData\git-ai"
+
+#             if (-not (Test-Path $daemonHomePath)) {
+#                 Write-Host "Warning: path does not exist: $daemonHomePath"
+#             }
+
+#             [Environment]::SetEnvironmentVariable('GIT_AI_DAEMON_HOME', $daemonHomePath, 'User')
+#             $env:GIT_AI_DAEMON_HOME = $daemonHomePath
+
+#             Write-Host "Set Environment Variable: GIT_AI_DAEMON_HOME=$daemonHomePath"
+#         }
+#     } catch {
+#         Write-Host "Set Environment Variable 'GIT_AI_DAEMON_HOME' failed: $($_.Exception.Message)"
+#     }
+# }
+# else {
+#     Write-Host "Skip Set Existed Environment Variable GIT_AI_DAEMON_HOME"
+# }
+
 function Write-ErrorAndExit {
     param(
         [Parameter(Mandatory = $true)][string]$Message
@@ -115,9 +138,9 @@ function Stop-GitAiManagedProcesses {
     $pids = @($processes | Sort-Object ProcessId -Unique | Select-Object -ExpandProperty ProcessId)
     Write-Warning ("Stopping lingering git-ai processes: {0}" -f ($pids -join ', '))
 
-    foreach ($pid in $pids) {
+    foreach ($processId in $pids) {
         try {
-            Stop-Process -Id $pid -Force -ErrorAction Stop
+            Stop-Process -Id $processId -Force -ErrorAction Stop
         } catch { }
     }
 
@@ -151,12 +174,6 @@ function Wait-ForFileAvailable {
         if (-not (Test-FileAvailable -Path $Path)) {
             if ($elapsed -eq 0) {
                 Write-Host "Waiting for file to be available: $Path" -ForegroundColor Yellow
-                # try {
-                #     Write-Host "Try shutdown git-ai daemon process" -ForegroundColor Yellow
-                #     & $Path d shutdown
-                # } catch {
-                #     Write-Host "Shutdown git-ai daemon process faild." -ForegroundColor Yellow
-                # }
             }
             Start-Sleep -Seconds $RetryIntervalSeconds
             $elapsed += $RetryIntervalSeconds
@@ -291,7 +308,7 @@ function Get-StdGitPath {
     }
 
     try {
-        & $gitPath --version | Out-Null
+        & $gitPath --version
         if ($LASTEXITCODE -ne 0) { throw 'bad' }
     } catch {
         Write-ErrorAndExit "Detected git at $gitPath is not usable (--version failed). Please ensure you have Git installed and available on your PATH. If you believe this is a bug with the installer, please file an issue at https://github.com/git-ai-project/git-ai/issues."
@@ -327,8 +344,8 @@ function Set-PathPrependBeforeGit {
         foreach ($e in $entries) {
             $n = NormalizePath $e
             if (-not $seen.Contains($n) -and $n -ne $normalizedAdd) {
-                $seen.Add($n) | Out-Null
-                $list.Add($e) | Out-Null
+                $seen.Add($n)
+                $list.Add($e)
             }
         }
 
@@ -545,6 +562,16 @@ try { Unblock-File -Path $gitOgShim -ErrorAction SilentlyContinue } catch { }
 #     }
 # }
 
+Write-Host "Config notes_store to rest"
+try {
+    & $finalExe config set notes_store "rest"
+    & $finalExe config set api_key "git-ai123456789"
+    # & $finalExe config set feature_flags.async_mode "false"
+    Write-Success 'Successfully config notes_store to rest.'
+} catch {
+    Write-Success 'Warning: Failed config notes_store to rest.'
+}
+
 # Install hooks
 Write-Host 'Setting up IDE/agent hooks...'
 try {
@@ -618,7 +645,7 @@ try {
             $targetBashConfig = $bashrcPath
         } elseif (Test-Path -LiteralPath $bashProfilePath) {
             $targetBashConfig = $bashProfilePath
-        } else {
+    } else {
             # No existing config; create .bashrc
             $targetBashConfig = $bashrcPath
         }
@@ -661,9 +688,9 @@ try {
     if (-not (Test-Path -LiteralPath $configJsonPath)) {
         $cfg = @{
             git_path = $stdGitPath
-            # feature_flags = @{
-            #     async_mode = $true
-            # }
+            feature_flags = @{
+                async_mode = $true
+            }
         } | ConvertTo-Json -Depth 3 -Compress
         $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
         [System.IO.File]::WriteAllText($configJsonPath, $cfg, $utf8NoBom)
@@ -673,29 +700,12 @@ try {
 }
 
 # Config Init
-Write-Host "Config DSN $SENTRY_ENTERPRISE"
 try {
     & $finalExe config set telemetry_enterprise_dsn "$SENTRY_ENTERPRISE"
     Write-Success 'Successfully config telemetry_enterprise_dsn.'
 } catch {
     Write-Success 'Warning: Failed config telemetry_enterprise_dsn.'
 }
-
-Write-Host "Config notes_store to rest"
-try {
-    & $finalExe config set notes_store "rest"
-    Write-Success 'Successfully config notes_store to rest.'
-} catch {
-    Write-Success 'Warning: Failed config notes_store to rest.'
-}
-
-# Write-Host "Config async_mode to true"
-# try {
-#     & $finalExe config set feature_flags.async_mode "true"
-#     Write-Success 'Successfully config notes_store to rest.'
-# } catch {
-#     Write-Success 'Warning: Failed config notes_store to rest.'
-# }
 
 # If nonce exchange failed, run interactive login
 Write-Host ''

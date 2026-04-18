@@ -24,19 +24,21 @@ class DailyAggregationTask(BaseTask):
         contributor = context.get("contributor")
 
         if start_ts is None or end_ts is None:
-            yesterday = datetime.now() - timedelta(days=1)
-            yesterday_start = yesterday.replace(
+            today = datetime.now()
+            today_start = today.replace(
                 hour=0, minute=0, second=0, microsecond=0
             )
+            # YYYYMMDD
             latest = stats_db.get_latest_stat_date()
             if not isinstance(latest, (int, float)) or latest <= 0:
-                range_start = yesterday_start
+                range_start = today_start
             else:
-                range_start = datetime.fromtimestamp(latest / 1000) + timedelta(days=1)
+                latest = datetime.strptime(str(latest), "%Y%m%d")
+                range_start = latest + timedelta(days=1)
                 range_start = range_start.replace(
                     hour=0, minute=0, second=0, microsecond=0
                 )
-            range_end = yesterday_start
+            range_end = today_start
         else:
             range_start = datetime.fromtimestamp(start_ts / 1000).replace(
                 hour=0, minute=0, second=0, microsecond=0
@@ -52,7 +54,6 @@ class DailyAggregationTask(BaseTask):
         total_records = 0
         cursor = range_start
         while cursor <= range_end:
-            now_ts = cursor.timestamp()
             day_start_ts = int(cursor.timestamp() * 1000)
             day_end_ts = int(
                 cursor.replace(
@@ -105,8 +106,7 @@ class DailyAggregationTask(BaseTask):
         for event in committed_events:
             repo_path = event.get("repo_url", "")
             author_name = event.get("author", "")
-            author_email = event.get("author_email")
-            key = (repo_path, author_name, author_email)
+            key = (repo_path, author_name)
 
             if key not in aggregated:
                 aggregated[key] = {
@@ -123,7 +123,7 @@ class DailyAggregationTask(BaseTask):
             stats["ai_generated_lines_total"] += int(event.get("total_ai_additions_total", 0))
             stats["ai_generated_lines"] = int(event.get("ai_additions", 0))
             stats["ai_accepted_lines"] += int(event.get("ai_accepted_lines", 0))
-            stats["human_lines"] += int(event.get("human_additions", 0))
+            # stats["commit_times"] += int(event.get("commit_times", 0))
             if event.get("git_ai_version"):
                 stats["git_ai_version"] = event.get("git_ai_version")
 

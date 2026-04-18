@@ -9,7 +9,7 @@ git_ai_bp = Blueprint('git_ai', __name__, url_prefix='/api/git-ai')
 # 初始化日志记录器
 logger = Logger.get_logger('api.git_ai')
 
-@git_ai_bp.route('/dsn/store/')
+@git_ai_bp.route('/dsn/store/', methods = ['POST'])
 def dsn():
     """
     git ai 收集的信息

@@ -212,8 +212,8 @@ export const triggerStatsAggregate = (payload?: {
 export const getBlameRepoStats = (params?: {
   page?: number;
   page_size?: number;
-  start_date?: number;
-  end_date?: number;
+  start_date?: string;
+  end_date?: string;
   repo_id?: string;
 }) => {
   return http.request<ApiResponse<BlameRepoStatItem[]>>(
