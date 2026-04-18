@@ -3132,6 +3132,20 @@ mod tests {
     }
 
     #[test]
+    fn test_compute_file_line_stats_lf_to_crlf_with_appended_lines_ignores_line_ending_only_changes()
+     {
+        let previous_content = "1\n2\n3\n4\n5\n";
+        let current_content = "1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8\r\n9\r\n10\r\n";
+
+        let stats = compute_file_line_stats(previous_content, current_content);
+
+        assert_eq!(stats.additions, 5);
+        assert_eq!(stats.deletions, 0);
+        assert_eq!(stats.additions_sloc, 5);
+        assert_eq!(stats.deletions_sloc, 0);
+    }
+
+    #[test]
     fn test_checkpoint_lock_path_uses_repo_ai_dir() {
         let tmp_repo = TmpRepo::new().expect("tmp repo should create");
         let repo = tmp_repo.gitai_repo();

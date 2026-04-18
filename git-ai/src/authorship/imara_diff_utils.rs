@@ -4,6 +4,7 @@
 //! for accurate line attribution tracking.
 
 use imara_diff::{Algorithm, Diff, InternedInput, TokenSource};
+use std::borrow::Cow;
 use std::hash::Hash;
 
 // ============================================================================
@@ -153,6 +154,12 @@ pub struct LineChange<'a> {
     value: &'a str,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SplitLines<'a> {
+    lines: Vec<&'a str>,
+    normalized: String,
+}
+
 impl<'a> LineChange<'a> {
     /// Returns the tag indicating what kind of change this is.
     pub fn tag(&self) -> &LineChangeTag {
@@ -176,11 +183,10 @@ impl<'a> LineChange<'a> {
 /// # Returns
 /// A vector of `LineChange` representing each line's change status.
 pub fn compute_line_changes<'a>(old: &'a str, new: &'a str) -> Vec<LineChange<'a>> {
-    let old_lines: Vec<&str> = split_lines_with_terminators(old);
-    let new_lines: Vec<&str> = split_lines_with_terminators(new);
+    let old_lines = split_lines_with_terminators(old);
+    let new_lines = split_lines_with_terminators(new);
 
-    // Use imara_diff with &str which implements TokenSource (tokenizes by lines)
-    let input = InternedInput::new(old, new);
+    let input = InternedInput::new(old_lines.normalized.as_str(), new_lines.normalized.as_str());
     let mut diff = Diff::compute(Algorithm::Myers, &input);
     diff.postprocess_lines(&input);
 
@@ -196,7 +202,7 @@ pub fn compute_line_changes<'a>(old: &'a str, new: &'a str) -> Vec<LineChange<'a
 
         // Add equal lines before this hunk
         while old_idx < hunk_old_start && new_idx < hunk_new_start {
-            if let Some(line) = new_lines.get(new_idx) {
+            if let Some(line) = new_lines.lines.get(new_idx) {
                 changes.push(LineChange {
                     tag: LineChangeTag::Equal,
                     value: line,
@@ -208,7 +214,7 @@ pub fn compute_line_changes<'a>(old: &'a str, new: &'a str) -> Vec<LineChange<'a
 
         // Add deleted lines
         for i in hunk_old_start..hunk_old_end {
-            if let Some(line) = old_lines.get(i) {
+            if let Some(line) = old_lines.lines.get(i) {
                 changes.push(LineChange {
                     tag: LineChangeTag::Delete,
                     value: line,
@@ -218,7 +224,7 @@ pub fn compute_line_changes<'a>(old: &'a str, new: &'a str) -> Vec<LineChange<'a
 
         // Add inserted lines
         for i in hunk_new_start..hunk_new_end {
-            if let Some(line) = new_lines.get(i) {
+            if let Some(line) = new_lines.lines.get(i) {
                 changes.push(LineChange {
                     tag: LineChangeTag::Insert,
                     value: line,
@@ -231,8 +237,8 @@ pub fn compute_line_changes<'a>(old: &'a str, new: &'a str) -> Vec<LineChange<'a
     }
 
     // Add remaining equal lines after last hunk
-    while new_idx < new_lines.len() {
-        if let Some(line) = new_lines.get(new_idx) {
+    while new_idx < new_lines.lines.len() {
+        if let Some(line) = new_lines.lines.get(new_idx) {
             changes.push(LineChange {
                 tag: LineChangeTag::Equal,
                 value: line,
@@ -245,23 +251,40 @@ pub fn compute_line_changes<'a>(old: &'a str, new: &'a str) -> Vec<LineChange<'a
 }
 
 /// Splits a string into lines, preserving line terminators.
-fn split_lines_with_terminators(s: &str) -> Vec<&str> {
+fn split_lines_with_terminators(s: &str) -> SplitLines<'_> {
     let mut lines = Vec::new();
+    let mut normalized = String::with_capacity(s.len());
     let mut start = 0;
 
     for (idx, ch) in s.char_indices() {
         if ch == '\n' {
-            lines.push(&s[start..idx + 1]);
+            let raw = &s[start..idx + 1];
+            lines.push(raw);
+            normalized.push_str(normalize_line_ending_for_diff(raw).as_ref());
             start = idx + 1;
         }
     }
 
     // Handle last line without trailing newline
     if start < s.len() {
-        lines.push(&s[start..]);
+        let raw = &s[start..];
+        lines.push(raw);
+        normalized.push_str(normalize_line_ending_for_diff(raw).as_ref());
     }
 
-    lines
+    SplitLines { lines, normalized }
+}
+
+fn normalize_line_ending_for_diff(line: &str) -> Cow<'_, str> {
+    if let Some(without_crlf) = line.strip_suffix("\r\n") {
+        return Cow::Owned(format!("{}\n", without_crlf));
+    }
+
+    if let Some(without_cr) = line.strip_suffix('\r') {
+        return Cow::Owned(format!("{}\n", without_cr));
+    }
+
+    Cow::Borrowed(line)
 }
 
 /// Converts imara-diff hunks to a vector of DiffOp.
@@ -479,10 +502,75 @@ mod tests {
     fn test_split_lines_with_terminators() {
         let s = "line1\nline2\nline3";
         let lines = split_lines_with_terminators(s);
-        assert_eq!(lines, vec!["line1\n", "line2\n", "line3"]);
+        assert_eq!(
+            lines,
+            SplitLines {
+                lines: vec!["line1\n", "line2\n", "line3"],
+                normalized: "line1\nline2\nline3".to_string(),
+            }
+        );
 
         let s_trailing = "line1\nline2\n";
         let lines_trailing = split_lines_with_terminators(s_trailing);
-        assert_eq!(lines_trailing, vec!["line1\n", "line2\n"]);
+        assert_eq!(
+            lines_trailing,
+            SplitLines {
+                lines: vec!["line1\n", "line2\n"],
+                normalized: "line1\nline2\n".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_split_lines_with_terminators_preserves_raw_and_normalizes_crlf() {
+        let s = "line1\r\nline2\r\nline3\r";
+        let lines = split_lines_with_terminators(s);
+
+        assert_eq!(
+            lines,
+            SplitLines {
+                lines: vec!["line1\r\n", "line2\r\n", "line3\r"],
+                normalized: "line1\nline2\nline3\n".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_compute_line_changes_lf_to_crlf_with_appended_lines_treats_line_endings_as_equal() {
+        let previous_content = "1\n2\n3\n4\n5\n";
+        let current_content = "1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8\r\n9\r\n10\r\n";
+
+        let changes = compute_line_changes(previous_content, current_content);
+
+        let additions = changes
+            .iter()
+            .filter(|change| matches!(change.tag(), LineChangeTag::Insert))
+            .count();
+        let deletions = changes
+            .iter()
+            .filter(|change| matches!(change.tag(), LineChangeTag::Delete))
+            .count();
+        let equals = changes
+            .iter()
+            .filter(|change| matches!(change.tag(), LineChangeTag::Equal))
+            .count();
+
+        assert_eq!(
+            additions, 5,
+            "expected only appended lines to be counted as inserts"
+        );
+        assert_eq!(
+            deletions, 0,
+            "expected line ending normalization to avoid delete churn"
+        );
+        assert_eq!(equals, 5, "expected shared logical lines to remain equal");
+    }
+
+    #[test]
+    fn test_normalize_line_ending_for_diff_normalizes_crlf_and_lone_cr() {
+        assert_eq!(normalize_line_ending_for_diff("line\r\n"), "line\n");
+        assert_eq!(normalize_line_ending_for_diff("line\r"), "line\n");
+        assert_eq!(normalize_line_ending_for_diff("line\n"), "line\n");
+        assert_eq!(normalize_line_ending_for_diff("line"), "line");
     }
 }
