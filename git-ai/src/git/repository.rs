@@ -36,7 +36,28 @@ thread_local! {
 }
 static INTERNAL_GIT_HOOKS_DISABLED_DEPTH_GLOBAL: AtomicUsize = AtomicUsize::new(0);
 
-const EXEC_GIT_TIMEOUT: Duration = Duration::from_secs(10);
+const EXEC_GIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const EXEC_GIT_TIMEOUT_STDERR: &str = "Command timed out";
+
+struct GitExecRequest {
+    args: Vec<String>,
+    profile: InternalGitProfile,
+    stdin_data: Option<Vec<u8>>,
+    env_overrides: Vec<(String, String)>,
+    timeout: Option<Duration>,
+}
+
+struct GitExecPolicy {
+    max_attempts: usize,
+    backoff_delays: &'static [Duration],
+    retry_on_timeout: bool,
+    retry_on_transient_error: bool,
+}
+
+struct PreparedGitCommand {
+    cmd: Command,
+    effective_args: Vec<String>,
+}
 
 pub struct InternalGitHooksGuard;
 
@@ -277,6 +298,270 @@ fn args_with_internal_git_profile(args: &[String], profile: InternalGitProfile) 
     }
     out.extend(args[command_index + 1..].iter().cloned());
     out
+}
+
+fn default_git_exec_policy() -> GitExecPolicy {
+    GitExecPolicy {
+        max_attempts: 1,
+        backoff_delays: &[],
+        retry_on_timeout: false,
+        retry_on_transient_error: false,
+    }
+}
+
+fn build_git_command(request: &GitExecRequest) -> PreparedGitCommand {
+    let effective_args = args_with_internal_git_profile(
+        &args_with_disabled_hooks_if_needed(&request.args),
+        request.profile,
+    );
+
+    let mut cmd = Command::new(config::Config::get().git_cmd());
+    cmd.args(&effective_args);
+    cmd.stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    for (k, v) in &request.env_overrides {
+        cmd.env(k, v);
+    }
+
+    cmd.env_remove("GIT_EXTERNAL_DIFF");
+    cmd.env_remove("GIT_DIFF_OPTS");
+
+    #[cfg(windows)]
+    {
+        if !is_interactive_terminal() {
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+    }
+
+    if is_debug_enabled() {
+        tracing::debug!("[exec_git] cmd = {:?}", cmd);
+        cmd.env("GIT_TRACE", "1");
+        cmd.env("GIT_TRACE2", "1");
+    }
+
+    PreparedGitCommand {
+        cmd,
+        effective_args,
+    }
+}
+
+fn write_stdin_in_background(
+    child: &mut std::process::Child,
+    stdin_data: &[u8],
+) -> Option<std::thread::JoinHandle<std::io::Result<()>>> {
+    let stdin = child.stdin.take()?;
+    let data = stdin_data.to_vec();
+    Some(std::thread::spawn(move || {
+        use std::io::Write;
+        let mut stdin = stdin;
+        stdin.write_all(&data)
+    }))
+}
+
+fn read_pipe_in_background<R>(
+    reader: Option<R>,
+) -> Option<std::thread::JoinHandle<std::io::Result<Vec<u8>>>>
+where
+    R: std::io::Read + Send + 'static,
+{
+    reader.map(|mut reader| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            reader.read_to_end(&mut buf)?;
+            Ok(buf)
+        })
+    })
+}
+
+fn finalize_stdin_writer(
+    handle: Option<std::thread::JoinHandle<std::io::Result<()>>>,
+) -> Result<(), GitAiError> {
+    if let Some(handle) = handle {
+        let result = handle.join().expect("stdin writer thread panicked");
+        if let Err(e) = result
+            && e.kind() != std::io::ErrorKind::BrokenPipe
+        {
+            return Err(GitAiError::IoError(e));
+        }
+    }
+    Ok(())
+}
+
+fn finalize_pipe_reader(
+    handle: Option<std::thread::JoinHandle<std::io::Result<Vec<u8>>>>,
+) -> Result<Vec<u8>, GitAiError> {
+    match handle {
+        Some(handle) => handle
+            .join()
+            .expect("pipe reader thread panicked")
+            .map_err(GitAiError::IoError),
+        None => Ok(Vec::new()),
+    }
+}
+
+fn run_git_once(request: &GitExecRequest) -> Result<Output, GitAiError> {
+    let PreparedGitCommand {
+        mut cmd,
+        effective_args,
+    } = build_git_command(request);
+
+    let cmd_start = Instant::now();
+    let trace_id = uuid::Uuid::new_v4();
+    tracing::debug!("[exec_git] {} Starting git command execution", trace_id);
+
+    let mut child = cmd.spawn().map_err(GitAiError::IoError)?;
+    let stdin_handle = request
+        .stdin_data
+        .as_deref()
+        .and_then(|stdin_data| write_stdin_in_background(&mut child, stdin_data));
+    let stdout_handle = read_pipe_in_background(child.stdout.take());
+    let stderr_handle = read_pipe_in_background(child.stderr.take());
+
+    let status = match request.timeout {
+        Some(timeout) => loop {
+            if let Some(status) = child.try_wait().map_err(GitAiError::IoError)? {
+                break status;
+            }
+
+            if cmd_start.elapsed() >= timeout {
+                tracing::debug!(
+                    "git command [{:?}] timed out after {}ms",
+                    effective_args.first(),
+                    timeout.as_millis()
+                );
+
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = finalize_stdin_writer(stdin_handle);
+                let _ = finalize_pipe_reader(stdout_handle);
+                let _ = finalize_pipe_reader(stderr_handle);
+
+                return Err(GitAiError::GitCliError {
+                    code: Some(1),
+                    stderr: EXEC_GIT_TIMEOUT_STDERR.to_string(),
+                    args: effective_args,
+                });
+            }
+
+            std::thread::sleep(EXEC_GIT_POLL_INTERVAL);
+        },
+        None => child.wait().map_err(GitAiError::IoError)?,
+    };
+
+    let stdout = finalize_pipe_reader(stdout_handle)?;
+    let stderr = finalize_pipe_reader(stderr_handle)?;
+    let output = Output {
+        status,
+        stdout,
+        stderr,
+    };
+
+    finalize_stdin_writer(stdin_handle)?;
+
+    let elapsed = cmd_start.elapsed();
+    tracing::debug!(
+        "[exec_git] {} git command [{:?}] execution total {}ms",
+        trace_id,
+        effective_args,
+        elapsed.as_millis()
+    );
+    if elapsed > std::time::Duration::from_secs(3) {
+        eprintln!(
+            "[git-ai:slow] git {:?} took {}ms",
+            effective_args.first(),
+            elapsed.as_millis()
+        );
+    }
+
+    Ok(output)
+}
+
+fn is_timeout_error(err: &GitAiError) -> bool {
+    matches!(
+        err,
+        GitAiError::GitCliError { stderr, .. } if stderr == EXEC_GIT_TIMEOUT_STDERR
+    )
+}
+
+fn is_retryable_io_error(err: &std::io::Error) -> bool {
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::TimedOut
+            | std::io::ErrorKind::Interrupted
+            | std::io::ErrorKind::WouldBlock
+    )
+}
+
+fn is_retryable_git_cli_error(code: Option<i32>, stderr: &str) -> bool {
+    let stderr = stderr.to_ascii_lowercase();
+    let _ = code;
+
+    stderr.contains("index.lock")
+        || (stderr.contains(".lock") && stderr.contains("unable to create"))
+        || stderr.contains("resource temporarily unavailable")
+        || stderr.contains("timed out")
+}
+
+fn is_retryable_error(err: &GitAiError) -> bool {
+    match err {
+        GitAiError::IoError(io_err) => is_retryable_io_error(io_err),
+        GitAiError::GitCliError { code, stderr, .. } => {
+            is_timeout_error(err) || is_retryable_git_cli_error(*code, stderr)
+        }
+        _ => false,
+    }
+}
+
+fn run_git_with_retry(
+    request: &GitExecRequest,
+    policy: &GitExecPolicy,
+) -> Result<Output, GitAiError> {
+    let started = Instant::now();
+
+    for attempt in 1..=policy.max_attempts {
+        match run_git_once(request) {
+            Ok(output) => {
+                tracing::debug!(
+                    "[exec_git retry] succeeded on attempt {}/{} after {}ms",
+                    attempt,
+                    policy.max_attempts,
+                    started.elapsed().as_millis()
+                );
+                return Ok(output);
+            }
+            Err(err) => {
+                let retryable = is_retryable_error(&err)
+                    && ((policy.retry_on_timeout && is_timeout_error(&err))
+                        || (policy.retry_on_transient_error && !is_timeout_error(&err)));
+
+                if !retryable || attempt == policy.max_attempts {
+                    return Err(err);
+                }
+
+                let delay = policy
+                    .backoff_delays
+                    .get(attempt - 1)
+                    .copied()
+                    .or_else(|| policy.backoff_delays.last().copied())
+                    .unwrap_or(Duration::ZERO);
+
+                tracing::debug!(
+                    "[exec_git retry] retrying attempt {}/{} after {}ms due to: {}",
+                    attempt + 1,
+                    policy.max_attempts,
+                    delay.as_millis(),
+                    err
+                );
+                std::thread::sleep(delay);
+            }
+        }
+    }
+
+    Err(GitAiError::Generic(
+        "git retry loop exited unexpectedly".to_string(),
+    ))
 }
 
 pub struct Object<'a> {
@@ -2507,7 +2792,10 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
         top_level_args.push("rev-parse".to_string());
         top_level_args.push("--show-toplevel".to_string());
         let output = exec_git(&top_level_args)?;
-        tracing::debug!( "[find_repository] exec_git_rev_parse2 {}ms", exec_git_rev_parse2_start.elapsed().as_millis());
+        tracing::debug!(
+            "[find_repository] exec_git_rev_parse2 {}ms",
+            exec_git_rev_parse2_start.elapsed().as_millis()
+        );
         PathBuf::from(String::from_utf8(output.stdout)?.trim())
     };
 
@@ -3173,45 +3461,15 @@ pub fn exec_git_allow_nonzero_with_profile(
     args: &[String],
     profile: InternalGitProfile,
 ) -> Result<Output, GitAiError> {
-    let effective_args =
-        args_with_internal_git_profile(&args_with_disabled_hooks_if_needed(args), profile);
-    let mut cmd = Command::new(config::Config::get().git_cmd());
-    cmd.args(&effective_args);
-    cmd.env_remove("GIT_EXTERNAL_DIFF");
-    cmd.env_remove("GIT_DIFF_OPTS");
-
-    #[cfg(windows)]
-    {
-        if !is_interactive_terminal() {
-            cmd.creation_flags(CREATE_NO_WINDOW);
-        }
-    }
-    if is_debug_enabled() {
-        tracing::debug!("[exec_git] cmd = {:?}", cmd);
-
-        cmd.env("GIT_TRACE", "1");
-        cmd.env("GIT_TRACE2", "1");
-    }
-
-    let cmd_start = Instant::now();
-    let trace_id = uuid::Uuid::new_v4();
-    tracing::debug!("[exec_git] {} Starting git command execution", trace_id);
-    let result = cmd.output().map_err(GitAiError::IoError);
-    let elapsed = cmd_start.elapsed();
-    tracing::debug!(
-        "[exec_git] {} git command [{:?}] execution total {}ms",
-        trace_id,
-        effective_args,
-        elapsed.as_millis()
-    );
-    if elapsed > std::time::Duration::from_secs(3) {
-        eprintln!(
-            "[git-ai:slow] git {:?} took {}ms",
-            effective_args.first(),
-            elapsed.as_millis()
-        );
-    }
-    result
+    let request = GitExecRequest {
+        args: args.to_vec(),
+        profile,
+        stdin_data: None,
+        env_overrides: Vec::new(),
+        timeout: None,
+    };
+    let policy = default_git_exec_policy();
+    run_git_with_retry(&request, &policy)
 }
 
 /// Execute a git command with a timeout. If the command takes longer than `timeout`,
@@ -3229,78 +3487,15 @@ pub fn exec_git_with_timeout_internal(
     timeout: std::time::Duration,
     profile: InternalGitProfile,
 ) -> Result<Output, GitAiError> {
-    use std::sync::mpsc;
-    use std::thread;
-
-    let (tx, rx) = mpsc::channel();
-    let effective_args: Vec<String> = args.iter().map(|s| s.clone()).collect::<Vec<_>>();
-
-    thread::spawn(move || {
-        // Run the git command in a spawned thread where we can interrupt it.
-        let result = exec_git_allow_nonzero_with_timeout_inner(&effective_args, profile);
-        let _ = tx.send(result);
-    });
-
-    match rx.recv_timeout(timeout) {
-        Ok(result) => result,
-        Err(mpsc::RecvTimeoutError::Timeout) => {
-            tracing::debug!(
-                "git command [{:?}] timed out after {}ms",
-                args.first(),
-                timeout.as_millis()
-            );
-            Err(GitAiError::GitCliError { code: Some(1), stderr: "Command timed out".to_string(), args: args.to_vec() })
-        }
-        Err(mpsc::RecvTimeoutError::Disconnected) => Err(GitAiError::Generic(
-            "git command thread panicked".to_string(),
-        )),
-    }
-}
-
-/// Inner implementation: builds the Command and calls output() in a thread context.
-/// Uses a separate function to keep the thread::spawn closure simple.
-fn exec_git_allow_nonzero_with_timeout_inner(
-    args: &[String],
-    profile: InternalGitProfile,
-) -> Result<Output, GitAiError> {
-    let effective_args =
-        args_with_internal_git_profile(&args_with_disabled_hooks_if_needed(args), profile);
-    let mut cmd = Command::new(config::Config::get().git_cmd());
-    cmd.args(&effective_args);
-    cmd.env_remove("GIT_EXTERNAL_DIFF");
-    cmd.env_remove("GIT_DIFF_OPTS");
-
-    #[cfg(windows)]
-    {
-        if !is_interactive_terminal() {
-            cmd.creation_flags(CREATE_NO_WINDOW);
-        }
-    }
-    if is_debug_enabled() {
-        tracing::debug!("[exec_git timeout] cmd = {:?}", cmd);
-        cmd.env("GIT_TRACE", "1");
-        cmd.env("GIT_TRACE2", "1");
-    }
-
-    let cmd_start = Instant::now();
-    let trace_id = uuid::Uuid::new_v4();
-    tracing::debug!("[exec_git timeout] {} Starting git command execution", trace_id);
-    let result = cmd.output().map_err(GitAiError::IoError);
-    let elapsed = cmd_start.elapsed();
-    tracing::debug!(
-        "[exec_git timeout] {} git command [{:?}] execution total {}ms",
-        trace_id,
-        effective_args,
-        elapsed.as_millis()
-    );
-    if elapsed > std::time::Duration::from_secs(3) {
-        tracing::debug!(
-            "[git-ai:slow] git {:?} took {}ms",
-            effective_args.first(),
-            elapsed.as_millis()
-        );
-    }
-    result
+    let request = GitExecRequest {
+        args: args.to_vec(),
+        profile,
+        stdin_data: None,
+        env_overrides: Vec::new(),
+        timeout: Some(timeout),
+    };
+    let policy = default_git_exec_policy();
+    run_git_with_retry(&request, &policy)
 }
 
 /// Helper to execute a git command with an explicit internal profile.
@@ -3308,9 +3503,17 @@ pub fn exec_git_with_profile(
     args: &[String],
     profile: InternalGitProfile,
 ) -> Result<Output, GitAiError> {
+    let request = GitExecRequest {
+        args: args.to_vec(),
+        profile,
+        stdin_data: None,
+        env_overrides: Vec::new(),
+        timeout: None,
+    };
+    let policy = default_git_exec_policy();
     let effective_args =
         args_with_internal_git_profile(&args_with_disabled_hooks_if_needed(args), profile);
-    let output = exec_git_allow_nonzero_with_profile(args, profile)?;
+    let output = run_git_with_retry(&request, &policy)?;
 
     if !output.status.success() {
         let code = output.status.code();
@@ -3336,60 +3539,17 @@ pub fn exec_git_stdin_with_profile(
     stdin_data: &[u8],
     profile: InternalGitProfile,
 ) -> Result<Output, GitAiError> {
-    // TODO Make sure to handle process signals, etc.
+    let request = GitExecRequest {
+        args: args.to_vec(),
+        profile,
+        stdin_data: Some(stdin_data.to_vec()),
+        env_overrides: Vec::new(),
+        timeout: None,
+    };
+    let policy = default_git_exec_policy();
     let effective_args =
         args_with_internal_git_profile(&args_with_disabled_hooks_if_needed(args), profile);
-    let mut cmd = Command::new(config::Config::get().git_cmd());
-    cmd.args(&effective_args)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    cmd.env_remove("GIT_EXTERNAL_DIFF");
-    cmd.env_remove("GIT_DIFF_OPTS");
-
-    #[cfg(windows)]
-    {
-        if !is_interactive_terminal() {
-            cmd.creation_flags(CREATE_NO_WINDOW);
-        }
-    }
-    if is_debug_enabled() {
-        tracing::debug!("[exec_git_stdin] cmd = {:?}", cmd);
-
-        cmd.env("GIT_TRACE", "1");
-        cmd.env("GIT_TRACE2", "1");
-    }
-    let cmd_start = Instant::now();
-    let trace_id = uuid::Uuid::new_v4();
-    tracing::debug!("[exec_git_stdin] {} Starting git command execution", trace_id);
-    let mut child = cmd.spawn().map_err(GitAiError::IoError)?;
-    tracing::debug!(
-        "[exec_git_stdin] {} git command [{:?}] execution total {}ms",
-        trace_id,
-        effective_args,
-        cmd_start.elapsed().as_millis()
-    );
-
-    // Write stdin in a separate thread to avoid deadlock: if we write all stdin
-    // before reading stdout, the child's stdout pipe buffer can fill up, causing
-    // the child to block on write, which prevents it from consuming more stdin,
-    // which blocks our write_all. Writing concurrently avoids this.
-    let stdin_handle = child.stdin.take().map(|mut stdin| {
-        let data = stdin_data.to_vec();
-        std::thread::spawn(move || {
-            use std::io::Write;
-            stdin.write_all(&data)
-        })
-    });
-
-    let output = child.wait_with_output().map_err(GitAiError::IoError)?;
-
-    if let Some(handle) = stdin_handle
-        && let Err(e) = handle.join().expect("stdin writer thread panicked")
-        && e.kind() != std::io::ErrorKind::BrokenPipe
-    {
-        return Err(GitAiError::IoError(e));
-    }
+    let output = run_git_with_retry(&request, &policy)?;
 
     if !output.status.success() {
         let code = output.status.code();
@@ -3422,63 +3582,17 @@ pub fn exec_git_stdin_with_env_with_profile(
     stdin_data: &[u8],
     profile: InternalGitProfile,
 ) -> Result<Output, GitAiError> {
-    // TODO Make sure to handle process signals, etc.
+    let request = GitExecRequest {
+        args: args.to_vec(),
+        profile,
+        stdin_data: Some(stdin_data.to_vec()),
+        env_overrides: env.to_vec(),
+        timeout: None,
+    };
+    let policy = default_git_exec_policy();
     let effective_args =
         args_with_internal_git_profile(&args_with_disabled_hooks_if_needed(args), profile);
-    let mut cmd = Command::new(config::Config::get().git_cmd());
-    cmd.args(&effective_args)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-
-    // Apply env overrides
-    for (k, v) in env.iter() {
-        cmd.env(k, v);
-    }
-    cmd.env_remove("GIT_EXTERNAL_DIFF");
-    cmd.env_remove("GIT_DIFF_OPTS");
-
-    #[cfg(windows)]
-    {
-        if !is_interactive_terminal() {
-            cmd.creation_flags(CREATE_NO_WINDOW);
-        }
-    }
-    if is_debug_enabled() {
-        tracing::debug!("[exec_git_stdin_with_env] cmd = {:?}", cmd);
-
-        cmd.env("GIT_TRACE", "1");
-        cmd.env("GIT_TRACE2", "1");
-    }
-
-    let cmd_start = Instant::now();
-    let trace_id = uuid::Uuid::new_v4();
-    tracing::debug!("[exec_git_stdin_with_env] {} Starting git command execution", trace_id);
-    let mut child = cmd.spawn().map_err(GitAiError::IoError)?;
-    tracing::debug!(
-        "[exec_git_stdin_with_env] {} git command [{:?}] execution total {}ms",
-        trace_id,
-        effective_args,
-        cmd_start.elapsed().as_millis()
-    );
-
-    // Write stdin in a separate thread to avoid deadlock (see exec_git_stdin_with_profile).
-    let stdin_handle = child.stdin.take().map(|mut stdin| {
-        let data = stdin_data.to_vec();
-        std::thread::spawn(move || {
-            use std::io::Write;
-            stdin.write_all(&data)
-        })
-    });
-
-    let output = child.wait_with_output().map_err(GitAiError::IoError)?;
-
-    if let Some(handle) = stdin_handle
-        && let Err(e) = handle.join().expect("stdin writer thread panicked")
-        && e.kind() != std::io::ErrorKind::BrokenPipe
-    {
-        return Err(GitAiError::IoError(e));
-    }
+    let output = run_git_with_retry(&request, &policy)?;
 
     if !output.status.success() {
         let code = output.status.code();
@@ -4138,6 +4252,43 @@ mod tests {
         assert!(rewritten.iter().any(|arg| arg == "--no-textconv"));
         assert!(rewritten.iter().any(|arg| arg == "--no-color"));
         assert!(rewritten.iter().any(|arg| arg == "--no-relative"));
+    }
+
+    #[test]
+    fn test_retryable_git_cli_error_detects_index_lock() {
+        assert!(is_retryable_git_cli_error(
+            Some(128),
+            "fatal: Unable to create '/repo/.git/index.lock': File exists."
+        ));
+    }
+
+    #[test]
+    fn test_retryable_git_cli_error_rejects_bad_revision() {
+        assert!(!is_retryable_git_cli_error(
+            Some(128),
+            "fatal: bad revision 'abc'"
+        ));
+    }
+
+    #[test]
+    fn test_is_timeout_error_matches_timeout_sentinel() {
+        let err = GitAiError::GitCliError {
+            code: Some(1),
+            stderr: EXEC_GIT_TIMEOUT_STDERR.to_string(),
+            args: vec!["status".to_string()],
+        };
+
+        assert!(is_timeout_error(&err));
+    }
+
+    #[test]
+    fn test_default_git_exec_policy_is_single_attempt_without_retry() {
+        let policy = default_git_exec_policy();
+
+        assert_eq!(policy.max_attempts, 1);
+        assert!(policy.backoff_delays.is_empty());
+        assert!(!policy.retry_on_timeout);
+        assert!(!policy.retry_on_transient_error);
     }
 
     #[test]
