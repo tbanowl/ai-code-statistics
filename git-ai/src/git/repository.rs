@@ -22,7 +22,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[cfg(windows)]
 use crate::utils::CREATE_NO_WINDOW;
@@ -35,6 +35,8 @@ thread_local! {
     static INTERNAL_GIT_HOOKS_DISABLED_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
 static INTERNAL_GIT_HOOKS_DISABLED_DEPTH_GLOBAL: AtomicUsize = AtomicUsize::new(0);
+
+const EXEC_GIT_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct InternalGitHooksGuard;
 
