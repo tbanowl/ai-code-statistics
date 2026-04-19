@@ -6,12 +6,11 @@ use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-#[cfg(not(any(test, feature = "test-support")))]
-use crate::metrics::METRICS_API_VERSION;
 use crate::metrics::MetricEvent;
 
 pub mod flush;
 pub mod wrapper_performance_targets;
+use crate::config;
 
 /// Maximum events per metrics envelope
 pub const MAX_METRICS_PER_ENVELOPE: usize = 250;
@@ -190,12 +189,24 @@ fn submit_telemetry_envelope(envelopes: Vec<crate::daemon::TelemetryEnvelope>) {
 
 /// Log an error to Sentry (via daemon telemetry worker)
 pub fn log_error(error: &dyn std::error::Error, context: Option<serde_json::Value>) {
-    let envelope = crate::daemon::TelemetryEnvelope::Error {
+    if config::Config::get().feature_flags().async_mode {
+        let envelope = crate::daemon::TelemetryEnvelope::Error {
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            message: error.to_string(),
+            context: context.clone(),
+        };
+        submit_telemetry_envelope(vec![envelope]);
+        return;
+    }
+
+    let envelope = ErrorEnvelope {
+        event_type: "error".to_string(),
         timestamp: chrono::Utc::now().to_rfc3339(),
         message: error.to_string(),
         context,
     };
-    submit_telemetry_envelope(vec![envelope]);
+
+    append_envelope(LogEnvelope::Error(envelope));
 }
 
 /// Log a performance metric to Sentry (via daemon telemetry worker)
@@ -205,26 +216,51 @@ pub fn log_performance(
     context: Option<serde_json::Value>,
     tags: Option<HashMap<String, String>>,
 ) {
-    let envelope = crate::daemon::TelemetryEnvelope::Performance {
+    if config::Config::get().feature_flags().async_mode {
+        let envelope = crate::daemon::TelemetryEnvelope::Performance {
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            operation: operation.to_string(),
+            duration_ms: duration.as_millis(),
+            context: context.clone(),
+            tags: tags.clone(),
+        };
+        submit_telemetry_envelope(vec![envelope]);
+        return;
+    }
+
+    let envelope = PerformanceEnvelope {
+        event_type: "performance".to_string(),
         timestamp: chrono::Utc::now().to_rfc3339(),
         operation: operation.to_string(),
         duration_ms: duration.as_millis(),
         context,
         tags,
     };
-    submit_telemetry_envelope(vec![envelope]);
+    append_envelope(LogEnvelope::Performance(envelope));
+    
 }
 
 /// Log a message to Sentry (info, warning, etc.) (via daemon telemetry worker)
 #[allow(dead_code)]
 pub fn log_message(message: &str, level: &str, context: Option<serde_json::Value>) {
-    let envelope = crate::daemon::TelemetryEnvelope::Message {
+    if config::Config::get().feature_flags().async_mode {
+        let envelope = crate::daemon::TelemetryEnvelope::Message {
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            message: message.to_string(),
+            level: level.to_string(),
+            context,
+        };
+        submit_telemetry_envelope(vec![envelope]);
+        return;
+    }
+    let envelope = MessageEnvelope {
+        event_type: "message".to_string(),
         timestamp: chrono::Utc::now().to_rfc3339(),
         message: message.to_string(),
         level: level.to_string(),
         context,
     };
-    submit_telemetry_envelope(vec![envelope]);
+    append_envelope(LogEnvelope::Message(envelope));
 }
 
 /// Spawn a background process to flush logs to Sentry.

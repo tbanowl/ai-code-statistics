@@ -8,6 +8,7 @@ use crate::metrics::{MetricEvent, MetricsBatch};
 
 /// Max events per batch upload
 const MAX_BATCH_SIZE: usize = 250;
+const ENV_FLUSH_METRICS_DB_WORKER: &str = "GIT_AI_FLUSH_METRICS_DB_WORKER";
 
 /// Spawn a background process to flush metrics DB
 #[cfg(not(any(test, feature = "test-support")))]

@@ -590,7 +590,12 @@ impl SentryClient {
         let host = url.host_str()?;
         let project_id = url.path().trim_start_matches('/');
         let scheme = url.scheme();
-        let endpoint = format!("{}://{}/api/{}/store/", scheme, host, project_id);
+        let port = url.port();
+        let host_with_port = match port {
+            Some(p) if p != 80 && p != 443 => format!("{}:{}", host, p),
+            _ => host.to_string(),
+        };
+        let endpoint = format!("{}://{}/api/{}/store/", scheme, host_with_port, project_id);
         Some(SentryClient {
             endpoint,
             public_key,
