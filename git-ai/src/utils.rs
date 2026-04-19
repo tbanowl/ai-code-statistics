@@ -6,7 +6,16 @@ use std::process::{Command, Stdio};
 
 static IS_TERMINAL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 static IS_IN_BACKGROUND_AGENT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+static DEBUG_ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
+pub fn is_debug_enabled() -> bool {
+    *DEBUG_ENABLED.get_or_init(|| {
+        (cfg!(debug_assertions)
+            || std::env::var("GIT_AI_DEBUG").unwrap_or_default() == "1"
+            || std::env::var("GIT_AI_DEBUG_PERFORMANCE").unwrap_or_default() != "")
+            && std::env::var("GIT_AI_DEBUG").unwrap_or_default() != "0"
+    })
+}
 /// Print a git diff in a readable format
 ///
 /// Prints the diff between two commits/trees showing which files changed and their status.
@@ -185,52 +194,142 @@ pub fn is_in_background_agent() -> bool {
 /// for the lifetime of the struct. The lock is automatically released when dropped
 /// or when the process exits.
 pub struct LockFile {
-    _file: std::fs::File,
+    #[cfg(windows)]
+    handle: isize,
+    #[cfg(unix)]
+    fd: std::os::unix::io::RawFd,
 }
 
 impl LockFile {
     /// Try to acquire an exclusive lock on the given path.
     /// Returns `Some(LockFile)` if successful, `None` if another process holds the lock.
     pub fn try_acquire(path: &std::path::Path) -> Option<Self> {
-        let file = try_lock_exclusive(path)?;
-        Some(Self { _file: file })
+        let lock = try_lock_exclusive(path)?;
+        Some(lock)
     }
 }
 
 #[cfg(unix)]
 impl Drop for LockFile {
     fn drop(&mut self) {
-        use std::os::unix::io::AsRawFd;
-        unsafe { libc::flock(self._file.as_raw_fd(), libc::LOCK_UN) };
+        
+        unsafe { libc::flock(self.fd, libc::LOCK_UN) };
     }
 }
 
 #[cfg(unix)]
-#[allow(clippy::suspicious_open_options)]
-fn try_lock_exclusive(path: &std::path::Path) -> Option<std::fs::File> {
+fn try_lock_exclusive(path: &std::path::Path) -> Option<LockFile> {
     use std::os::unix::io::AsRawFd;
     let file = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
         .open(path)
         .ok()?;
-    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    let fd = file.as_raw_fd();
+    let rc = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
     if rc != 0 {
         return None;
     }
-    Some(file)
+    // Transfer ownership: forget the File so its Drop doesn't close the fd.
+    std::mem::forget(file);
+    Some(LockFile { fd })
+}
+
+#[cfg(windows)]
+unsafe extern "system" {
+    fn UnlockFile(
+        hFile: isize,
+        dwFileOffsetLow: u32,
+        dwFileOffsetHigh: u32,
+        nNumberOfBytesToUnlockLow: u32,
+        nNumberOfBytesToUnlockHigh: u32,
+    );
+}
+
+#[cfg(windows)]
+unsafe impl Send for LockFile {}
+#[cfg(windows)]
+unsafe impl Sync for LockFile {}
+
+#[cfg(windows)]
+impl Drop for LockFile {
+    fn drop(&mut self) {
+        // SAFETY: we own this handle and no other code uses it.
+        unsafe { UnlockFile(self.handle, 0, 0, u32::MAX, u32::MAX) };
+    }
 }
 
 #[cfg(windows)]
 #[allow(clippy::suspicious_open_options)]
-fn try_lock_exclusive(path: &std::path::Path) -> Option<std::fs::File> {
-    use std::os::windows::fs::OpenOptionsExt;
-    std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .share_mode(0)
-        .open(path)
-        .ok()
+fn try_lock_exclusive(path: &std::path::Path) -> Option<LockFile> {
+    use libloading::{Library, Symbol};
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+
+    const GENERIC_READ: u32 = 0x80000000u32;
+    const GENERIC_WRITE: u32 = 0x40000000u32;
+    const FILE_SHARE_NONE: u32 = 0u32;
+    const OPEN_ALWAYS: u32 = 4u32;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x02000000u32;
+    const FILE_ATTRIBUTE_NORMAL: u32 = 0x80u32;
+    const LOCKFILE_EXCLUSIVE_LOCK: u32 = 0x2u32;
+    const LOCKFILE_FAIL_IMMEDIATELY: u32 = 0x1u32;
+    const INVALID_HANDLE_VALUE: isize = -1isize;
+
+    let lib = unsafe { Library::new("kernel32.dll") }.ok()?;
+
+    type CreateFileWFn = unsafe extern "system" fn(
+        *const u16,
+        u32,
+        u32,
+        *mut std::ffi::c_void,
+        u32,
+        u32,
+        *mut std::ffi::c_void,
+    ) -> isize;
+    let create_file: Symbol<'_, CreateFileWFn> = unsafe { lib.get(b"CreateFileW") }.ok()?;
+
+    type LockFileExFn =
+        unsafe extern "system" fn(isize, u32, u32, u32, u32, *mut std::ffi::c_void) -> i32;
+    let lock_file: Symbol<'_, LockFileExFn> = unsafe { lib.get(b"LockFileEx") }.ok()?;
+
+    let wide_path: Vec<u16> = OsStr::new(path.as_os_str())
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+
+    let handle = unsafe {
+        create_file(
+            wide_path.as_ptr(),
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_NONE,
+            std::ptr::null_mut(),
+            OPEN_ALWAYS,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_ATTRIBUTE_NORMAL,
+            std::ptr::null_mut(),
+        )
+    };
+
+    if handle == INVALID_HANDLE_VALUE {
+        return None;
+    }
+
+    let result = unsafe {
+        lock_file(
+            handle,
+            LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+            0,
+            u32::MAX,
+            u32::MAX,
+            std::ptr::null_mut(),
+        )
+    };
+
+    if result == 0 {
+        return None;
+    }
+
+    Some(LockFile { handle })
 }
 
 /// Windows-specific flag to prevent console window creation

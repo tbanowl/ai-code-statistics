@@ -38,6 +38,11 @@ pub fn handle_git_ai(args: &[String]) {
         return;
     }
 
+    let is_daemon_subcommand = matches!(args[0].as_str(), "bg" | "d" | "daemon");
+    if !is_daemon_subcommand {
+        crate::observability::tracing_file::init_command_tracing("git-ai");
+    }
+
     // In async mode, initialize the global telemetry handle so that
     // observability and CAS events are routed over the control socket instead
     // of being written to per-PID log files.
@@ -411,6 +416,8 @@ fn handle_checkpoint(args: &[String]) {
             }
         }
     }
+
+    tracing::debug!("Checkpoint arguments: {:?}, hook_input: {:?}", args, hook_input);
 
     let mut agent_run_result = None;
     // Handle preset arguments after parsing all flags
@@ -851,6 +858,8 @@ fn handle_checkpoint(args: &[String]) {
 
         observability::spawn_background_flush();
     }
+
+    tracing::debug!("Agent run result: {:?}", agent_run_result);
 
     let final_working_dir = agent_run_result
         .as_ref()

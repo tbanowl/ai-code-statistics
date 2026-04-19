@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::metrics::MetricEvent;
 
 pub mod flush;
+pub mod tracing_file;
 pub mod wrapper_performance_targets;
 use crate::config;
 

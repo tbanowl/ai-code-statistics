@@ -10,6 +10,7 @@ use crate::git::repo_storage::RepoStorage;
 use crate::git::rewrite_log::RewriteLogEvent;
 use crate::git::status::MAX_PATHSPEC_ARGS;
 use crate::git::sync_authorship::{fetch_authorship_notes, push_authorship_notes};
+use crate::utils::is_debug_enabled;
 #[cfg(windows)]
 use crate::utils::is_interactive_terminal;
 use unicode_normalization::UnicodeNormalization;
@@ -2459,15 +2460,14 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
     let git_common_dir_str = lines.next().ok_or_else(|| {
         GitAiError::Generic("Missing --git-common-dir output from git rev-parse".to_string())
     })?;
-    
-    tracing::debug!("[find_repository] exec_git_rev_parse {}ms", exec_git_rev_parse_start.elapsed().as_millis());
 
-    let resolve_command_base_dir_start = Instant::now();
+    tracing::debug!(
+        "[find_repository] exec_git_rev_parse {}ms",
+        exec_git_rev_parse_start.elapsed().as_millis()
+    );
+
     let command_base_dir = resolve_command_base_dir(global_args)?;
-    tracing::debug!("[find_repository] resolve_command_base_dir {}ms", resolve_command_base_dir_start.elapsed().as_millis());
 
-    
-    let check_git_dir_start = Instant::now();
     let git_dir = if Path::new(git_dir_str).is_relative() {
         command_base_dir.join(git_dir_str)
     } else {
@@ -2505,10 +2505,9 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
         top_level_args.push("rev-parse".to_string());
         top_level_args.push("--show-toplevel".to_string());
         let output = exec_git(&top_level_args)?;
-        tracing::debug!("[find_repository] exec_git_rev_parse2 {}ms", exec_git_rev_parse2_start.elapsed().as_millis());
+        tracing::debug!( "[find_repository] exec_git_rev_parse2 {}ms", exec_git_rev_parse2_start.elapsed().as_millis());
         PathBuf::from(String::from_utf8(output.stdout)?.trim())
     };
-    tracing::debug!("[find_repository] check_git_dir {}ms", check_git_dir_start.elapsed().as_millis());
 
     if !workdir.is_dir() {
         return Err(GitAiError::Generic(format!(
@@ -2517,7 +2516,6 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
         )));
     }
 
-    let normalized_global_args_start = Instant::now();
     // Ensure all internal git commands use a stable repository root consistently.
     let mut normalized_global_args = global_args.to_owned();
     let command_root = if is_bare {
@@ -2534,10 +2532,7 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
     {
         normalized_global_args[1] = command_root;
     }
-    tracing::debug!("[find_repository] normalized_global_args cost {}ms", normalized_global_args_start.elapsed().as_millis());
 
-    
-    let canonical_workdir_start = Instant::now();
     // Canonicalize workdir for reliable path comparisons (especially on Windows)
     // On Windows, canonical paths use the \\?\ UNC prefix, which makes path.starts_with()
     // comparisons work correctly. We store both regular and canonical versions.
@@ -2548,18 +2543,18 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
             e
         ))
     })?;
-    tracing::debug!("[find_repository] canonical_workdir cost {}ms", canonical_workdir_start.elapsed().as_millis());
 
-    let worktree_storage_ai_dir_start = Instant::now();
     let worktree_ai_dir = worktree_storage_ai_dir(&git_dir, &git_common_dir);
     let storage = if worktree_ai_dir == git_dir.join("ai") {
         RepoStorage::for_repo_path(&git_dir, &workdir)?
     } else {
         RepoStorage::for_isolated_worktree_storage(&worktree_ai_dir, &workdir)?
     };
-    tracing::debug!("[find_repository] worktree_storage_ai_dir cost {}ms", worktree_storage_ai_dir_start.elapsed().as_millis());
-    
-    tracing::debug!("[find_repository] cost {}ms", find_repository_start.elapsed().as_millis());
+
+    tracing::debug!(
+        "[find_repository] cost {}ms",
+        find_repository_start.elapsed().as_millis()
+    );
 
     Ok(Repository {
         global_args: normalized_global_args,
@@ -3189,8 +3184,121 @@ pub fn exec_git_allow_nonzero_with_profile(
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
     }
+    if is_debug_enabled() {
+        tracing::debug!("[exec_git] cmd = {:?}", cmd);
 
-    cmd.output().map_err(GitAiError::IoError)
+        cmd.env("GIT_TRACE", "1");
+        cmd.env("GIT_TRACE2", "1");
+    }
+
+    let cmd_start = Instant::now();
+    let trace_id = uuid::Uuid::new_v4();
+    tracing::debug!("[exec_git] {} Starting git command execution", trace_id);
+    let result = cmd.output().map_err(GitAiError::IoError);
+    let elapsed = cmd_start.elapsed();
+    tracing::debug!(
+        "[exec_git] {} git command [{:?}] execution total {}ms",
+        trace_id,
+        effective_args,
+        elapsed.as_millis()
+    );
+    if elapsed > std::time::Duration::from_secs(3) {
+        eprintln!(
+            "[git-ai:slow] git {:?} took {}ms",
+            effective_args.first(),
+            elapsed.as_millis()
+        );
+    }
+    result
+}
+
+/// Execute a git command with a timeout. If the command takes longer than `timeout`,
+/// it is killed and Err(GitAiError::Timeout) is returned.
+pub fn exec_git_with_timeout(
+    args: &[String],
+    timeout: std::time::Duration,
+) -> Result<Output, GitAiError> {
+    exec_git_with_timeout_internal(args, timeout, InternalGitProfile::General)
+}
+
+/// Execute a git command with a timeout and explicit profile.
+pub fn exec_git_with_timeout_internal(
+    args: &[String],
+    timeout: std::time::Duration,
+    profile: InternalGitProfile,
+) -> Result<Output, GitAiError> {
+    use std::sync::mpsc;
+    use std::thread;
+
+    let (tx, rx) = mpsc::channel();
+    let effective_args: Vec<String> = args.iter().map(|s| s.clone()).collect::<Vec<_>>();
+
+    thread::spawn(move || {
+        // Run the git command in a spawned thread where we can interrupt it.
+        let result = exec_git_allow_nonzero_with_timeout_inner(&effective_args, profile);
+        let _ = tx.send(result);
+    });
+
+    match rx.recv_timeout(timeout) {
+        Ok(result) => result,
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            tracing::debug!(
+                "git command [{:?}] timed out after {}ms",
+                args.first(),
+                timeout.as_millis()
+            );
+            Err(GitAiError::GitCliError { code: Some(1), stderr: "Command timed out".to_string(), args: args.to_vec() })
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(GitAiError::Generic(
+            "git command thread panicked".to_string(),
+        )),
+    }
+}
+
+/// Inner implementation: builds the Command and calls output() in a thread context.
+/// Uses a separate function to keep the thread::spawn closure simple.
+fn exec_git_allow_nonzero_with_timeout_inner(
+    args: &[String],
+    profile: InternalGitProfile,
+) -> Result<Output, GitAiError> {
+    let effective_args =
+        args_with_internal_git_profile(&args_with_disabled_hooks_if_needed(args), profile);
+    let mut cmd = Command::new(config::Config::get().git_cmd());
+    cmd.args(&effective_args);
+    cmd.env_remove("GIT_EXTERNAL_DIFF");
+    cmd.env_remove("GIT_DIFF_OPTS");
+
+    #[cfg(windows)]
+    {
+        if !is_interactive_terminal() {
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+    }
+    if is_debug_enabled() {
+        tracing::debug!("[exec_git timeout] cmd = {:?}", cmd);
+        cmd.env("GIT_TRACE", "1");
+        cmd.env("GIT_TRACE2", "1");
+    }
+
+    let cmd_start = Instant::now();
+    let trace_id = uuid::Uuid::new_v4();
+    tracing::debug!("[exec_git timeout] {} Starting git command execution", trace_id);
+    let result = cmd.output().map_err(GitAiError::IoError);
+    let elapsed = cmd_start.elapsed();
+    tracing::debug!(
+        "[exec_git timeout] {} git command [{:?}] execution total {}ms",
+        trace_id,
+        effective_args,
+        elapsed.as_millis()
+    );
+    if elapsed > std::time::Duration::from_secs(3) {
+        tracing::debug!(
+            "[git-ai:slow] git {:?} took {}ms",
+            effective_args.first(),
+            elapsed.as_millis()
+        );
+    }
+    result
 }
 
 /// Helper to execute a git command with an explicit internal profile.
@@ -3243,8 +3351,22 @@ pub fn exec_git_stdin_with_profile(
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
     }
+    if is_debug_enabled() {
+        tracing::debug!("[exec_git_stdin] cmd = {:?}", cmd);
 
+        cmd.env("GIT_TRACE", "1");
+        cmd.env("GIT_TRACE2", "1");
+    }
+    let cmd_start = Instant::now();
+    let trace_id = uuid::Uuid::new_v4();
+    tracing::debug!("[exec_git_stdin] {} Starting git command execution", trace_id);
     let mut child = cmd.spawn().map_err(GitAiError::IoError)?;
+    tracing::debug!(
+        "[exec_git_stdin] {} git command [{:?}] execution total {}ms",
+        trace_id,
+        effective_args,
+        cmd_start.elapsed().as_millis()
+    );
 
     // Write stdin in a separate thread to avoid deadlock: if we write all stdin
     // before reading stdout, the child's stdout pipe buffer can fill up, causing
@@ -3320,8 +3442,23 @@ pub fn exec_git_stdin_with_env_with_profile(
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
     }
+    if is_debug_enabled() {
+        tracing::debug!("[exec_git_stdin_with_env] cmd = {:?}", cmd);
 
+        cmd.env("GIT_TRACE", "1");
+        cmd.env("GIT_TRACE2", "1");
+    }
+
+    let cmd_start = Instant::now();
+    let trace_id = uuid::Uuid::new_v4();
+    tracing::debug!("[exec_git_stdin_with_env] {} Starting git command execution", trace_id);
     let mut child = cmd.spawn().map_err(GitAiError::IoError)?;
+    tracing::debug!(
+        "[exec_git_stdin_with_env] {} git command [{:?}] execution total {}ms",
+        trace_id,
+        effective_args,
+        cmd_start.elapsed().as_millis()
+    );
 
     // Write stdin in a separate thread to avoid deadlock (see exec_git_stdin_with_profile).
     let stdin_handle = child.stdin.take().map(|mut stdin| {
@@ -3353,6 +3490,196 @@ pub fn exec_git_stdin_with_env_with_profile(
 
     Ok(output)
 }
+
+/// Helper to execute a git command and return output regardless of exit status.
+/// Callers that need success-only behavior should use `exec_git*`.
+// pub fn exec_git_allow_nonzero(args: &[String]) -> Result<Output, GitAiError> {
+//     exec_git_allow_nonzero_with_profile(args, InternalGitProfile::General)
+// }
+
+// /// Helper to execute a git command with an explicit internal profile and return output
+// /// regardless of exit status.
+// pub fn exec_git_allow_nonzero_with_profile(
+//     args: &[String],
+//     profile: InternalGitProfile,
+// ) -> Result<Output, GitAiError> {
+//     let effective_args =
+//         args_with_internal_git_profile(&args_with_disabled_hooks_if_needed(args), profile);
+//     let mut cmd = Command::new(config::Config::get().git_cmd());
+//     cmd.args(&effective_args);
+//     cmd.env_remove("GIT_EXTERNAL_DIFF");
+//     cmd.env_remove("GIT_DIFF_OPTS");
+
+//     #[cfg(windows)]
+//     {
+//         if !is_interactive_terminal() {
+//             cmd.creation_flags(CREATE_NO_WINDOW);
+//         }
+//     }
+
+//     cmd.output().map_err(GitAiError::IoError)
+// }
+
+// /// Helper to execute a git command with an explicit internal profile.
+// pub fn exec_git_with_profile(
+//     args: &[String],
+//     profile: InternalGitProfile,
+// ) -> Result<Output, GitAiError> {
+//     let effective_args =
+//         args_with_internal_git_profile(&args_with_disabled_hooks_if_needed(args), profile);
+//     let output = exec_git_allow_nonzero_with_profile(args, profile)?;
+
+//     if !output.status.success() {
+//         let code = output.status.code();
+//         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+//         return Err(GitAiError::GitCliError {
+//             code,
+//             stderr,
+//             args: effective_args,
+//         });
+//     }
+
+//     Ok(output)
+// }
+
+// /// Helper to execute a git command with data provided on stdin
+// pub fn exec_git_stdin(args: &[String], stdin_data: &[u8]) -> Result<Output, GitAiError> {
+//     exec_git_stdin_with_profile(args, stdin_data, InternalGitProfile::General)
+// }
+
+// /// Helper to execute a git command with data provided on stdin and an explicit profile.
+// pub fn exec_git_stdin_with_profile(
+//     args: &[String],
+//     stdin_data: &[u8],
+//     profile: InternalGitProfile,
+// ) -> Result<Output, GitAiError> {
+//     // TODO Make sure to handle process signals, etc.
+//     let effective_args =
+//         args_with_internal_git_profile(&args_with_disabled_hooks_if_needed(args), profile);
+//     let mut cmd = Command::new(config::Config::get().git_cmd());
+//     cmd.args(&effective_args)
+//         .stdin(std::process::Stdio::piped())
+//         .stdout(std::process::Stdio::piped())
+//         .stderr(std::process::Stdio::piped());
+//     cmd.env_remove("GIT_EXTERNAL_DIFF");
+//     cmd.env_remove("GIT_DIFF_OPTS");
+
+//     #[cfg(windows)]
+//     {
+//         if !is_interactive_terminal() {
+//             cmd.creation_flags(CREATE_NO_WINDOW);
+//         }
+//     }
+
+//     let mut child = cmd.spawn().map_err(GitAiError::IoError)?;
+
+//     // Write stdin in a separate thread to avoid deadlock: if we write all stdin
+//     // before reading stdout, the child's stdout pipe buffer can fill up, causing
+//     // the child to block on write, which prevents it from consuming more stdin,
+//     // which blocks our write_all. Writing concurrently avoids this.
+//     let stdin_handle = child.stdin.take().map(|mut stdin| {
+//         let data = stdin_data.to_vec();
+//         std::thread::spawn(move || {
+//             use std::io::Write;
+//             stdin.write_all(&data)
+//         })
+//     });
+
+//     let output = child.wait_with_output().map_err(GitAiError::IoError)?;
+
+//     if let Some(handle) = stdin_handle
+//         && let Err(e) = handle.join().expect("stdin writer thread panicked")
+//         && e.kind() != std::io::ErrorKind::BrokenPipe
+//     {
+//         return Err(GitAiError::IoError(e));
+//     }
+
+//     if !output.status.success() {
+//         let code = output.status.code();
+//         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+//         return Err(GitAiError::GitCliError {
+//             code,
+//             stderr,
+//             args: effective_args,
+//         });
+//     }
+
+//     Ok(output)
+// }
+
+// /// Helper to execute a git command with data provided on stdin and additional environment variables
+// #[allow(dead_code)]
+// pub fn exec_git_stdin_with_env(
+//     args: &[String],
+//     env: &[(String, String)],
+//     stdin_data: &[u8],
+// ) -> Result<Output, GitAiError> {
+//     exec_git_stdin_with_env_with_profile(args, env, stdin_data, InternalGitProfile::General)
+// }
+
+// /// Helper to execute a git command with data provided on stdin, env overrides, and profile.
+// #[allow(dead_code)]
+// pub fn exec_git_stdin_with_env_with_profile(
+//     args: &[String],
+//     env: &[(String, String)],
+//     stdin_data: &[u8],
+//     profile: InternalGitProfile,
+// ) -> Result<Output, GitAiError> {
+//     // TODO Make sure to handle process signals, etc.
+//     let effective_args =
+//         args_with_internal_git_profile(&args_with_disabled_hooks_if_needed(args), profile);
+//     let mut cmd = Command::new(config::Config::get().git_cmd());
+//     cmd.args(&effective_args)
+//         .stdin(std::process::Stdio::piped())
+//         .stdout(std::process::Stdio::piped())
+//         .stderr(std::process::Stdio::piped());
+
+//     // Apply env overrides
+//     for (k, v) in env.iter() {
+//         cmd.env(k, v);
+//     }
+//     cmd.env_remove("GIT_EXTERNAL_DIFF");
+//     cmd.env_remove("GIT_DIFF_OPTS");
+
+//     #[cfg(windows)]
+//     {
+//         if !is_interactive_terminal() {
+//             cmd.creation_flags(CREATE_NO_WINDOW);
+//         }
+//     }
+
+//     let mut child = cmd.spawn().map_err(GitAiError::IoError)?;
+
+//     // Write stdin in a separate thread to avoid deadlock (see exec_git_stdin_with_profile).
+//     let stdin_handle = child.stdin.take().map(|mut stdin| {
+//         let data = stdin_data.to_vec();
+//         std::thread::spawn(move || {
+//             use std::io::Write;
+//             stdin.write_all(&data)
+//         })
+//     });
+
+//     let output = child.wait_with_output().map_err(GitAiError::IoError)?;
+
+//     if let Some(handle) = stdin_handle
+//         && let Err(e) = handle.join().expect("stdin writer thread panicked")
+//         && e.kind() != std::io::ErrorKind::BrokenPipe
+//     {
+//         return Err(GitAiError::IoError(e));
+//     }
+
+//     if !output.status.success() {
+//         let code = output.status.code();
+//         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+//         return Err(GitAiError::GitCliError {
+//             code,
+//             stderr,
+//             args: effective_args,
+//         });
+//     }
+
+//     Ok(output)
+// }
 
 /// Parse git version string (e.g., "git version 2.39.3 (Apple Git-146)") to extract major, minor, patch.
 /// Returns None if the version cannot be parsed.

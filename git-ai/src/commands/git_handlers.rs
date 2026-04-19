@@ -44,6 +44,22 @@ static CHILD_PGID: AtomicI32 = AtomicI32::new(0);
 #[cfg(windows)]
 const NTSTATUS_CONTROL_C_EXIT: u32 = 0xC000013A;
 
+#[cfg(windows)]
+const DEFAULT_GIT_PROXY_TIMEOUT: Duration = Duration::from_secs(20);
+
+#[cfg(windows)]
+const DEFAULT_GIT_PROXY_RETRY_COUNT: usize = 1;
+
+#[cfg(windows)]
+const GIT_PROXY_POLL_INTERVAL: Duration = Duration::from_millis(200);
+
+#[cfg(windows)]
+const GIT_PROXY_RETRY_BACKOFF: Duration = Duration::from_millis(500);
+
+// Windows NTSTATUS for Ctrl+C interruption (STATUS_CONTROL_C_EXIT, 0xC000013A) from Windows API docs.
+#[cfg(windows)]
+const NTSTATUS_CONTROL_C_EXIT: u32 = 0xC000013A;
+
 /// Error type for hook panics
 #[derive(Debug)]
 struct HookPanicError(String);
@@ -108,6 +124,8 @@ pub fn handle_git(args: &[String]) {
         proxy_to_git(&orig_args, true, None, None);
         return;
     }
+
+    crate::observability::tracing_file::init_command_tracing("git");
 
     // Async mode: wrapper should behave as a pure passthrough to git,
     // but capture and send authoritative pre/post state to the daemon.
@@ -988,17 +1006,36 @@ fn proxy_to_git(
     #[cfg(not(unix))]
     match child {
         Ok(mut child) => {
-            let status = child.wait();
-            match status {
-                Ok(status) => {
-                    if exit_on_completion {
-                        exit_with_status(status);
-                    }
-                    status
+            #[cfg(windows)]
+            {
+                let status = wait_for_git_with_retry_windows(
+                    child,
+                    args,
+                    child_hooks_path_override,
+                    wrapper_invocation_id,
+                    suppress_trace2,
+                );
+                if exit_on_completion {
+                    exit_with_status(status);
                 }
-                Err(e) => {
-                    eprintln!("Failed to wait for git process: {}", e);
-                    std::process::exit(1);
+                status
+            }
+
+            #[cfg(not(windows))]
+            {
+                let mut child = child;
+                let status = child.wait();
+                match status {
+                    Ok(status) => {
+                        if exit_on_completion {
+                            exit_with_status(status);
+                        }
+                        status
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to wait for git process: {}", e);
+                        std::process::exit(1);
+                    }
                 }
             }
         }
@@ -1007,6 +1044,221 @@ fn proxy_to_git(
             std::process::exit(1);
         }
     }
+}
+
+#[cfg(windows)]
+fn wait_for_git_with_retry_windows(
+    mut child: std::process::Child,
+    args: &[String],
+    child_hooks_path_override: Option<&str>,
+    wrapper_invocation_id: Option<&str>,
+    suppress_trace2: bool,
+) -> std::process::ExitStatus {
+    let max_retries = git_proxy_retry_count();
+    let timeout = git_proxy_timeout();
+    let mut attempt = 0usize;
+
+    loop {
+        match wait_for_git_process_windows(&mut child, timeout) {
+            Ok(status) => return status,
+            Err(WaitForGitProcessError::Wait(err)) => {
+                eprintln!("Failed to wait for git process: {}", err);
+                std::process::exit(1);
+            }
+            Err(WaitForGitProcessError::TimedOut) => {
+                if attempt >= max_retries {
+                    eprintln!(
+                        "git command timed out after {}ms on Windows and exceeded {} retry attempt(s), git args: {:?}",
+                        timeout.as_millis(),
+                        max_retries,
+                        args
+                    );
+                    std::process::exit(1);
+                }
+
+                let next_attempt = attempt + 2;
+                debug_log(&format!(
+                    "git command timed out after {}ms on Windows; retrying attempt {}/{}, git args: {:?}",
+                    timeout.as_millis(),
+                    next_attempt,
+                    max_retries + 1,
+                    args
+                ));
+                std::thread::sleep(GIT_PROXY_RETRY_BACKOFF);
+                child = spawn_git_child_windows(
+                    args,
+                    child_hooks_path_override,
+                    wrapper_invocation_id,
+                    suppress_trace2,
+                    true,
+                );
+                attempt += 1;
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+enum WaitForGitProcessError {
+    TimedOut,
+    Wait(std::io::Error),
+}
+
+#[cfg(windows)]
+fn wait_for_git_process_windows(
+    child: &mut std::process::Child,
+    timeout: Duration,
+) -> Result<std::process::ExitStatus, WaitForGitProcessError> {
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) => {}
+            Err(err) => return Err(WaitForGitProcessError::Wait(err)),
+        }
+
+        if Instant::now() >= deadline {
+            let pid = child.id();
+            debug_log(&format!(
+                "git process {} timed out after {}ms on Windows; terminating process tree",
+                pid,
+                timeout.as_millis()
+            ));
+            if let Err(err) = kill_process_tree_windows(pid) {
+                eprintln!("Failed to terminate timed out git process {}: {}", pid, err);
+                std::process::exit(1);
+            }
+
+            match child.wait() {
+                Ok(status) => {
+                    debug_log(&format!(
+                        "git process {} terminated after timeout with status {}",
+                        pid, status
+                    ));
+                }
+                Err(err) => {
+                    eprintln!(
+                        "Failed to wait for timed out git process {} after termination: {}",
+                        pid, err
+                    );
+                    std::process::exit(1);
+                }
+            }
+
+            return Err(WaitForGitProcessError::TimedOut);
+        }
+
+        std::thread::sleep(GIT_PROXY_POLL_INTERVAL);
+    }
+}
+
+#[cfg(windows)]
+fn spawn_git_child_windows(
+    args: &[String],
+    child_hooks_path_override: Option<&str>,
+    wrapper_invocation_id: Option<&str>,
+    suppress_trace2: bool,
+    is_retry: bool,
+) -> std::process::Child {
+    let mut cmd = Command::new(config::Config::get().git_cmd());
+    if let Some(hooks_path) = child_hooks_path_override
+        && !has_explicit_hooks_path_override(args)
+    {
+        cmd.arg("-c").arg(format!("core.hooksPath={}", hooks_path));
+    }
+    cmd.args(args);
+    cmd.env(ENV_SKIP_MANAGED_HOOKS, "1");
+    cmd.env_remove("GIT_AI_ASYNC_MODE");
+    if suppress_trace2 {
+        cmd.env("GIT_TRACE2_EVENT", "0");
+    }
+    if let Some(id) = wrapper_invocation_id {
+        cmd.env("GIT_AI_WRAPPER_INVOCATION_ID", id);
+        cmd.env("GIT_TRACE2_ENV_VARS", "GIT_AI_WRAPPER_INVOCATION_ID");
+    }
+
+    if !is_interactive_terminal() {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    if is_debug_enabled() {
+        cmd.env("GIT_TRACE", "1");
+        cmd.env("GIT_TRACE2", "1");
+        cmd.env("GIT_TERMINAL_PROMPT", "0");
+        cmd.env("GCM_INTERACTIVE", "Never");
+        eprintln!(
+            "[proxy_to_git] git executable = {:?},  git args = {:?}",
+            config::Config::get().git_cmd(),
+            args
+        );
+    }
+
+    match cmd.spawn() {
+        Ok(child) => child,
+        Err(err) => {
+            if is_retry {
+                eprintln!("Failed to retry git command after timeout: {}", err);
+            } else {
+                eprintln!("Failed to execute git command: {}", err);
+            }
+            std::process::exit(1);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn kill_process_tree_windows(pid: u32) -> Result<(), String> {
+    let output = Command::new("taskkill")
+        .args(["/F", "/T", "/PID", &pid.to_string()])
+        .output()
+        .map_err(|e| format!("failed to run taskkill: {}", e))?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr_trimmed = stderr.trim();
+    if stderr_trimmed.contains("not found")
+        || stderr_trimmed.contains("There is no running instance")
+    {
+        return Ok(());
+    }
+
+    Err(format!(
+        "taskkill /F /T /PID {} failed: {}",
+        pid, stderr_trimmed
+    ))
+}
+
+#[cfg(windows)]
+fn git_proxy_timeout() -> Duration {
+    parse_git_proxy_timeout_ms(std::env::var("GIT_AI_GIT_PROXY_TIMEOUT_MS").ok().as_deref())
+}
+
+#[cfg(windows)]
+fn git_proxy_retry_count() -> usize {
+    parse_git_proxy_retry_count(
+        std::env::var("GIT_AI_GIT_PROXY_RETRY_COUNT")
+            .ok()
+            .as_deref(),
+    )
+}
+
+#[cfg(windows)]
+fn parse_git_proxy_timeout_ms(value: Option<&str>) -> Duration {
+    value
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .map(Duration::from_millis)
+        .unwrap_or(DEFAULT_GIT_PROXY_TIMEOUT)
+}
+
+#[cfg(windows)]
+fn parse_git_proxy_retry_count(value: Option<&str>) -> usize {
+    value
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_GIT_PROXY_RETRY_COUNT)
 }
 
 // Exit mirroring the child's termination: same signal if signaled, else exit code

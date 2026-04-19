@@ -18,7 +18,7 @@ use crate::error::GitAiError;
 use crate::git::repo_storage::PersistedWorkingLog;
 use crate::git::repository::Repository;
 use crate::git::status::{EntryKind, StatusCode};
-use crate::utils::normalize_to_posix;
+use crate::utils::{LockFile, normalize_to_posix};
 use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -51,9 +51,19 @@ use crate::authorship::working_log::AgentId;
 /// This is half of the server-side bucketing window.
 #[cfg_attr(any(test, feature = "test-support"), allow(dead_code))]
 const AGENT_USAGE_MIN_INTERVAL_SECS: u64 = 150;
+const CHECKPOINT_LOCK_POLL_INTERVAL_BASE: u64 = 100;
+const DEFAULT_CHECKPOINT_LOCK_TIMEOUT: StdDuration = StdDuration::from_secs(240);
+const MAX_POLL_INTERVAL: StdDuration = StdDuration::from_millis(2000);
 
 #[cfg(not(any(test, feature = "test-support")))]
 const KNOWN_HUMAN_MIN_SECS_AFTER_AI: u64 = 1;
+
+fn poll_interval_ms() -> u64 {
+    std::env::var("GIT_AI_LOCK_POLL_INTERVAL_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(CHECKPOINT_LOCK_POLL_INTERVAL_BASE)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -109,6 +119,63 @@ struct ResolvedCheckpointExecution {
 pub(crate) enum BaseOverrideResolutionPolicy {
     AllowFallback,
     RequireExplicitSnapshot,
+}
+
+fn checkpoint_lock_path(repo: &Repository) -> PathBuf {
+    repo.storage.ai_dir.join("checkpoint.lock")
+}
+
+fn parse_checkpoint_lock_timeout_ms(value: Option<&str>) -> StdDuration {
+    value
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .map(StdDuration::from_millis)
+        .unwrap_or(DEFAULT_CHECKPOINT_LOCK_TIMEOUT)
+}
+
+fn checkpoint_lock_timeout() -> StdDuration {
+    let base = parse_checkpoint_lock_timeout_ms(
+        std::env::var("GIT_AI_CHECKPOINT_LOCK_TIMEOUT_MS")
+            .ok()
+            .as_deref(),
+    );
+    if std::env::var_os("GIT_AI_SLOW_VM").is_some() {
+        base.max(StdDuration::from_secs(240))
+    } else {
+        base
+    }
+}
+
+fn acquire_checkpoint_lock(repo: &Repository) -> Result<LockFile, GitAiError> {
+    let lock_path = checkpoint_lock_path(repo);
+    let timeout = checkpoint_lock_timeout();
+    let deadline = Instant::now() + timeout;
+
+    let mut interval_ms = poll_interval_ms();
+
+    loop {
+        if let Some(lock) = LockFile::try_acquire(&lock_path) {
+            return Ok(lock);
+        }
+
+        if Instant::now() >= deadline {
+            return Err(GitAiError::Generic(format!(
+                "timed out after {}ms acquiring checkpoint lock at {}",
+                timeout.as_millis(),
+                lock_path.display()
+            )));
+        }
+
+        std::thread::sleep(StdDuration::from_millis(interval_ms));
+
+        // Exponential backoff: each poll multiplies by 1.5 up to MAX_POLL_INTERVAL.
+        interval_ms = (interval_ms * 3 / 2).min(MAX_POLL_INTERVAL.as_millis() as u64);
+    }
+}
+
+pub fn is_checkpoint_lock(repo: &Repository) -> bool {
+    let lock_path = checkpoint_lock_path(repo);
+    lock_path.exists()
 }
 
 /// Build EventAttributes with repo metadata.
@@ -1187,6 +1254,7 @@ pub fn execute_captured_checkpoint(
 ) -> Result<(usize, usize, usize), GitAiError> {
     let checkpoint_start = Instant::now();
     tracing::debug!("[BENCHMARK] Starting captured checkpoint replay");
+    let _checkpoint_lock = acquire_checkpoint_lock(repo)?;
 
     let manifest = load_captured_checkpoint_manifest(capture_id)?;
     validate_captured_checkpoint_manifest_repo(repo, &manifest)?;

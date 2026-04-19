@@ -8,18 +8,18 @@ use crate::metrics::{MetricEvent, MetricsBatch};
 
 /// Max events per batch upload
 const MAX_BATCH_SIZE: usize = 250;
-const ENV_FLUSH_METRICS_DB_WORKER: &str = "GIT_AI_FLUSH_METRICS_DB_WORKER";
+// const ENV_FLUSH_METRICS_DB_WORKER: &str = "GIT_AI_FLUSH_METRICS_DB_WORKER";
 
-/// Spawn a background process to flush metrics DB
-#[cfg(not(any(test, feature = "test-support")))]
-pub fn spawn_background_metrics_db_flush() {
-    let _ = crate::utils::spawn_internal_git_ai_subcommand(
-        "flush-metrics-db",
-        &[],
-        ENV_FLUSH_METRICS_DB_WORKER,
-        &[],
-    );
-}
+// /// Spawn a background process to flush metrics DB
+// #[cfg(not(any(test, feature = "test-support")))]
+// pub fn spawn_background_metrics_db_flush() {
+//     let _ = crate::utils::spawn_internal_git_ai_subcommand(
+//         "flush-metrics-db",
+//         &[],
+//         ENV_FLUSH_METRICS_DB_WORKER,
+//         &[],
+//     );
+// }
 
 /// No-op in test mode.
 #[cfg(any(test, feature = "test-support"))]
