@@ -15,8 +15,7 @@ pub fn spawn_background_cas_flush() {
         return;
     }
 
-    let _ =
-        crate::utils::spawn_internal_git_ai_subcommand("flush-cas", &[], ENV_CAS_FLUSH_WORKER, &[]);
+    let _ = crate::utils::spawn_internal_git_ai_subcommand("flush-cas", &[], ENV_CAS_FLUSH_WORKER, &[]);
 }
 
 /// Handle the flush-cas command (kept for manual human use)

@@ -7,7 +7,6 @@ use crate::authorship::imara_diff_utils::{ByteDiff, ByteDiffOp, DiffOp, capture_
 use crate::authorship::move_detection::{DeletedLine, InsertedLine, detect_moves};
 use crate::authorship::working_log::CheckpointKind;
 use crate::error::GitAiError;
-use crate::utils::debug_log;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -309,10 +308,10 @@ impl AttributionTracker {
         let line_metadata_start = Instant::now();
         let old_lines = collect_line_metadata(old_content);
         let new_lines = collect_line_metadata(new_content);
-        debug_log(&format!(
+        tracing::debug!(
             "[BENCHMARK] collect_line_metadata (old/new) took {:?}",
             line_metadata_start.elapsed()
-        ));
+        );
 
         let capture_start = Instant::now();
         let old_line_slices: Vec<&str> = old_lines
@@ -326,11 +325,11 @@ impl AttributionTracker {
 
         let line_ops = capture_diff_slices(&old_line_slices, &new_line_slices);
         let line_ops_len = line_ops.len();
-        debug_log(&format!(
+        tracing::debug!(
             "[BENCHMARK] capture_diff_slices produced {} ops in {:?}",
             line_ops_len,
             capture_start.elapsed()
-        ));
+        );
 
         let mut computation = DiffComputation::default();
         let mut pending_changed: Vec<DiffOp> = Vec::new();
@@ -370,12 +369,12 @@ impl AttributionTracker {
         }
 
         computation.substantive_new_ranges = merge_ranges(computation.substantive_new_ranges);
-        debug_log(&format!(
+        tracing::debug!(
             "[BENCHMARK] compute_diffs processed {} ops in {:?} (total {:?})",
             line_ops_len,
             process_start.elapsed(),
             compute_start.elapsed()
-        ));
+        );
 
         Ok(computation)
     }
@@ -2118,7 +2117,11 @@ fn find_dominant_author_for_line_candidates(
         // Zero-length attributions are deletion markers - they indicate the author
         // deleted content at this position, so they should influence line attribution
         let is_deletion_marker = attribution.start == attribution.end;
-        let is_ai_author = attribution.author_id != CheckpointKind::Human.to_str();
+        // h_<hash> IDs are known-human attestations; treat them like "human" for
+        // whitespace-inclusion purposes so their newline ranges don't bleed into
+        // adjacent lines during an AI checkpoint.
+        let is_ai_author = attribution.author_id != CheckpointKind::Human.to_str()
+            && !attribution.author_id.starts_with("h_");
         let include_ai_whitespace = is_ai_checkpoint && is_ai_author;
         if has_non_whitespace || is_line_empty || is_deletion_marker || include_ai_whitespace {
             candidate_attrs.push(attribution);
@@ -2143,7 +2146,8 @@ fn find_dominant_author_for_line_candidates(
     let mut last_ai_edit: Option<&Attribution> = None;
     let mut last_human_edit: Option<&Attribution> = None;
     for attr in &candidate_attrs {
-        if attr.author_id == CheckpointKind::Human.to_str() {
+        // Both legacy "human" and KnownHuman h_<hash> IDs are human edits.
+        if attr.author_id == CheckpointKind::Human.to_str() || attr.author_id.starts_with("h_") {
             last_human_edit = Some(attr);
         } else {
             last_ai_edit = Some(attr);
@@ -2648,5 +2652,89 @@ mod tests {
             .expect("AI block missing");
         assert_eq!(ai_block.start_line, 2);
         assert_eq!(ai_block.end_line, 17);
+    }
+
+    // ====================================================================
+    // CRLF / LF normalization tests
+    // ====================================================================
+
+    #[test]
+    fn crlf_to_lf_same_content_preserves_attributions() {
+        // When content only changes line endings (CRLF→LF), attributions should
+        // be preserved for the original author, NOT re-attributed.
+        let tracker = AttributionTracker::new();
+        let old = "hello\r\nworld\r\n";
+        let new = "hello\nworld\n";
+        let old_attrs = vec![Attribution::new(0, old.len(), "Alice".into(), TEST_TS)];
+
+        let updated = tracker
+            .update_attributions_for_checkpoint(old, new, &old_attrs, "Bob", TEST_TS + 1, false)
+            .unwrap();
+
+        // All non-whitespace content should still be owned by Alice
+        assert_non_ws_owned_by(
+            &updated,
+            new,
+            "Alice",
+            "CRLF→LF with same content should not re-attribute to Bob",
+        );
+    }
+
+    #[test]
+    fn lf_to_crlf_same_content_preserves_attributions() {
+        let tracker = AttributionTracker::new();
+        let old = "hello\nworld\n";
+        let new = "hello\r\nworld\r\n";
+        let old_attrs = vec![Attribution::new(0, old.len(), "Alice".into(), TEST_TS)];
+
+        let updated = tracker
+            .update_attributions_for_checkpoint(old, new, &old_attrs, "Bob", TEST_TS + 1, false)
+            .unwrap();
+
+        assert_non_ws_owned_by(
+            &updated,
+            new,
+            "Alice",
+            "LF→CRLF with same content should not re-attribute to Bob",
+        );
+    }
+
+    #[test]
+    fn crlf_to_lf_with_real_edit_attributes_correctly() {
+        // Old has CRLF, new has LF with one line changed. Only the changed line
+        // should be attributed to the new author.
+        let tracker = AttributionTracker::new();
+        let old = "line1\r\nline2\r\nline3\r\n";
+        let new = "line1\nmodified\nline3\n";
+        let old_attrs = vec![Attribution::new(0, old.len(), "Alice".into(), TEST_TS)];
+
+        let updated = tracker
+            .update_attributions_for_checkpoint(old, new, &old_attrs, "Bob", TEST_TS + 1, false)
+            .unwrap();
+
+        // "line1" and "line3" should remain Alice's
+        // "modified" should be Bob's
+        let line1_start = 0;
+        let line1_end = "line1".len();
+        assert_range_owned_by(&updated, line1_start, line1_end, "Alice");
+
+        let modified_start = "line1\n".len();
+        let modified_end = "line1\nmodified".len();
+        assert_range_owned_by(&updated, modified_start, modified_end, "Bob");
+
+        let line3_start = "line1\nmodified\n".len();
+        let line3_end = "line1\nmodified\nline3".len();
+        assert_range_owned_by(&updated, line3_start, line3_end, "Alice");
+    }
+
+    #[test]
+    fn collect_line_metadata_strips_cr_from_text() {
+        // Verify that collect_line_metadata strips \r from the text field
+        // (this already works, but verifies the building block)
+        let content = "hello\r\nworld\r\n";
+        let metadata = collect_line_metadata(content);
+        assert_eq!(metadata.len(), 2);
+        assert_eq!(metadata[0].text, "hello");
+        assert_eq!(metadata[1].text, "world");
     }
 }

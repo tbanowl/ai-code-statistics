@@ -13,6 +13,7 @@ use crate::commands::checkpoint_agent::agent_presets::{
 use crate::commands::checkpoint_agent::agent_v1_preset::AgentV1Preset;
 use crate::commands::checkpoint_agent::amp_preset::AmpPreset;
 use crate::commands::checkpoint_agent::opencode_preset::OpenCodePreset;
+use crate::commands::checkpoint_agent::pi_preset::PiPreset;
 use crate::config;
 use crate::daemon::{
     CapturedCheckpointRunRequest, CheckpointRunRequest, ControlRequest, LiveCheckpointRunRequest,
@@ -24,7 +25,7 @@ use crate::git::repository::{CommitRange, Repository, group_files_by_repository}
 use crate::git::sync_authorship::{NotesExistence, fetch_authorship_notes, push_authorship_notes};
 use crate::observability::wrapper_performance_targets::log_performance_for_checkpoint;
 use crate::observability::{self, log_message};
-    use crate::utils::{debug_log, is_interactive_terminal};
+use crate::utils::is_interactive_terminal;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::io::IsTerminal;
@@ -186,7 +187,7 @@ pub fn handle_git_ai(args: &[String]) {
         }
         "upgrade" => {
             commands::upgrade::run_with_args(&args[1..]);
-        }        
+        }
         "flush-logs" => {
             commands::flush_logs::handle_flush_logs(&args[1..]);
         }
@@ -229,6 +230,9 @@ pub fn handle_git_ai(args: &[String]) {
         "continue" => {
             commands::continue_session::handle_continue(&args[1..]);
         }
+        "fetch-notes" => {
+            commands::fetch_notes::handle_fetch_notes(&args[1..]);
+        }
         "effective-ignore-patterns" => {
             handle_effective_ignore_patterns_internal(&args[1..]);
         }
@@ -260,12 +264,13 @@ fn print_help() {
     eprintln!("Commands:");
     eprintln!("  checkpoint         Checkpoint working changes and attribute author");
     eprintln!(
-        "    Presets: claude, codex, continue-cli, cursor, gemini, github-copilot, amp, windsurf, opencode, ai_tab, firebender, mock_ai"
+        "    Presets: claude, codex, continue-cli, cursor, gemini, github-copilot, amp, windsurf, opencode, pi, ai_tab, firebender, mock_ai, mock_known_human, known_human"
     );
     eprintln!(
         "    --hook-input <json|stdin>   JSON payload required by presets, or 'stdin' to read from stdin"
     );
-    eprintln!("    mock_ai [pathspecs...]      Test preset accepting optional file pathspecs");
+    eprintln!("    mock_ai [pathspecs...]           Test preset accepting optional file pathspecs");
+    eprintln!("    mock_known_human [pathspecs...]  Test preset for KnownHuman checkpoints");
     eprintln!("  log [args...]      Show commit log with AI authorship notes");
     eprintln!(
         "                        Proxies git log --notes=ai with all standard git log options"
@@ -323,7 +328,6 @@ fn print_help() {
     eprintln!("    --since <time>        Only include prompts after this time (default: 30d)");
     eprintln!("    --author <name>       Filter by human author (default: current git user)");
     eprintln!("    --all-authors         Include prompts from all authors");
-    eprintln!("    --all-repositories    Include prompts from all repositories");
     eprintln!("    exec \"<SQL>\"          Execute arbitrary SQL on prompts.db");
     eprintln!("    list                  List prompts as TSV");
     eprintln!("    next                  Get next prompt as JSON (iterator pattern)");
@@ -351,6 +355,9 @@ fn print_help() {
     eprintln!("    --launch              Launch agent CLI with restored context");
     eprintln!("    --clipboard           Copy context to system clipboard");
     eprintln!("    --json                Output context as structured JSON");
+    eprintln!("  fetch-notes [remote] Synchronously fetch AI authorship notes");
+    eprintln!("    --remote <name>       Explicit remote name (default: upstream or origin)");
+    eprintln!("    --json                Output result as JSON");
     eprintln!("  login              Authenticate with Git AI");
     eprintln!("  logout             Clear stored credentials");
     eprintln!("  whoami             Show auth state and login identity");
@@ -611,6 +618,22 @@ fn handle_checkpoint(args: &[String]) {
                     }
                 }
             }
+            "pi" => {
+                match PiPreset.run(AgentCheckpointFlags {
+                    hook_input: hook_input.clone(),
+                }) {
+                    Ok(agent_run) => {
+                        if agent_run.repo_working_dir.is_some() {
+                            repository_working_dir = agent_run.repo_working_dir.clone().unwrap();
+                        }
+                        agent_run_result = Some(agent_run);
+                    }
+                    Err(e) => {
+                        eprintln!("Pi preset error: {}", e);
+                        std::process::exit(0);
+                    }
+                }
+            }
             "mock_ai" => {
                 let mock_agent_id = format!(
                     "ai-thread-{}",
@@ -652,13 +675,183 @@ fn handle_checkpoint(args: &[String]) {
                     edited_filepaths,
                     will_edit_filepaths: None,
                     dirty_files: None,
+                    captured_checkpoint_id: None,
+                });
+            }
+            "known_human" => {
+                // Production preset: IDE extension attests human-authored lines.
+                // Stdin mode (--hook-input stdin): all data passed as JSON on stdin:
+                //   { "editor": "...", "editor_version": "...", "extension_version": "...",
+                //     "cwd": "/abs/path", "edited_filepaths": [...], "dirty_files": {...} }
+                // CLI mode: git ai checkpoint known_human [--editor <name>]
+                //           [--editor-version <ver>] [--extension-version <ver>] -- file...
+                let (
+                    editor,
+                    editor_version,
+                    extension_version,
+                    repo_working_dir,
+                    edited_filepaths,
+                    dirty_files,
+                ) = if let Some(ref json_str) = hook_input {
+                    let v: serde_json::Value = serde_json::from_str(json_str)
+                        .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                    let editor = v["editor"].as_str().unwrap_or("unknown").to_string();
+                    let editor_version = v["editor_version"]
+                        .as_str()
+                        .unwrap_or("unknown")
+                        .to_string();
+                    let extension_version = v["extension_version"]
+                        .as_str()
+                        .unwrap_or("unknown")
+                        .to_string();
+                    let cwd = v["cwd"].as_str().map(str::to_string);
+                    let edited_filepaths = v["edited_filepaths"]
+                        .as_array()
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|x| x.as_str().map(str::to_string))
+                                .collect::<Vec<_>>()
+                        })
+                        .filter(|v| !v.is_empty());
+                    let dirty_files = v["dirty_files"]
+                        .as_object()
+                        .map(|obj| {
+                            obj.iter()
+                                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                                .collect::<std::collections::HashMap<String, String>>()
+                        })
+                        .filter(|m| !m.is_empty());
+                    (
+                        editor,
+                        editor_version,
+                        extension_version,
+                        cwd,
+                        edited_filepaths,
+                        dirty_files,
+                    )
+                } else {
+                    let mut editor = "unknown".to_string();
+                    let mut editor_version = "unknown".to_string();
+                    let mut extension_version = "unknown".to_string();
+                    let mut files: Vec<String> = Vec::new();
+                    let mut i = 1usize; // skip "known_human"
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--editor" if i + 1 < args.len() => {
+                                editor = args[i + 1].clone();
+                                i += 2;
+                            }
+                            "--editor-version" if i + 1 < args.len() => {
+                                editor_version = args[i + 1].clone();
+                                i += 2;
+                            }
+                            "--extension-version" if i + 1 < args.len() => {
+                                extension_version = args[i + 1].clone();
+                                i += 2;
+                            }
+                            "--" => {
+                                files.extend(args[i + 1..].iter().cloned());
+                                break;
+                            }
+                            arg if !arg.starts_with("--") => {
+                                files.push(arg.to_string());
+                                i += 1;
+                            }
+                            _ => {
+                                i += 1;
+                            }
+                        }
+                    }
+                    let edited_filepaths = if files.is_empty() { None } else { Some(files) };
+                    (
+                        editor,
+                        editor_version,
+                        extension_version,
+                        None,
+                        edited_filepaths,
+                        None,
+                    )
+                };
+
+                let known_human_agent_metadata = {
+                    let mut m = std::collections::HashMap::new();
+                    m.insert("kh_editor".to_string(), editor);
+                    m.insert("kh_editor_version".to_string(), editor_version);
+                    m.insert("kh_extension_version".to_string(), extension_version);
+                    m
+                };
+
+                agent_run_result = Some(AgentRunResult {
+                    agent_id: AgentId {
+                        tool: "known_human".to_string(),
+                        id: "known_human_session".to_string(),
+                        model: "unknown".to_string(),
+                    },
+                    agent_metadata: Some(known_human_agent_metadata),
+                    checkpoint_kind: CheckpointKind::KnownHuman,
+                    transcript: None,
+                    repo_working_dir,
+                    edited_filepaths,
+                    will_edit_filepaths: None,
+                    dirty_files,
+                    captured_checkpoint_id: None,
+                });
+            }
+            "mock_known_human" => {
+                // Test preset: KnownHuman checkpoint for given paths (mirrors mock_ai behavior)
+                let edited_filepaths = if args.len() > 1 {
+                    let mut paths = Vec::new();
+                    for arg in &args[1..] {
+                        if !arg.starts_with("--") {
+                            paths.push(arg.clone());
+                        }
+                    }
+                    if paths.is_empty() { None } else { Some(paths) }
+                } else {
+                    None
+                };
+
+                agent_run_result = Some(AgentRunResult {
+                    agent_id: AgentId {
+                        tool: "mock_known_human".to_string(),
+                        id: "mock_known_human_session".to_string(),
+                        model: "unknown".to_string(),
+                    },
+                    agent_metadata: None,
+                    checkpoint_kind: CheckpointKind::KnownHuman,
+                    transcript: None,
+                    repo_working_dir: None,
+                    edited_filepaths,
+                    will_edit_filepaths: None,
+                    dirty_files: None,
+                    captured_checkpoint_id: None,
                 });
             }
             _ => {}
         }
     }
 
-    debug_log(&format!("agent run result: {:?}", &agent_run_result));
+    // Emit agent_usage metric for every AI hook, regardless of whether a
+    // file-edit checkpoint is created downstream.  The existing per-prompt
+    // throttle (`should_emit_agent_usage`) prevents duplicate events.
+    if let Some(ref result) = agent_run_result
+        && result.checkpoint_kind.is_ai()
+        && commands::checkpoint::should_emit_agent_usage(&result.agent_id)
+    {
+        let prompt_id = generate_short_hash(&result.agent_id.id, &result.agent_id.tool);
+        let attrs = crate::metrics::EventAttributes::with_version(env!("CARGO_PKG_VERSION"))
+            .tool(&result.agent_id.tool)
+            .model(&result.agent_id.model)
+            .prompt_id(prompt_id)
+            .external_prompt_id(&result.agent_id.id)
+            .custom_attributes_map(crate::config::Config::fresh().custom_attributes());
+
+        let values = crate::metrics::AgentUsageValues::new();
+        crate::metrics::record(values, attrs);
+
+        observability::spawn_background_flush();
+    }
+
     let final_working_dir = agent_run_result
         .as_ref()
         .and_then(|r| r.repo_working_dir.clone())
@@ -750,7 +943,6 @@ fn handle_checkpoint(args: &[String]) {
                     "Failed to find any git repositories for the edited files. Orphaned files: {:?}",
                     orphan_files
                 );
-                emit_no_repo_agent_metrics(agent_run_result.as_ref());
                 std::process::exit(0);
             }
 
@@ -899,7 +1091,6 @@ fn handle_checkpoint(args: &[String]) {
         eprintln!(
             "Failed to find repository: workspace root is not a git repository and no edited files provided"
         );
-        emit_no_repo_agent_metrics(agent_run_result.as_ref());
         std::process::exit(0);
     }
 
@@ -912,10 +1103,31 @@ fn handle_checkpoint(args: &[String]) {
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| final_working_dir.clone());
 
-    let checkpoint_kind = agent_run_result
+    let mut checkpoint_kind = agent_run_result
         .as_ref()
         .map(|r| r.checkpoint_kind)
         .unwrap_or(CheckpointKind::Human);
+
+    // If a git commit fires inside an AI bash tool call (e.g. `echo foo > f && git commit -am x`),
+    // the pre-commit hook reaches here with no agent context and would default to Human.
+    // Override to AI when a non-stale pre-snapshot exists, which is the precise signal
+    // that a bash invocation is in flight. This uses existing snapshot lifecycle — no new
+    // daemon messages or side-channel files needed.
+    if checkpoint_kind == CheckpointKind::Human && agent_run_result.is_none() {
+        let repo_root = std::path::Path::new(&effective_working_dir);
+
+        if let Some((resolved_kind, resolved_agent_run_result)) =
+            crate::commands::checkpoint_agent::bash_tool::checkpoint_context_from_active_bash(
+                repo_root,
+                &effective_working_dir,
+            )
+        {
+            tracing::debug!("Using active bash context for pre-commit AI checkpoint");
+            checkpoint_kind = resolved_kind;
+            agent_run_result = resolved_agent_run_result;
+        }
+    }
+
     let allow_captured_async =
         checkpoint_request_has_explicit_capture_scope(args, agent_run_result.as_ref());
 
@@ -951,6 +1163,7 @@ fn handle_checkpoint(args: &[String]) {
             edited_filepaths: None,
             repo_working_dir: Some(effective_working_dir),
             dirty_files: None,
+            captured_checkpoint_id: None,
         });
     }
 
@@ -1054,6 +1267,10 @@ fn handle_checkpoint(args: &[String]) {
 
             let mut modified = base_result.clone();
             modified.repo_working_dir = Some(repo_workdir.to_string_lossy().to_string());
+            // Clear stale captured checkpoint ID — the original capture was consumed
+            // (or will be consumed) by the primary repo's checkpoint dispatch and
+            // the on-disk files may already be deleted by the daemon.
+            modified.captured_checkpoint_id = None;
             if base_result.checkpoint_kind == CheckpointKind::Human {
                 modified.will_edit_filepaths = Some(repo_file_paths);
                 modified.edited_filepaths = None;
@@ -1134,12 +1351,87 @@ fn run_checkpoint_via_daemon_or_local(
             let is_test = std::env::var_os("GIT_AI_TEST_DB_PATH").is_some()
                 || std::env::var_os("GITAI_TEST_DB_PATH").is_some();
             let checkpoint_daemon_timeout = if cfg!(windows) || is_test {
-                Duration::from_secs(60)
+                Duration::from_secs(10)
             } else {
                 Duration::from_secs(5)
             };
             match crate::commands::daemon::ensure_daemon_running(checkpoint_daemon_timeout) {
                 Ok(config) => {
+                    // Early path: if the bash tool already captured a checkpoint,
+                    // submit it directly to the daemon without re-capturing.
+                    if let Some(capture_id) = agent_run_result
+                        .as_ref()
+                        .and_then(|r| r.captured_checkpoint_id.as_deref())
+                    {
+                        // Patch the manifest with the real agent identity/transcript/metadata
+                        // so the daemon sees the actual agent context instead of the synthetic
+                        // placeholder written at bash-tool capture time.
+                        if let Err(e) =
+                            crate::commands::checkpoint::update_captured_checkpoint_agent_context(
+                                capture_id,
+                                author,
+                                agent_run_result.as_ref(),
+                            )
+                        {
+                            tracing::debug!(
+                                "Failed to update captured checkpoint agent context: {}",
+                                e
+                            );
+                        }
+
+                        let request = ControlRequest::CheckpointRun {
+                            request: Box::new(CheckpointRunRequest::Captured(
+                                CapturedCheckpointRunRequest {
+                                    repo_working_dir: repo_working_dir.clone(),
+                                    capture_id: capture_id.to_string(),
+                                },
+                            )),
+                            wait: Some(false),
+                        };
+                        match send_control_request(&config.control_socket_path, &request) {
+                            Ok(response) if response.ok => {
+                                let estimated_files =
+                                    estimate_checkpoint_file_count(kind, &agent_run_result);
+                                return Ok(CheckpointDispatchOutcome {
+                                    stats: (0, estimated_files, 0),
+                                    queued: true,
+                                });
+                            }
+                            Ok(response) => {
+                                let message = response
+                                    .error
+                                    .unwrap_or_else(|| "unknown error".to_string());
+                                let _ = cleanup_captured_checkpoint_after_delegate_failure(
+                                    capture_id,
+                                    &repo_working_dir,
+                                    kind,
+                                    "bash_captured_request_cleanup_failed",
+                                );
+                                log_daemon_checkpoint_delegate_failure(
+                                    "bash_captured_request_rejected",
+                                    &repo_working_dir,
+                                    kind,
+                                    &message,
+                                );
+                            }
+                            Err(e) => {
+                                let _ = cleanup_captured_checkpoint_after_delegate_failure(
+                                    capture_id,
+                                    &repo_working_dir,
+                                    kind,
+                                    "bash_captured_connect_cleanup_failed",
+                                );
+                                log_daemon_checkpoint_delegate_failure(
+                                    "bash_captured_connect_failed",
+                                    &repo_working_dir,
+                                    kind,
+                                    &e.to_string(),
+                                );
+                            }
+                        }
+                        // Fall through to normal path on failure
+                    }
+
                     if allow_captured_async
                         && crate::commands::checkpoint::explicit_capture_target_paths(
                             kind,
@@ -1356,18 +1648,7 @@ fn log_daemon_checkpoint_delegate_failure(
 }
 
 fn daemon_checkpoint_delegate_enabled() -> bool {
-    if config::Config::get().feature_flags().async_mode {
-        return true;
-    }
-
-    matches!(
-        std::env::var("GIT_AI_DAEMON_CHECKPOINT_DELEGATE")
-            .ok()
-            .as_deref()
-            .map(str::to_ascii_lowercase)
-            .as_deref(),
-        Some("1") | Some("true") | Some("yes")
-    )
+    crate::utils::checkpoint_delegation_enabled()
 }
 
 fn checkpoint_kind_to_str(kind: CheckpointKind) -> &'static str {
@@ -1375,6 +1656,7 @@ fn checkpoint_kind_to_str(kind: CheckpointKind) -> &'static str {
         CheckpointKind::Human => "human",
         CheckpointKind::AiAgent => "ai_agent",
         CheckpointKind::AiTab => "ai_tab",
+        CheckpointKind::KnownHuman => "known_human",
     }
 }
 
@@ -1749,8 +2031,8 @@ fn handle_stats(args: &[String]) {
                         if parts.len() == 2 {
                             match CommitRange::new_infer_refname(
                                 &repo,
-                                parts[0].to_string(),
-                                parts[1].to_string(),
+                                normalize_head_rev(parts[0]),
+                                normalize_head_rev(parts[1]),
                                 // @todo this is probably fine, but we might want to give users an option to override from this command.
                                 None,
                             ) {
@@ -1767,7 +2049,7 @@ fn handle_stats(args: &[String]) {
                             std::process::exit(1);
                         }
                     } else {
-                        commit_sha = Some(arg.clone());
+                        commit_sha = Some(normalize_head_rev(arg));
                     }
                     i += 1;
                 } else {
@@ -1817,6 +2099,30 @@ fn handle_stats(args: &[String]) {
     }
 }
 
+/// Normalise a revision token that the user may have typed with a lowercase
+/// "head" prefix.  On case-insensitive file systems (macOS) git accepts both
+/// "head" and "HEAD", but in a linked worktree "head" can resolve to the
+/// *main* repository's HEAD file rather than the worktree's own HEAD, so the
+/// wrong commit is used.  On case-sensitive file systems (Linux) "head"
+/// simply fails with "Not a valid revision".  Normalising to uppercase "HEAD"
+/// before passing to git fixes both issues.
+///
+/// Only the four-character prefix is replaced; suffixes like `~2`, `^1` or
+/// `@{0}` are preserved verbatim.
+fn normalize_head_rev(rev: &str) -> String {
+    if rev.len() >= 4 && rev[..4].eq_ignore_ascii_case("head") {
+        let suffix = &rev[4..];
+        if suffix.is_empty()
+            || suffix.starts_with('~')
+            || suffix.starts_with('^')
+            || suffix.starts_with('@')
+        {
+            return format!("HEAD{}", suffix);
+        }
+    }
+    rev.to_string()
+}
+
 fn handle_git_hooks(args: &[String]) {
     match args.first().map(String::as_str) {
         Some("remove") | Some("uninstall") => {
@@ -1852,33 +2158,6 @@ fn handle_git_hooks(args: &[String]) {
     }
 }
 
-fn emit_no_repo_agent_metrics(agent_run_result: Option<&AgentRunResult>) {
-    let Some(result) = agent_run_result else {
-        return;
-    };
-    if result.checkpoint_kind == CheckpointKind::Human {
-        return;
-    }
-
-    let agent_id = &result.agent_id;
-    if !commands::checkpoint::should_emit_agent_usage(agent_id) {
-        return;
-    }
-
-    let prompt_id = generate_short_hash(&agent_id.id, &agent_id.tool);
-    let attrs = crate::metrics::EventAttributes::with_version(env!("CARGO_PKG_VERSION"))
-        .tool(&agent_id.tool)
-        .model(&agent_id.model)
-        .prompt_id(prompt_id)
-        .external_prompt_id(&agent_id.id)
-        .custom_attributes_map(crate::config::Config::fresh().custom_attributes());
-
-    let values = crate::metrics::AgentUsageValues::new();
-    crate::metrics::record(values, attrs);
-
-    observability::spawn_background_flush();
-}
-
 fn get_all_files_for_mock_ai(working_dir: &str) -> Vec<String> {
     // Find the git repository
     let repo = match find_repository_in_path(working_dir) {
@@ -1902,7 +2181,7 @@ fn handle_show_transcript(args: &[String]) {
         eprintln!(
             "  Agents: claude, codex, gemini, continue-cli, github-copilot, cursor, amp, windsurf"
         );
-        eprintln!("  For cursor and amp, provide conversation/thread id instead of path");
+        eprintln!("  For amp, provide conversation/thread id instead of path");
         std::process::exit(1);
     }
 
@@ -1957,12 +2236,8 @@ fn handle_show_transcript(args: &[String]) {
                 }
             }
         }
-        "cursor" => match CursorPreset::fetch_latest_cursor_conversation(path_or_id) {
-            Ok(Some((transcript, model))) => Ok((transcript, Some(model))),
-            Ok(None) => {
-                eprintln!("Error: Conversation not found or database not available");
-                std::process::exit(1);
-            }
+        "cursor" => match CursorPreset::transcript_and_model_from_cursor_jsonl(path_or_id) {
+            Ok((transcript, model)) => Ok((transcript, model)),
             Err(e) => {
                 eprintln!("Error loading Cursor transcript: {}", e);
                 std::process::exit(1);

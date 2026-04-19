@@ -400,11 +400,13 @@ impl SentryClient {
 
         let body = serde_json::to_string(&event)?;
 
-        let response = minreq::post(&self.endpoint)
-            .with_header("X-Sentry-Auth", auth_header)
-            .with_header("Content-Type", "application/json")
-            .with_body(body)
-            .send()?;
+        let agent = crate::http::build_agent(Some(30));
+        let request = agent
+            .post(&self.endpoint)
+            .set("X-Sentry-Auth", &auth_header)
+            .set("Content-Type", "application/json");
+        let response = crate::http::send_with_body(request, &body)
+            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
         let status = response.status_code;
         let event_id = serde_json::from_str::<Value>(response.as_str()?)
@@ -433,10 +435,12 @@ impl PostHogClient {
     fn send_event(&self, event: Value) -> Result<(), Box<dyn std::error::Error>> {
         let body = serde_json::to_string(&event)?;
 
-        let response = minreq::post(&self.endpoint)
-            .with_header("Content-Type", "application/json")
-            .with_body(body)
-            .send()?;
+        let agent = crate::http::build_agent(Some(30));
+        let request = agent
+            .post(&self.endpoint)
+            .set("Content-Type", "application/json");
+        let response = crate::http::send_with_body(request, &body)
+            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
         let status = response.status_code;
 

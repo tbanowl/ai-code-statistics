@@ -10,7 +10,6 @@ use crate::git::repo_storage::RepoStorage;
 use crate::git::rewrite_log::RewriteLogEvent;
 use crate::git::status::MAX_PATHSPEC_ARGS;
 use crate::git::sync_authorship::{fetch_authorship_notes, push_authorship_notes};
-use crate::utils::{debug_log, is_debug_enabled};
 #[cfg(windows)]
 use crate::utils::is_interactive_terminal;
 use unicode_normalization::UnicodeNormalization;
@@ -22,7 +21,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 #[cfg(windows)]
 use crate::utils::CREATE_NO_WINDOW;
@@ -1251,10 +1250,11 @@ impl Repository {
                 supress_output,
             )
         {
-            debug_log(&format!(
+            tracing::debug!(
                 "rewrite_authorship_if_needed failed for {:?}: {}",
-                rewrite_log_event, error
-            ));
+                rewrite_log_event,
+                error
+            );
             crate::observability::log_error(
                 &error,
                 Some(serde_json::json!({
@@ -2247,7 +2247,7 @@ impl Repository {
         let output = exec_git_with_profile(&args, InternalGitProfile::PatchParse)?;
         let diff_output = String::from_utf8_lossy(&output.stdout);
 
-        let mut result = parse_diff_added_lines(&diff_output)?;
+        let (mut result, _deleted_count) = parse_diff_added_lines(&diff_output)?;
 
         if needs_post_filter && let Some(paths) = pathspecs {
             let nfc_paths: HashSet<String> = paths.iter().map(|s| s.nfc().collect()).collect();
@@ -2255,6 +2255,28 @@ impl Repository {
         }
 
         Ok(result)
+    }
+
+    /// Like `diff_added_lines` but also returns the total number of deleted
+    /// lines across all hunks in the diff.  Used by the post-commit stats-cost
+    /// estimator to detect deletion-heavy commits without a second git invocation.
+    pub fn diff_added_lines_with_deleted_count(
+        &self,
+        from_ref: &str,
+        to_ref: &str,
+    ) -> Result<(HashMap<String, Vec<u32>>, usize), GitAiError> {
+        let mut args = self.global_args_for_exec();
+        args.push("diff".to_string());
+        args.push("-U0".to_string());
+        args.push("--no-color".to_string());
+        args.push("--find-renames=1%".to_string());
+        args.push(from_ref.to_string());
+        args.push(to_ref.to_string());
+
+        let output = exec_git_with_profile(&args, InternalGitProfile::PatchParse)?;
+        let diff_output = String::from_utf8_lossy(&output.stdout);
+
+        parse_diff_added_lines(&diff_output)
     }
 
     /// Get list of changed files between two refs using `git diff --name-only`
@@ -2325,7 +2347,7 @@ impl Repository {
         let output = exec_git_with_profile(&args, InternalGitProfile::PatchParse)?;
         let diff_output = String::from_utf8_lossy(&output.stdout);
 
-        let mut result = parse_diff_added_lines(&diff_output)?;
+        let (mut result, _deleted_count) = parse_diff_added_lines(&diff_output)?;
 
         if needs_post_filter && let Some(paths) = pathspecs {
             let nfc_paths: HashSet<String> = paths.iter().map(|s| s.nfc().collect()).collect();
@@ -2438,11 +2460,11 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
         GitAiError::Generic("Missing --git-common-dir output from git rev-parse".to_string())
     })?;
     
-    debug_log(&format!("[find_repository] exec_git_rev_parse {}ms", exec_git_rev_parse_start.elapsed().as_millis()));
+    tracing::debug!("[find_repository] exec_git_rev_parse {}ms", exec_git_rev_parse_start.elapsed().as_millis());
 
     let resolve_command_base_dir_start = Instant::now();
     let command_base_dir = resolve_command_base_dir(global_args)?;
-    debug_log(&format!("[find_repository] resolve_command_base_dir {}ms", resolve_command_base_dir_start.elapsed().as_millis()));
+    tracing::debug!("[find_repository] resolve_command_base_dir {}ms", resolve_command_base_dir_start.elapsed().as_millis());
 
     
     let check_git_dir_start = Instant::now();
@@ -2483,10 +2505,10 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
         top_level_args.push("rev-parse".to_string());
         top_level_args.push("--show-toplevel".to_string());
         let output = exec_git(&top_level_args)?;
-        debug_log(&format!("[find_repository] exec_git_rev_parse2 {}ms", exec_git_rev_parse2_start.elapsed().as_millis()));
+        tracing::debug!("[find_repository] exec_git_rev_parse2 {}ms", exec_git_rev_parse2_start.elapsed().as_millis());
         PathBuf::from(String::from_utf8(output.stdout)?.trim())
     };
-    debug_log(&format!("[find_repository] check_git_dir {}ms", check_git_dir_start.elapsed().as_millis()));
+    tracing::debug!("[find_repository] check_git_dir {}ms", check_git_dir_start.elapsed().as_millis());
 
     if !workdir.is_dir() {
         return Err(GitAiError::Generic(format!(
@@ -2512,7 +2534,7 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
     {
         normalized_global_args[1] = command_root;
     }
-    debug_log(&format!("[find_repository] normalized_global_args cost {}ms", normalized_global_args_start.elapsed().as_millis()));
+    tracing::debug!("[find_repository] normalized_global_args cost {}ms", normalized_global_args_start.elapsed().as_millis());
 
     
     let canonical_workdir_start = Instant::now();
@@ -2526,7 +2548,7 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
             e
         ))
     })?;
-    debug_log(&format!("[find_repository] canonical_workdir cost {}ms", canonical_workdir_start.elapsed().as_millis()));
+    tracing::debug!("[find_repository] canonical_workdir cost {}ms", canonical_workdir_start.elapsed().as_millis());
 
     let worktree_storage_ai_dir_start = Instant::now();
     let worktree_ai_dir = worktree_storage_ai_dir(&git_dir, &git_common_dir);
@@ -2535,9 +2557,9 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
     } else {
         RepoStorage::for_isolated_worktree_storage(&worktree_ai_dir, &workdir)?
     };
-    debug_log(&format!("[find_repository] worktree_storage_ai_dir cost {}ms", worktree_storage_ai_dir_start.elapsed().as_millis()));
+    tracing::debug!("[find_repository] worktree_storage_ai_dir cost {}ms", worktree_storage_ai_dir_start.elapsed().as_millis());
     
-    debug_log(&format!("[find_repository] cost {}ms", find_repository_start.elapsed().as_millis()));
+    tracing::debug!("[find_repository] cost {}ms", find_repository_start.elapsed().as_millis());
 
     Ok(Repository {
         global_args: normalized_global_args,
@@ -3167,20 +3189,8 @@ pub fn exec_git_allow_nonzero_with_profile(
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
     }
-    if is_debug_enabled() {
-        eprintln!("[exec_git] cwd = {:?}", std::env::current_dir());
-        eprintln!("[exec_git] cmd = {:?}", cmd);
 
-        cmd.env("GIT_TRACE", "1");
-        cmd.env("GIT_TRACE2", "1");
-    }
-    
-    let cmd_start = Instant::now();
-    // 模拟虚拟机环境 git 命令执行时间长
-    std::thread::sleep(Duration::from_millis(1500));
-    let result = cmd.output().map_err(GitAiError::IoError);
-    debug_log(&format!("git command [{:?}] execution total {}ms", effective_args, cmd_start.elapsed().as_millis()));
-    result
+    cmd.output().map_err(GitAiError::IoError)
 }
 
 /// Helper to execute a git command with an explicit internal profile.
@@ -3233,18 +3243,8 @@ pub fn exec_git_stdin_with_profile(
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
     }
-    if is_debug_enabled() {
-        eprintln!("[exec_git] cwd = {:?}", std::env::current_dir());
-        eprintln!("[exec_git] cmd = {:?}", cmd);
 
-        cmd.env("GIT_TRACE", "1");
-        cmd.env("GIT_TRACE2", "1");
-    }
-    let cmd_start = Instant::now();
-    std::thread::sleep(Duration::from_millis(1500));
     let mut child = cmd.spawn().map_err(GitAiError::IoError)?;
-    debug_log(&format!("git command [{:?}] execution total {}ms", effective_args, cmd_start.elapsed().as_millis()));
-
 
     // Write stdin in a separate thread to avoid deadlock: if we write all stdin
     // before reading stdout, the child's stdout pipe buffer can fill up, causing
@@ -3320,18 +3320,8 @@ pub fn exec_git_stdin_with_env_with_profile(
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
     }
-    if is_debug_enabled() {
-        eprintln!("[exec_git] cwd = {:?}", std::env::current_dir());
-        eprintln!("[exec_git] cmd = {:?}", cmd);
 
-        cmd.env("GIT_TRACE", "1");
-        cmd.env("GIT_TRACE2", "1");
-    }
-
-    let cmd_start = Instant::now();
-    std::thread::sleep(Duration::from_millis(1500));
     let mut child = cmd.spawn().map_err(GitAiError::IoError)?;
-    debug_log(&format!("git command [{:?}] execution total {}ms", effective_args, cmd_start.elapsed().as_millis()));
 
     // Write stdin in a separate thread to avoid deadlock (see exec_git_stdin_with_profile).
     let stdin_handle = child.stdin.take().map(|mut stdin| {
@@ -3397,19 +3387,30 @@ fn parse_git_version(version_str: &str) -> Option<(u32, u32, u32)> {
 ///
 /// This means: old file line 10 (2 lines), new file line 15 (5 lines)
 /// We extract the "new file" line numbers to know which lines were added.
-fn parse_diff_added_lines(diff_output: &str) -> Result<HashMap<String, Vec<u32>>, GitAiError> {
+///
+/// Also returns the total number of deleted lines across all hunks so that
+/// callers can estimate the cost of a deletion-heavy commit without a second
+/// git invocation.
+fn parse_diff_added_lines(
+    diff_output: &str,
+) -> Result<(HashMap<String, Vec<u32>>, usize), GitAiError> {
     let mut result: HashMap<String, Vec<u32>> = HashMap::new();
     let mut current_file: Option<String> = None;
+    let mut total_deleted: usize = 0;
 
     for line in diff_output.lines() {
         if let Some(path_opt) = parse_new_file_path_from_plus_header_line(line) {
             current_file = path_opt;
         } else if line.starts_with("@@ ") {
             // Parse hunk header: @@ -old_start,old_count +new_start,new_count @@
-            if let Some(ref file) = current_file
-                && let Some((added_lines, _is_pure_insertion)) = parse_hunk_header(line)
-            {
-                result.entry(file.clone()).or_default().extend(added_lines);
+            if let Some((added_lines, _is_pure_insertion, old_count)) = parse_hunk_header(line) {
+                // Count deleted lines for ALL hunks, including those from purely
+                // deleted files (where current_file is None because +++ /dev/null).
+                total_deleted += old_count as usize;
+                // Only record added-line numbers when there is a destination file.
+                if let Some(ref file) = current_file {
+                    result.entry(file.clone()).or_default().extend(added_lines);
+                }
             }
         }
     }
@@ -3420,7 +3421,7 @@ fn parse_diff_added_lines(diff_output: &str) -> Result<HashMap<String, Vec<u32>>
         lines.dedup();
     }
 
-    Ok(result)
+    Ok((result, total_deleted))
 }
 
 /// Parses the unified diff output to extract line numbers of added lines,
@@ -3441,7 +3442,7 @@ fn parse_diff_added_lines_with_insertions(
         } else if line.starts_with("@@ ") {
             // Parse hunk header: @@ -old_start,old_count +new_start,new_count @@
             if let Some(ref file) = current_file
-                && let Some((added_lines, is_pure_insertion)) = parse_hunk_header(line)
+                && let Some((added_lines, is_pure_insertion, _old_count)) = parse_hunk_header(line)
             {
                 all_lines
                     .entry(file.clone())
@@ -3503,7 +3504,12 @@ fn parse_new_file_path_from_plus_header_line(line: &str) -> Option<Option<String
 /// Format: @@ -old_start,old_count +new_start,new_count @@
 /// Returns (line numbers that were added, is_pure_insertion)
 /// is_pure_insertion is true when old_count=0, meaning these are new lines, not modifications
-fn parse_hunk_header(line: &str) -> Option<(Vec<u32>, bool)> {
+/// Returns `(added_line_numbers, is_pure_insertion, old_count)`.
+///
+/// `old_count` is the number of lines removed in the old file for this hunk
+/// (the value after the comma in `@@ -old_start,old_count …`).  Callers that
+/// only need the added-line numbers can discard it with `_`.
+fn parse_hunk_header(line: &str) -> Option<(Vec<u32>, bool, u32)> {
     // Find the part between @@ and @@
     let parts: Vec<&str> = line.split("@@").collect();
     if parts.len() < 2 {
@@ -3549,7 +3555,7 @@ fn parse_hunk_header(line: &str) -> Option<(Vec<u32>, bool)> {
 
     // If count is 0, no lines were added (only deleted)
     if count == 0 {
-        return Some((Vec::new(), false));
+        return Some((Vec::new(), false, old_count));
     }
 
     // Generate all line numbers in the range
@@ -3558,7 +3564,7 @@ fn parse_hunk_header(line: &str) -> Option<(Vec<u32>, bool)> {
     // Pure insertion if old_count is 0 (no lines from old file were modified)
     let is_pure_insertion = old_count == 0;
 
-    Some((lines, is_pure_insertion))
+    Some((lines, is_pure_insertion, old_count))
 }
 
 #[cfg(test)]

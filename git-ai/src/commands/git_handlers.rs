@@ -20,12 +20,10 @@ use crate::git::find_repository;
 use crate::git::repository::{Repository, disable_internal_git_hooks};
 use crate::observability;
 use std::collections::HashSet;
-use std::thread::Thread;
 
 use crate::observability::wrapper_performance_targets::log_performance_target_if_violated;
 #[cfg(windows)]
-use crate::utils::{CREATE_NO_WINDOW, is_debug_enabled};
-use crate::utils::debug_log;
+use crate::utils::CREATE_NO_WINDOW;
 #[cfg(windows)]
 use crate::utils::is_interactive_terminal;
 #[cfg(unix)]
@@ -37,7 +35,7 @@ use std::os::windows::process::CommandExt;
 use std::process::Command;
 #[cfg(unix)]
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::time::{Instant, Duration};
+use std::time::Instant;
 
 #[cfg(unix)]
 static CHILD_PGID: AtomicI32 = AtomicI32::new(0);
@@ -45,18 +43,6 @@ static CHILD_PGID: AtomicI32 = AtomicI32::new(0);
 // Windows NTSTATUS for Ctrl+C interruption (STATUS_CONTROL_C_EXIT, 0xC000013A) from Windows API docs.
 #[cfg(windows)]
 const NTSTATUS_CONTROL_C_EXIT: u32 = 0xC000013A;
-
-#[cfg(windows)]
-const DEFAULT_GIT_PROXY_TIMEOUT: Duration = Duration::from_secs(60);
-
-#[cfg(windows)]
-const DEFAULT_GIT_PROXY_RETRY_COUNT: usize = 1;
-
-#[cfg(windows)]
-const GIT_PROXY_POLL_INTERVAL: Duration = Duration::from_millis(200);
-
-#[cfg(windows)]
-const GIT_PROXY_RETRY_BACKOFF: Duration = Duration::from_millis(500);
 
 /// Error type for hook panics
 #[derive(Debug)]
@@ -127,22 +113,24 @@ pub fn handle_git(args: &[String]) {
     // but capture and send authoritative pre/post state to the daemon.
     if config::Config::get().feature_flags().async_mode {
         let parsed = parse_git_cli_args(args);
-        
-        // // Command no hooks
-        // if is_command_skip_hooks(&parsed) {
-        //     let orig_args: Vec<String> = std::env::args().skip(1).collect();
-        //     proxy_to_git(&orig_args, true, None, None);
-        //     return;
-        // }
 
-        // Read-only commands don't need wrapper state (the daemon fast-paths
+        // Read-only invocations don't need wrapper state (the daemon fast-paths
         // their trace events and never processes them through the normalizer).
         // Skip the invocation_id so we can also suppress trace2 for them,
         // avoiding unnecessary daemon work and wrapper_states memory leaks.
-        let is_read_only = parsed
-            .command
-            .as_deref()
-            .is_some_and(crate::git::command_classification::is_definitely_read_only_command);
+        //
+        // Use is_definitely_read_only_invocation (not is_definitely_read_only_command)
+        // so that subcommand-gated read-only calls like `git stash list` and
+        // `git worktree list` are also suppressed — these account for thousands
+        // of Zed IDE invocations per session.
+        let is_read_only = {
+            let subcommand = parsed.command_args.first().map(String::as_str);
+            parsed.command.as_deref().is_some_and(|cmd| {
+                crate::git::command_classification::is_definitely_read_only_invocation(
+                    cmd, subcommand,
+                )
+            })
+        };
 
         if is_read_only {
             let exit_status = proxy_to_git(args, false, None, None);
@@ -170,7 +158,7 @@ pub fn handle_git(args: &[String]) {
         if let crate::daemon::telemetry_handle::DaemonTelemetryInitResult::Failed(e) =
             crate::daemon::telemetry_handle::init_daemon_telemetry_handle()
         {
-            debug_log(&format!("wrapper: daemon telemetry init failed: {}", e));
+            tracing::debug!("wrapper: daemon telemetry init failed: {}", e);
         }
 
         let repository = find_repository(&parsed.global_args).ok();
@@ -217,21 +205,21 @@ pub fn handle_git(args: &[String]) {
     let find_repository_start = Instant::now();
     let mut repository_option = find_repository(&parsed_args.global_args).ok();
     let find_repository_duration = find_repository_start.elapsed();
-    debug_log(&format!("[handle-git] find_repository {}ms", find_repository_duration.as_millis()));
+    tracing::debug!("[handle-git] find_repository {}ms", find_repository_duration.as_millis());
 
     let check_hooks_start = Instant::now();
     let has_repo = repository_option.is_some();
 
     let get_config_start = Instant::now();
     let config = config::Config::get();
-    debug_log(&format!("[handle-git] get_config_start {}ms", get_config_start.elapsed().as_millis()));
+    tracing::debug!("[handle-git] get_config_start {}ms", get_config_start.elapsed().as_millis());
 
     let is_allowed_repository_start = Instant::now();
     let skip_hooks = !config.is_allowed_repository(&repository_option);
-    debug_log(&format!("[handle-git] is_allowed_repository_start {}ms", is_allowed_repository_start.elapsed().as_millis()));
+    tracing::debug!("[handle-git] is_allowed_repository_start {}ms", is_allowed_repository_start.elapsed().as_millis());
 
     if skip_hooks {
-        debug_log(
+        tracing::debug!(
             "Skipping git-ai hooks because repository is excluded or not in allow_repositories list",
         );
     }
@@ -248,7 +236,7 @@ pub fn handle_git(args: &[String]) {
         exit_with_status(exit_status);
     }
     let check_hooks_duration = check_hooks_start.elapsed();
-    debug_log(&format!("[handle-git] check_hooks_duration {}ms", check_hooks_duration.as_millis()));
+    tracing::debug!("[handle-git] check_hooks_duration {}ms", check_hooks_duration.as_millis());
 
     // run with hooks
     let exit_status = if !parsed_args.is_help && has_repo && !skip_hooks {
@@ -269,13 +257,13 @@ pub fn handle_git(args: &[String]) {
             parsed_args = resolved;
         }
         let resolve_alias_invocation_duration = resolve_alias_invocation_start.elapsed();
-        debug_log(&format!("[handle-git] resolve_alias_invocation_start {}ms", resolve_alias_invocation_duration.as_millis()));
+        tracing::debug!("[handle-git] resolve_alias_invocation_start {}ms", resolve_alias_invocation_duration.as_millis());
 
         let pre_command_start = Instant::now();
         run_pre_command_hooks(&mut command_hooks_context, &mut parsed_args, repository);
         let pre_command_duration = pre_command_start.elapsed();
 
-        let child_hooks_path_override: Option<String> =
+        let child_hooks_path_override =
             resolve_child_git_hooks_path_override(&parsed_args, Some(repository));
         let git_start = Instant::now();
         let exit_status = proxy_to_git(
@@ -353,15 +341,13 @@ fn resolve_alias_impl(
 ) -> Option<ParsedGitInvocation> {
     let mut current = parsed_args.clone();
     let mut seen: HashSet<String> = HashSet::new();
+
     loop {
-        let resolve_alias_start = Instant::now();
         let command = match current.command.as_deref() {
             Some(command) => command,
             None => return Some(current),
         };
-        debug_log(&format!("[resolve_alias_impl] command [{}] cost {}ms", &command, resolve_alias_start.elapsed().as_millis()));
 
-        let config_get_str_start = Instant::now();
         if !seen.insert(command.to_string()) {
             return None;
         }
@@ -371,24 +357,17 @@ fn resolve_alias_impl(
             Ok(Some(value)) => value,
             _ => return Some(current),
         };
-        debug_log(&format!("[resolve_alias_impl] config_get_str {}ms", config_get_str_start.elapsed().as_millis()));
 
-        let parse_alias_tokens_start = Instant::now();
         let alias_tokens = parse_alias_tokens(&alias_value)?;
-        debug_log(&format!("[resolve_alias_impl] parse_alias_tokens_start {}ms", parse_alias_tokens_start.elapsed().as_millis()));
 
-        let expanded_args_start = Instant::now();
         let mut expanded_args = Vec::new();
         expanded_args.extend(current.global_args.iter().cloned());
         expanded_args.extend(alias_tokens);
 
         // Append the original command args after the alias expansion
         expanded_args.extend(current.command_args.iter().cloned());
-        debug_log(&format!("[resolve_alias_impl] expanded_args_start {}ms", expanded_args_start.elapsed().as_millis()));
 
-        let parse_git_cli_args2_start = Instant::now();
         current = parse_git_cli_args(&expanded_args);
-        debug_log(&format!("[resolve_alias_impl] parse_git_cli_args2_start {}ms", parse_git_cli_args2_start.elapsed().as_millis()));
     }
 }
 
@@ -538,7 +517,7 @@ fn run_pre_command_hooks(
             "args": parsed_args.to_invocation_vec(),
         });
 
-        debug_log(&error_message);
+        tracing::debug!("{}", error_message);
         observability::log_error(&HookPanicError(error_message.clone()), Some(context));
     }
 }
@@ -643,7 +622,7 @@ fn run_post_command_hooks(
             "args": parsed_args.to_invocation_vec(),
         });
 
-        debug_log(&error_message);
+        tracing::debug!("{}", error_message);
         observability::log_error(&HookPanicError(error_message.clone()), Some(context));
     }
 }
@@ -829,10 +808,11 @@ fn send_wrapper_pre_state_to_daemon(
         &wt_str,
         head_state_to_repo_context(pre),
     ) {
-        debug_log(&format!(
+        tracing::debug!(
             "wrapper: failed to send pre-state for {}: {}",
-            invocation_id, e
-        ));
+            invocation_id,
+            e
+        );
     }
 }
 
@@ -851,10 +831,11 @@ fn send_wrapper_post_state_to_daemon(
         &wt_str,
         head_state_to_repo_context(post),
     ) {
-        debug_log(&format!(
+        tracing::debug!(
             "wrapper: failed to send post-state for {}: {}",
-            invocation_id, e
-        ));
+            invocation_id,
+            e
+        );
     }
 }
 
@@ -864,17 +845,21 @@ fn proxy_to_git(
     child_hooks_path_override: Option<&str>,
     wrapper_invocation_id: Option<&str>,
 ) -> std::process::ExitStatus {
-    // Suppress trace2 for read-only commands to avoid hitting the daemon with
-    // events that can never produce meaningful state changes. In async mode,
-    // read-only commands are handled before this point (no invocation_id set),
-    // so wrapper_invocation_id is only Some for mutating commands that need
-    // trace2 events for the daemon to match wrapper state entries.
+    // Suppress trace2 for read-only invocations to avoid hitting the daemon
+    // with events that can never produce meaningful state changes.  In async
+    // mode, read-only invocations are handled before this point (no
+    // invocation_id set), so wrapper_invocation_id is only Some for mutating
+    // commands that need trace2 events for the daemon to match wrapper state.
+    //
+    // Use is_definitely_read_only_invocation so that subcommand-gated
+    // read-only calls like `git stash list` and `git worktree list` are also
+    // suppressed (matches the updated wrapper check in handle_git above).
     let suppress_trace2 = wrapper_invocation_id.is_none() && {
         let parsed = parse_git_cli_args(args);
-        parsed
-            .command
-            .as_deref()
-            .is_some_and(crate::git::command_classification::is_definitely_read_only_command)
+        let subcommand = parsed.command_args.first().map(String::as_str);
+        parsed.command.as_deref().is_some_and(|cmd| {
+            crate::git::command_classification::is_definitely_read_only_invocation(cmd, subcommand)
+        })
     };
 
     // Use spawn for interactive commands
@@ -926,10 +911,6 @@ fn proxy_to_git(
         }
         #[cfg(not(unix))]
         {
-            use std::thread;
-
-            use crate::utils::is_debug_enabled;
-
             let mut cmd = Command::new(config::Config::get().git_cmd());
             if let Some(hooks_path) = child_hooks_path_override
                 && !has_explicit_hooks_path_override(args)
@@ -954,17 +935,10 @@ fn proxy_to_git(
                 }
             }
 
-            if is_debug_enabled() {
-                cmd.env("GIT_TRACE", "1");
-                cmd.env("GIT_TRACE2", "1");
-                eprintln!("[proxy_to_git] git executable = {:?},  git args = {:?}", config::Config::get().git_cmd(), args);
-            }
             cmd.spawn()
         }
     };
 
-    // 模拟虚拟机环境 git 命令执行时间长
-    std::thread::sleep(Duration::from_millis(1500));
     #[cfg(unix)]
     match child {
         Ok((mut child, setpgid)) => {
@@ -1012,38 +986,19 @@ fn proxy_to_git(
     }
 
     #[cfg(not(unix))]
-     match child {
-        Ok(child) => {
-            #[cfg(windows)]
-            {
-                let status = wait_for_git_with_retry_windows(
-                    child,
-                    args,
-                    child_hooks_path_override,
-                    wrapper_invocation_id,
-                    suppress_trace2,
-                );
-                if exit_on_completion {
-                    exit_with_status(status);
+    match child {
+        Ok(mut child) => {
+            let status = child.wait();
+            match status {
+                Ok(status) => {
+                    if exit_on_completion {
+                        exit_with_status(status);
+                    }
+                    status
                 }
-                status
-            }
-
-            #[cfg(not(windows))]
-            {
-                let mut child = child;
-                let status = child.wait();
-                match status {
-                    Ok(status) => {
-                        if exit_on_completion {
-                            exit_with_status(status);
-                        }
-                        status
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to wait for git process: {}", e);
-                        std::process::exit(1);
-                    }
+                Err(e) => {
+                    eprintln!("Failed to wait for git process: {}", e);
+                    std::process::exit(1);
                 }
             }
         }
@@ -1052,217 +1007,6 @@ fn proxy_to_git(
             std::process::exit(1);
         }
     }
-}
-
-#[cfg(windows)]
-fn wait_for_git_with_retry_windows(
-    mut child: std::process::Child,
-    args: &[String],
-    child_hooks_path_override: Option<&str>,
-    wrapper_invocation_id: Option<&str>,
-    suppress_trace2: bool,
-) -> std::process::ExitStatus {
-    let max_retries = git_proxy_retry_count();
-    let timeout = git_proxy_timeout();
-    let mut attempt = 0usize;
-
-    loop {
-        match wait_for_git_process_windows(&mut child, timeout) {
-            Ok(status) => return status,
-            Err(WaitForGitProcessError::Wait(err)) => {
-                eprintln!("Failed to wait for git process: {}", err);
-                std::process::exit(1);
-            }
-            Err(WaitForGitProcessError::TimedOut) => {
-                if attempt >= max_retries {
-                    eprintln!(
-                        "git command timed out after {}ms on Windows and exceeded {} retry attempt(s), git args: {:?}",
-                        timeout.as_millis(),
-                        max_retries,
-                        args
-                    );
-                    std::process::exit(1);
-                }
-
-                let next_attempt = attempt + 2;
-                debug_log(&format!(
-                    "git command timed out after {}ms on Windows; retrying attempt {}/{}, git args: {:?}",
-                    timeout.as_millis(),
-                    next_attempt,
-                    max_retries + 1,
-                    args
-                ));
-                std::thread::sleep(GIT_PROXY_RETRY_BACKOFF);
-                child = spawn_git_child_windows(
-                    args,
-                    child_hooks_path_override,
-                    wrapper_invocation_id,
-                    suppress_trace2,
-                    true,
-                );
-                attempt += 1;
-            }
-        }
-    }
-}
-
-#[cfg(windows)]
-enum WaitForGitProcessError {
-    TimedOut,
-    Wait(std::io::Error),
-}
-
-#[cfg(windows)]
-fn wait_for_git_process_windows(
-    child: &mut std::process::Child,
-    timeout: Duration,
-) -> Result<std::process::ExitStatus, WaitForGitProcessError> {
-    let deadline = Instant::now() + timeout;
-
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return Ok(status),
-            Ok(None) => {}
-            Err(err) => return Err(WaitForGitProcessError::Wait(err)),
-        }
-
-        if Instant::now() >= deadline {
-            let pid = child.id();
-            debug_log(&format!(
-                "git process {} timed out after {}ms on Windows; terminating process tree",
-                pid,
-                timeout.as_millis()
-            ));
-            if let Err(err) = kill_process_tree_windows(pid) {
-                eprintln!("Failed to terminate timed out git process {}: {}", pid, err);
-                std::process::exit(1);
-            }
-
-            match child.wait() {
-                Ok(status) => {
-                    debug_log(&format!(
-                        "git process {} terminated after timeout with status {}",
-                        pid, status
-                    ));
-                }
-                Err(err) => {
-                    eprintln!(
-                        "Failed to wait for timed out git process {} after termination: {}",
-                        pid, err
-                    );
-                    std::process::exit(1);
-                }
-            }
-
-            return Err(WaitForGitProcessError::TimedOut);
-        }
-
-        std::thread::sleep(GIT_PROXY_POLL_INTERVAL);
-    }
-}
-
-#[cfg(windows)]
-fn spawn_git_child_windows(
-    args: &[String],
-    child_hooks_path_override: Option<&str>,
-    wrapper_invocation_id: Option<&str>,
-    suppress_trace2: bool,
-    is_retry: bool,
-) -> std::process::Child {
-    let mut cmd = Command::new(config::Config::get().git_cmd());
-    if let Some(hooks_path) = child_hooks_path_override
-        && !has_explicit_hooks_path_override(args)
-    {
-        cmd.arg("-c").arg(format!("core.hooksPath={}", hooks_path));
-    }
-    cmd.args(args);
-    cmd.env(ENV_SKIP_MANAGED_HOOKS, "1");
-    cmd.env_remove("GIT_AI_ASYNC_MODE");
-    if suppress_trace2 {
-        cmd.env("GIT_TRACE2_EVENT", "0");
-    }
-    if let Some(id) = wrapper_invocation_id {
-        cmd.env("GIT_AI_WRAPPER_INVOCATION_ID", id);
-        cmd.env("GIT_TRACE2_ENV_VARS", "GIT_AI_WRAPPER_INVOCATION_ID");
-    }
-
-    if !is_interactive_terminal() {
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    if is_debug_enabled() {
-        cmd.env("GIT_TRACE", "1");
-        cmd.env("GIT_TRACE2", "1");
-        cmd.env("GIT_TERMINAL_PROMPT", "0");
-        cmd.env("GCM_INTERACTIVE", "Never");
-        eprintln!("[proxy_to_git] git executable = {:?},  git args = {:?}", config::Config::get().git_cmd(), args);
-    }
-
-    match cmd.spawn() {
-        Ok(child) => child,
-        Err(err) => {
-            if is_retry {
-                eprintln!("Failed to retry git command after timeout: {}", err);
-            } else {
-                eprintln!("Failed to execute git command: {}", err);
-            }
-            std::process::exit(1);
-        }
-    }
-}
-
-#[cfg(windows)]
-fn kill_process_tree_windows(pid: u32) -> Result<(), String> {
-    let output = Command::new("taskkill")
-        .args(["/F", "/T", "/PID", &pid.to_string()])
-        .output()
-        .map_err(|e| format!("failed to run taskkill: {}", e))?;
-
-    if output.status.success() {
-        return Ok(());
-    }
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stderr_trimmed = stderr.trim();
-    if stderr_trimmed.contains("not found")
-        || stderr_trimmed.contains("There is no running instance")
-    {
-        return Ok(());
-    }
-
-    Err(format!(
-        "taskkill /F /T /PID {} failed: {}",
-        pid, stderr_trimmed
-    ))
-}
-
-#[cfg(windows)]
-fn git_proxy_timeout() -> Duration {
-    parse_git_proxy_timeout_ms(std::env::var("GIT_AI_GIT_PROXY_TIMEOUT_MS").ok().as_deref())
-}
-
-#[cfg(windows)]
-fn git_proxy_retry_count() -> usize {
-    parse_git_proxy_retry_count(
-        std::env::var("GIT_AI_GIT_PROXY_RETRY_COUNT")
-            .ok()
-            .as_deref(),
-    )
-}
-
-#[cfg(windows)]
-fn parse_git_proxy_timeout_ms(value: Option<&str>) -> Duration {
-    value
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|value| *value > 0)
-        .map(Duration::from_millis)
-        .unwrap_or(DEFAULT_GIT_PROXY_TIMEOUT)
-}
-
-#[cfg(windows)]
-fn parse_git_proxy_retry_count(value: Option<&str>) -> usize {
-    value
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(DEFAULT_GIT_PROXY_RETRY_COUNT)
 }
 
 // Exit mirroring the child's termination: same signal if signaled, else exit code

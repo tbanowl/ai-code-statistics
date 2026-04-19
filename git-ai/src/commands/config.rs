@@ -530,12 +530,6 @@ fn set_config_value(key: &str, value: &str, add_mode: bool) -> Result<(), String
                 let masked = mask_api_key(value);
                 eprintln!("[api_key]: {}", masked);
             }
-            "notes_store" => {
-                validate_notes_store_value(value)?;
-                file_config.notes_store = Some(value.to_string());
-                crate::config::save_file_config(&file_config)?;
-                eprintln!("[notes_store]: {}", value);
-            }
             "prompt_storage" => {
                 validate_prompt_storage_value(value)?;
                 file_config.prompt_storage = Some(value.to_string());
@@ -1070,16 +1064,6 @@ fn mask_api_key(key: &str) -> String {
     } else {
         "****".to_string()
     }
-}
-
-fn validate_notes_store_value(value: &str) -> Result<(), String> {
-    if value != "rest" && value != "git" {
-        return Err(format!(
-            "Invalid notes_store value '{}'. Expected 'git' or 'rest'",
-            value
-        ));
-    }
-    Ok(())
 }
 
 /// Validate prompt_storage value

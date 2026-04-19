@@ -1,15 +1,16 @@
 use crate::authorship::attribution_tracker::LineAttribution;
-use crate::authorship::authorship_log::PromptRecord;
+use crate::authorship::authorship_log::{HumanRecord, PromptRecord};
 use crate::authorship::authorship_log_serialization::generate_short_hash;
 use crate::authorship::working_log::{CHECKPOINT_API_VERSION, Checkpoint, CheckpointKind};
 use crate::error::GitAiError;
 use crate::git::rewrite_log::{RewriteLogEvent, append_event_to_file};
-use crate::utils::{debug_log, normalize_to_posix};
+use crate::utils::normalize_to_posix;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 /// Initial attributions data structure stored in the INITIAL file
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -21,6 +22,9 @@ pub struct InitialAttributions {
     /// Optional blob snapshot of the file content represented by INITIAL.
     #[serde(default)]
     pub file_blobs: HashMap<String, String>,
+    /// Known human records: `h_<hash>` -> HumanRecord
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub humans: std::collections::BTreeMap<String, HumanRecord>,
 }
 
 #[derive(Debug, Clone)]
@@ -105,24 +109,76 @@ impl RepoStorage {
     pub fn delete_working_log_for_base_commit(&self, sha: &str) -> Result<(), GitAiError> {
         let working_log_dir = self.working_logs.join(sha);
         if working_log_dir.exists() {
-            if cfg!(debug_assertions) {
-                // In debug mode, move to old-{sha} instead of deleting
-                let old_dir = self.working_logs.join(format!("old-{}", sha));
-                // If old-{sha} already exists, remove it first
-                if old_dir.exists() {
-                    fs::remove_dir_all(&old_dir)?;
-                }
-                fs::rename(&working_log_dir, &old_dir)?;
-                debug_log(&format!(
-                    "Debug mode: moved checkpoint directory from {} to old-{}",
-                    sha, sha
-                ));
-            } else {
-                // In non-debug mode, delete as before
-                fs::remove_dir_all(&working_log_dir)?;
+            // Both debug and release: move to old-{sha} for retention
+            let old_dir = self.working_logs.join(format!("old-{}", sha));
+            // If old-{sha} already exists, remove it first
+            if old_dir.exists() {
+                fs::remove_dir_all(&old_dir)?;
+            }
+            fs::rename(&working_log_dir, &old_dir)?;
+
+            // Write a timestamp marker so we know when it was archived
+            let marker = old_dir.join(".archived_at");
+            let now = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or(Duration::ZERO)
+                .as_secs();
+            // Best-effort; don't fail the commit if we can't write the marker
+            let _ = fs::write(&marker, now.to_string());
+
+            tracing::debug!("Moved checkpoint directory from {} to old-{}", sha, sha);
+
+            // In production builds, prune old working logs that have expired.
+            // Debug builds never prune so developers can inspect old state.
+            if !cfg!(debug_assertions) {
+                self.prune_expired_old_working_logs();
             }
         }
         Ok(())
+    }
+
+    /// Number of seconds to retain archived working logs in production builds (7 days).
+    const OLD_WORKING_LOG_RETENTION_SECS: u64 = 7 * 24 * 60 * 60;
+
+    /// Remove archived (`old-*`) working log directories whose `.archived_at`
+    /// timestamp is older than [`OLD_WORKING_LOG_RETENTION_SECS`].
+    /// Errors are intentionally swallowed so pruning never breaks the commit flow.
+    fn prune_expired_old_working_logs(&self) {
+        let now_secs = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        let entries = match fs::read_dir(&self.working_logs) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if !name_str.starts_with("old-") {
+                continue;
+            }
+
+            let dir_path = entry.path();
+            if !dir_path.is_dir() {
+                continue;
+            }
+
+            let marker = dir_path.join(".archived_at");
+            let archived_at = match fs::read_to_string(&marker) {
+                Ok(contents) => contents.trim().parse::<u64>().unwrap_or(0),
+                // No marker means this was created before the retention feature;
+                // treat it as immediately expired so it gets cleaned up.
+                Err(_) => 0,
+            };
+
+            if now_secs.saturating_sub(archived_at) >= Self::OLD_WORKING_LOG_RETENTION_SECS {
+                tracing::debug!("Pruning expired old working log: {}", name_str);
+                let _ = fs::remove_dir_all(&dir_path);
+            }
+        }
     }
 
     /// Rename a working log directory from one commit SHA to another.
@@ -133,10 +189,7 @@ impl RepoStorage {
         let new_dir = self.working_logs.join(new_sha);
         if old_dir.exists() && !new_dir.exists() {
             fs::rename(&old_dir, &new_dir)?;
-            debug_log(&format!(
-                "Renamed working log from {} to {}",
-                old_sha, new_sha
-            ));
+            tracing::debug!("Renamed working log from {} to {}", old_sha, new_sha);
         }
         Ok(())
     }
@@ -370,6 +423,11 @@ impl PersistedWorkingLog {
             }
             // opencode can always refetch from its session storage
             "opencode" => false,
+            // pi needs session_path metadata for prompt refresh
+            "pi" => metadata
+                .as_ref()
+                .and_then(|m| m.get("session_path"))
+                .is_none(),
             // github-copilot needs chat_session_path
             "github-copilot" => metadata
                 .as_ref()
@@ -414,10 +472,10 @@ impl PersistedWorkingLog {
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
             if checkpoint.api_version != CHECKPOINT_API_VERSION {
-                debug_log(&format!(
+                tracing::debug!(
                     "unsupported checkpoint api version: {} (silently skipping checkpoint)",
                     checkpoint.api_version
-                ));
+                );
                 continue;
             }
 
@@ -557,7 +615,7 @@ impl PersistedWorkingLog {
                         touched_files.insert(entry.file);
                     }
                 }
-                CheckpointKind::Human => {
+                CheckpointKind::Human | CheckpointKind::KnownHuman => {
                     // Skip human checkpoints
                 }
             }
@@ -579,6 +637,7 @@ impl PersistedWorkingLog {
             files: attributions,
             prompts,
             file_blobs: HashMap::new(),
+            humans: std::collections::BTreeMap::new(),
         })
     }
 
@@ -587,6 +646,7 @@ impl PersistedWorkingLog {
         &self,
         attributions: HashMap<String, Vec<LineAttribution>>,
         prompts: HashMap<String, PromptRecord>,
+        humans: std::collections::BTreeMap<String, HumanRecord>,
         file_contents: HashMap<String, String>,
     ) -> Result<(), GitAiError> {
         let filtered: HashMap<String, Vec<LineAttribution>> = attributions
@@ -605,6 +665,7 @@ impl PersistedWorkingLog {
             files: filtered,
             prompts,
             file_blobs,
+            humans,
         })
     }
 
@@ -630,6 +691,7 @@ impl PersistedWorkingLog {
             files: filtered_files,
             prompts: initial.prompts,
             file_blobs,
+            humans: initial.humans,
         };
 
         let json = serde_json::to_string_pretty(&initial_data)?;
@@ -694,18 +756,12 @@ impl PersistedWorkingLog {
             Ok(content) => match serde_json::from_str(&content) {
                 Ok(initial_data) => initial_data,
                 Err(e) => {
-                    debug_log(&format!(
-                        "Failed to parse INITIAL file: {}. Returning empty.",
-                        e
-                    ));
+                    tracing::debug!("Failed to parse INITIAL file: {}. Returning empty.", e);
                     InitialAttributions::default()
                 }
             },
             Err(e) => {
-                debug_log(&format!(
-                    "Failed to read INITIAL file: {}. Returning empty.",
-                    e
-                ));
+                tracing::debug!("Failed to read INITIAL file: {}. Returning empty.", e);
                 InitialAttributions::default()
             }
         }
@@ -715,6 +771,8 @@ impl PersistedWorkingLog {
 #[cfg(test)]
 mod tests {
 
+    use crate::authorship::transcript::AiTranscript;
+    use crate::authorship::working_log::AgentId;
     use crate::git::test_utils::TmpRepo;
 
     use super::*;
@@ -1089,7 +1147,12 @@ mod tests {
         contents.insert("src/test.rs".to_string(), "fn main() {}\n".to_string());
 
         working_log
-            .write_initial_attributions_with_contents(attributions, HashMap::new(), contents)
+            .write_initial_attributions_with_contents(
+                attributions,
+                HashMap::new(),
+                std::collections::BTreeMap::new(),
+                contents,
+            )
             .expect("write INITIAL with contents");
 
         let initial = working_log.read_initial_attributions();
@@ -1134,6 +1197,219 @@ mod tests {
         assert!(
             !working_log.initial_file.exists(),
             "INITIAL should be removed when empty"
+        );
+    }
+
+    #[test]
+    fn test_pi_transcript_refetch_requires_session_path_metadata() {
+        let tmp_repo = TmpRepo::new().expect("Failed to create tmp repo");
+        let repo_storage =
+            RepoStorage::for_repo_path(tmp_repo.repo().path(), tmp_repo.repo().workdir().unwrap())
+                .unwrap();
+        let working_log = repo_storage
+            .working_log_for_base_commit("test-commit-sha")
+            .unwrap();
+
+        let mut checkpoint_with_session_path = Checkpoint::new(
+            CheckpointKind::AiAgent,
+            "diff".to_string(),
+            "author".to_string(),
+            vec![],
+        );
+        checkpoint_with_session_path.agent_id = Some(AgentId {
+            tool: "pi".to_string(),
+            id: "session-1".to_string(),
+            model: "anthropic/claude-sonnet-4-5".to_string(),
+        });
+        checkpoint_with_session_path.transcript = Some(AiTranscript::new());
+        checkpoint_with_session_path.agent_metadata = Some(HashMap::from([(
+            "session_path".to_string(),
+            "/tmp/pi-session.jsonl".to_string(),
+        )]));
+
+        working_log
+            .append_checkpoint(&checkpoint_with_session_path)
+            .expect("append checkpoint with session_path");
+
+        let checkpoints = working_log
+            .read_all_checkpoints()
+            .expect("read checkpoints with session_path");
+        assert!(
+            checkpoints[0].transcript.is_none(),
+            "Pi checkpoints with session_path should drop inline transcript"
+        );
+
+        let mut checkpoint_without_session_path = Checkpoint::new(
+            CheckpointKind::AiAgent,
+            "diff-2".to_string(),
+            "author".to_string(),
+            vec![],
+        );
+        checkpoint_without_session_path.agent_id = Some(AgentId {
+            tool: "pi".to_string(),
+            id: "session-2".to_string(),
+            model: "anthropic/claude-sonnet-4-5".to_string(),
+        });
+        checkpoint_without_session_path.transcript = Some(AiTranscript::new());
+        checkpoint_without_session_path.agent_metadata = Some(HashMap::new());
+
+        working_log
+            .append_checkpoint(&checkpoint_without_session_path)
+            .expect("append checkpoint without session_path");
+
+        let checkpoints = working_log
+            .read_all_checkpoints()
+            .expect("read checkpoints without session_path");
+        assert!(
+            checkpoints[1].transcript.is_some(),
+            "Pi checkpoints without session_path should keep inline transcript"
+        );
+    }
+
+    #[test]
+    fn test_delete_working_log_archives_to_old_sha() {
+        let tmp_repo = TmpRepo::new().expect("Failed to create tmp repo");
+        let repo_storage =
+            RepoStorage::for_repo_path(tmp_repo.repo().path(), tmp_repo.repo().workdir().unwrap())
+                .unwrap();
+
+        let sha = "abc123";
+        // Create a working log directory with a dummy file
+        let wl_dir = repo_storage.working_logs.join(sha);
+        fs::create_dir_all(&wl_dir).unwrap();
+        fs::write(wl_dir.join("checkpoints.jsonl"), "").unwrap();
+
+        assert!(wl_dir.exists());
+
+        // Delete (archive) it
+        repo_storage
+            .delete_working_log_for_base_commit(sha)
+            .unwrap();
+
+        // Original directory should be gone
+        assert!(!wl_dir.exists());
+
+        // old-{sha} directory should exist
+        let old_dir = repo_storage.working_logs.join(format!("old-{}", sha));
+        assert!(old_dir.exists());
+        assert!(old_dir.is_dir());
+
+        // .archived_at marker should exist and contain a valid unix timestamp
+        let marker = old_dir.join(".archived_at");
+        assert!(marker.exists());
+        let ts: u64 = fs::read_to_string(&marker).unwrap().trim().parse().unwrap();
+        assert!(ts > 0);
+    }
+
+    #[test]
+    fn test_delete_working_log_replaces_existing_old_dir() {
+        let tmp_repo = TmpRepo::new().expect("Failed to create tmp repo");
+        let repo_storage =
+            RepoStorage::for_repo_path(tmp_repo.repo().path(), tmp_repo.repo().workdir().unwrap())
+                .unwrap();
+
+        let sha = "def456";
+
+        // Pre-create an old-{sha} directory with stale content
+        let old_dir = repo_storage.working_logs.join(format!("old-{}", sha));
+        fs::create_dir_all(&old_dir).unwrap();
+        fs::write(old_dir.join("stale.txt"), "stale").unwrap();
+
+        // Create the actual working log
+        let wl_dir = repo_storage.working_logs.join(sha);
+        fs::create_dir_all(&wl_dir).unwrap();
+        fs::write(wl_dir.join("checkpoints.jsonl"), "fresh").unwrap();
+
+        repo_storage
+            .delete_working_log_for_base_commit(sha)
+            .unwrap();
+
+        // old dir should now contain the new content, not the stale file
+        assert!(!old_dir.join("stale.txt").exists());
+        assert!(old_dir.join("checkpoints.jsonl").exists());
+    }
+
+    #[test]
+    fn test_prune_expired_old_working_logs_removes_expired() {
+        let tmp_repo = TmpRepo::new().expect("Failed to create tmp repo");
+        let repo_storage =
+            RepoStorage::for_repo_path(tmp_repo.repo().path(), tmp_repo.repo().workdir().unwrap())
+                .unwrap();
+
+        // Create an old working log with an expired timestamp (8 days ago)
+        let expired_dir = repo_storage.working_logs.join("old-expired111");
+        fs::create_dir_all(&expired_dir).unwrap();
+        let eight_days_ago = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            - (8 * 24 * 60 * 60);
+        fs::write(expired_dir.join(".archived_at"), eight_days_ago.to_string()).unwrap();
+
+        // Create an old working log with a fresh timestamp (1 day ago)
+        let fresh_dir = repo_storage.working_logs.join("old-fresh222");
+        fs::create_dir_all(&fresh_dir).unwrap();
+        let one_day_ago = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            - (24 * 60 * 60);
+        fs::write(fresh_dir.join(".archived_at"), one_day_ago.to_string()).unwrap();
+
+        // Run pruning
+        repo_storage.prune_expired_old_working_logs();
+
+        // Expired dir should be gone
+        assert!(
+            !expired_dir.exists(),
+            "Expired old working log should be pruned"
+        );
+
+        // Fresh dir should still exist
+        assert!(
+            fresh_dir.exists(),
+            "Fresh old working log should be retained"
+        );
+    }
+
+    #[test]
+    fn test_prune_expired_old_working_logs_removes_missing_marker() {
+        let tmp_repo = TmpRepo::new().expect("Failed to create tmp repo");
+        let repo_storage =
+            RepoStorage::for_repo_path(tmp_repo.repo().path(), tmp_repo.repo().workdir().unwrap())
+                .unwrap();
+
+        // Create an old working log with NO .archived_at marker
+        let no_marker_dir = repo_storage.working_logs.join("old-nomarker");
+        fs::create_dir_all(&no_marker_dir).unwrap();
+
+        repo_storage.prune_expired_old_working_logs();
+
+        // Should be pruned (missing marker treated as timestamp 0 -> expired)
+        assert!(
+            !no_marker_dir.exists(),
+            "Old working log without marker should be pruned"
+        );
+    }
+
+    #[test]
+    fn test_prune_does_not_touch_active_working_logs() {
+        let tmp_repo = TmpRepo::new().expect("Failed to create tmp repo");
+        let repo_storage =
+            RepoStorage::for_repo_path(tmp_repo.repo().path(), tmp_repo.repo().workdir().unwrap())
+                .unwrap();
+
+        // Create a regular (non-old-*) working log directory
+        let active_dir = repo_storage.working_logs.join("abc123active");
+        fs::create_dir_all(&active_dir).unwrap();
+        fs::write(active_dir.join("checkpoints.jsonl"), "data").unwrap();
+
+        repo_storage.prune_expired_old_working_logs();
+
+        // Active working log should be untouched
+        assert!(
+            active_dir.exists(),
+            "Active working logs should not be pruned"
         );
     }
 }

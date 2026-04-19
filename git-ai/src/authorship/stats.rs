@@ -4,7 +4,6 @@ use crate::authorship::transcript::Message;
 use crate::error::GitAiError;
 use crate::git::refs::get_authorship;
 use crate::git::repository::Repository;
-use crate::utils::debug_log;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
@@ -28,6 +27,8 @@ pub struct ToolModelHeadlineStats {
 pub struct CommitStats {
     #[serde(default)]
     pub human_additions: u32, // Number of lines committed with human attribution (full and/or mixed)
+    #[serde(default)]
+    pub unknown_additions: u32, // Number of lines with no attestation at all
     #[serde(default)]
     pub mixed_additions: u32, // Number of AI-generated lines that were edited by humans before being committed
     #[serde(default)]
@@ -75,10 +76,11 @@ pub fn stats_command(
         (target, name)
     };
 
-    debug_log(&format!(
+    tracing::debug!(
         "Stats command found commit: {} refname: {}",
-        target, refname
-    ));
+        target,
+        refname
+    );
 
     let stats = stats_for_commit_stats(repo, &target, ignore_patterns)?;
 
@@ -92,7 +94,7 @@ pub fn stats_command(
     Ok(())
 }
 
-pub fn write_stats_to_terminal(stats: &CommitStats, print: bool) -> String {
+pub fn write_stats_to_terminal(stats: &CommitStats, is_interactive: bool) -> String {
     let mut output = String::new();
 
     // Set maximum bar width to 40 characters
@@ -110,7 +112,7 @@ pub fn write_stats_to_terminal(stats: &CommitStats, print: bool) -> String {
 
         output.push_str(&progress_bar);
         output.push('\n');
-        if print {
+        if is_interactive {
             println!("{}", progress_bar);
         }
 
@@ -118,84 +120,67 @@ pub fn write_stats_to_terminal(stats: &CommitStats, print: bool) -> String {
         let no_additions_msg = format!("     \x1b[90m{:^40}\x1b[0m", "(no additions)");
         output.push_str(&no_additions_msg);
         output.push('\n');
-        if print {
+        if is_interactive {
             println!("{}", no_additions_msg);
         }
         // No percentage line or AI stats for deletion-only commits
         return output;
     }
 
-    // Calculate total additions for the progress bar
-    // Total = pure human + mixed (AI-edited-by-human) + pure AI
-    // let total_additions = stats.human_additions + stats.ai_additions;
-    let total_additions = stats.human_additions + stats.ai_accepted;
+    // Calculate total additions: known human + unknown (untracked) + AI
+    let total_additions = stats.human_additions + stats.unknown_additions + stats.ai_additions;
 
     // Calculate AI acceptance percentage (capped at 100%)
-    // It can go higher because AI can write on top of AI code. This feels reasonable for now
     let _ai_acceptance_percentage = if stats.ai_additions > 0 {
         ((stats.ai_accepted as f64 / stats.ai_additions as f64) * 100.0).min(100.0)
     } else {
         0.0
     };
 
-    // Create progress bar with three categories
-    // Pure human = human_additions - mixed_additions (overridden lines)
-    let pure_human = stats.human_additions.saturating_sub(stats.mixed_additions);
-
-    let pure_human_bars = if total_additions > 0 {
-        ((pure_human as f64 / total_additions as f64) * bar_width as f64) as usize
+    // Determine whether to show the untracked segment (raw float check, before rounding)
+    let untracked_pct_raw = if total_additions > 0 {
+        stats.unknown_additions as f64 / total_additions as f64 * 100.0
     } else {
-        0
+        0.0
     };
+    let show_untracked = untracked_pct_raw > 1.0;
 
-    #[allow(unused_variables)]
-    let mixed_bars = if total_additions > 0 {
-        ((stats.mixed_additions as f64 / total_additions as f64) * bar_width as f64) as usize
-    } else {
-        0
-    };
-
-    #[allow(unused_variables)]
-    let ai_bars = if total_additions > 0 {
-        ((stats.ai_additions as f64 / total_additions as f64) * bar_width as f64) as usize
+    // Calculate human bar segment
+    let human_bars = if total_additions > 0 {
+        ((stats.human_additions as f64 / total_additions as f64) * bar_width as f64) as usize
     } else {
         0
     };
 
     // Ensure human contributions get at least 2 visible blocks if they have more than 1 line
     let min_human_bars = if stats.human_additions > 1 { 2 } else { 0 };
-    let final_pure_human_bars = if stats.human_additions > 1 {
-        pure_human_bars.max(min_human_bars)
+    let final_human_bars = human_bars.max(min_human_bars);
+
+    // Distribute remaining width between untracked and AI proportionally.
+    // When untracked is below the 1% threshold, all remaining width goes to AI.
+    let remaining_width = bar_width.saturating_sub(final_human_bars);
+    let (final_untracked_bars, final_ai_bars) = if show_untracked {
+        let total_other = stats.unknown_additions + stats.ai_additions;
+        let untracked_bars = if total_other > 0 {
+            ((stats.unknown_additions as f64 / total_other as f64) * remaining_width as f64)
+                as usize
+        } else {
+            0
+        };
+        (
+            untracked_bars,
+            remaining_width.saturating_sub(untracked_bars),
+        )
     } else {
-        pure_human_bars
+        (0, remaining_width)
     };
 
-    // Adjust other bars if we had to give more space to human
-    let remaining_width = bar_width.saturating_sub(final_pure_human_bars);
-    let total_other_additions = stats.mixed_additions + stats.ai_additions;
-
-    let final_mixed_bars = if total_other_additions > 0 {
-        ((stats.mixed_additions as f64 / total_other_additions as f64) * remaining_width as f64)
-            as usize
-    } else {
-        0
-    };
-
-    let final_ai_bars = remaining_width.saturating_sub(final_mixed_bars);
-
-    // Build the progress bar with three categories
+    // Build the progress bar
     let mut progress_bar = String::new();
     progress_bar.push_str("you  ");
-
-    // Pure human bars (darkest)
-    progress_bar.push_str(&"█".repeat(final_pure_human_bars));
-
-    // Mixed bars (medium) - AI-generated but human-edited
-    progress_bar.push_str(&"▒".repeat(final_mixed_bars));
-
-    // AI bars (lightest) - pure AI, untouched
-    progress_bar.push_str(&"░".repeat(final_ai_bars));
-
+    progress_bar.push_str(&"█".repeat(final_human_bars)); // known human (attested)
+    progress_bar.push_str(&"·".repeat(final_untracked_bars)); // untracked (no attestation)
+    progress_bar.push_str(&"░".repeat(final_ai_bars)); // AI
     progress_bar.push_str(" ai");
 
     // Format time waiting for AI
@@ -213,13 +198,8 @@ pub fn write_stats_to_terminal(stats: &CommitStats, print: bool) -> String {
     };
 
     // Calculate percentages for display
-    let pure_human_percentage = if total_additions > 0 {
-        ((pure_human as f64 / total_additions as f64) * 100.0).round() as u32
-    } else {
-        0
-    };
-    let mixed_percentage = if total_additions > 0 {
-        ((stats.mixed_additions as f64 / total_additions as f64) * 100.0).round() as u32
+    let human_percentage = if total_additions > 0 {
+        ((stats.human_additions as f64 / total_additions as f64) * 100.0).round() as u32
     } else {
         0
     };
@@ -232,39 +212,48 @@ pub fn write_stats_to_terminal(stats: &CommitStats, print: bool) -> String {
     // Print the stats
     output.push_str(&progress_bar);
     output.push('\n');
-    if print {
+    if is_interactive {
         println!("{}", progress_bar);
     }
-    // Print percentage line with proper spacing (40 columns total)
-    // "you  " (5) + 40 chars + " ai" (3) = 48 total
-    // Human% left-aligned at left edge of bar, AI% right-aligned at right edge of bar
-    if mixed_percentage > 0 {
-        // Show all three: human, mixed, ai
-        // Human% at left edge, mixed% in middle, AI% at right edge
+
+    // Percentage line: three anchors (human / untracked / AI) when untracked is visible,
+    // two anchors (human / AI) otherwise.
+    if show_untracked {
+        let untracked_percentage = untracked_pct_raw.round() as u32;
+        // When interactive, wrap "untracked" in an OSC 8 hyperlink so it is clickable in
+        // supporting terminals (iTerm2, Warp, etc.). Spaces are constructed manually —
+        // not via format-width padding on the label — so that invisible escape bytes do
+        // not misalign the output.
+        let untracked_label = if is_interactive {
+            "\x1b]8;;https://usegitai.com/docs/cli/untracked\x1b\\\x1b[4muntracked\x1b[24m\x1b]8;;\x1b\\"
+                .to_string()
+        } else {
+            "untracked".to_string()
+        };
         let percentage_line = format!(
-            "     {:<3}{:>12}mixed {:>3}%{:>12}{:>3}%",
-            format!("{}%", pure_human_percentage),
+            "     {:<3}{:>10}{} {:>3}%{:>10}{:>3}%",
+            format!("{}%", human_percentage),
             "",
-            mixed_percentage,
+            untracked_label,
+            untracked_percentage,
             "",
             ai_percentage
         );
         output.push_str(&percentage_line);
         output.push('\n');
-        if print {
+        if is_interactive {
             println!("{}", percentage_line);
         }
     } else {
-        // No mixed, just show human and ai at bar edges
         let percentage_line = format!(
             "     {:<3}{:>33}{:>3}%",
-            format!("{}%", pure_human_percentage),
+            format!("{}%", human_percentage),
             "",
             ai_percentage
         );
         output.push_str(&percentage_line);
         output.push('\n');
-        if print {
+        if is_interactive {
             println!("{}", percentage_line);
         }
     }
@@ -289,7 +278,7 @@ pub fn write_stats_to_terminal(stats: &CommitStats, print: bool) -> String {
         );
         output.push_str(&ai_acceptance_str);
         output.push('\n');
-        if print {
+        if is_interactive {
             println!("{}", ai_acceptance_str);
         }
     }
@@ -311,11 +300,11 @@ pub fn write_stats_to_markdown(stats: &CommitStats) -> String {
     }
 
     // Calculate total additions for the progress bar
-    // Total = pure human + mixed (AI-edited-by-human) + pure AI (accepted)
+    // Total = (known human + unknown) + mixed (AI-edited-by-human) + pure AI (accepted)
     let total_additions = stats.git_diff_added_lines;
 
-    // Pure human additions (not including mixed)
-    let pure_human = stats.human_additions;
+    // Pure human additions: known-human attested + unattested (treated as human until full KnownHuman pipeline)
+    let pure_human = stats.human_additions + stats.unknown_additions;
     // Mixed = AI lines that were edited by human
     let mixed = stats.mixed_additions;
     // Pure AI = AI lines accepted without changes
@@ -453,10 +442,12 @@ pub fn stats_from_authorship_log(
     git_diff_added_lines: u32,
     git_diff_deleted_lines: u32,
     ai_accepted: u32,
+    known_human_accepted: u32,
     ai_accepted_by_tool: &BTreeMap<String, u32>,
 ) -> CommitStats {
     let mut commit_stats = CommitStats {
         human_additions: 0,
+        unknown_additions: 0,
         mixed_additions: 0,
         ai_additions: 0,
         ai_accepted,
@@ -497,7 +488,9 @@ pub fn stats_from_authorship_log(
 
     // TODO: Mixed additions come from prompt overrides and can exceed the final diff when we
     // compute ai_accepted from diff/blame. Cap to remaining added lines until we improve mixed tracking.
-    let max_mixed = git_diff_added_lines.saturating_sub(commit_stats.ai_accepted);
+    let max_mixed = git_diff_added_lines
+        .saturating_sub(commit_stats.ai_accepted)
+        .saturating_sub(known_human_accepted);
     if commit_stats.mixed_additions > max_mixed {
         commit_stats.mixed_additions = max_mixed;
     }
@@ -519,12 +512,13 @@ pub fn stats_from_authorship_log(
         tool_stats.ai_additions = tool_stats.ai_accepted + tool_stats.mixed_additions;
     }
 
-    // Human additions are the difference between total git diff and AI accepted lines (ensure non-negative)
-    // This includes mixed lines (AI-generated but human-edited) as human additions
-    commit_stats.human_additions = std::cmp::max(
-        0,
-        git_diff_added_lines.saturating_sub(commit_stats.ai_accepted),
-    );
+    // KnownHuman-attested additions (positively identified as human-authored)
+    commit_stats.human_additions = known_human_accepted;
+
+    // Unknown additions: lines with no attestation at all (not AI-accepted, not KnownHuman)
+    commit_stats.unknown_additions = git_diff_added_lines
+        .saturating_sub(commit_stats.ai_accepted)
+        .saturating_sub(known_human_accepted);
 
     commit_stats
 }
@@ -568,7 +562,7 @@ pub fn stats_for_commit_stats(
     }
 
     // Step 4: derive accepted lines directly from note attestations for lines added in this commit.
-    let (ai_accepted, ai_accepted_by_tool) = accepted_lines_from_attestations(
+    let (ai_accepted, known_human_accepted, ai_accepted_by_tool) = accepted_lines_from_attestations(
         authorship_log.as_ref(),
         &added_lines_by_file,
         is_merge_commit,
@@ -580,6 +574,7 @@ pub fn stats_for_commit_stats(
         git_diff_added_lines,
         git_diff_deleted_lines,
         ai_accepted,
+        known_human_accepted,
         &ai_accepted_by_tool,
     ))
 }
@@ -588,16 +583,18 @@ fn accepted_lines_from_attestations(
     authorship_log: Option<&crate::authorship::authorship_log_serialization::AuthorshipLog>,
     added_lines_by_file: &HashMap<String, Vec<u32>>,
     is_merge_commit: bool,
-) -> (u32, BTreeMap<String, u32>) {
+) -> (u32, u32, BTreeMap<String, u32>) {
+    // returns (ai_accepted, known_human_accepted, per_tool_model)
     if is_merge_commit {
-        return (0, BTreeMap::new());
+        return (0, 0, BTreeMap::new());
     }
 
     let mut total_ai_accepted = 0u32;
+    let mut known_human_accepted = 0u32;
     let mut per_tool_model = BTreeMap::new();
 
     let Some(log) = authorship_log else {
-        return (0, per_tool_model);
+        return (0, 0, per_tool_model);
     };
 
     for file_attestation in &log.attestations {
@@ -606,6 +603,19 @@ fn accepted_lines_from_attestations(
         };
 
         for entry in &file_attestation.entries {
+            // KnownHuman entries (h_ prefix): count as known-human-attested lines.
+            if entry.hash.starts_with("h_") {
+                let accepted = entry
+                    .line_ranges
+                    .iter()
+                    .map(|line_range| line_range_overlap_len(line_range, added_lines))
+                    .sum::<u32>();
+                if accepted > 0 {
+                    known_human_accepted += accepted;
+                }
+                continue;
+            }
+
             let accepted = entry
                 .line_ranges
                 .iter()
@@ -628,7 +638,7 @@ fn accepted_lines_from_attestations(
         }
     }
 
-    (total_ai_accepted, per_tool_model)
+    (total_ai_accepted, known_human_accepted, per_tool_model)
 }
 
 fn line_range_overlap_len(range: &LineRange, added_lines: &[u32]) -> u32 {
@@ -753,6 +763,7 @@ mod tests {
         // Test with mixed human/AI stats
         let stats = CommitStats {
             human_additions: 50,
+            unknown_additions: 0,
             mixed_additions: 40,
             ai_additions: 100,
             ai_accepted: 25,
@@ -764,12 +775,13 @@ mod tests {
             tool_model_breakdown: BTreeMap::new(),
         };
 
-        let mixed_output = write_stats_to_terminal(&stats, true);
+        let mixed_output = write_stats_to_terminal(&stats, false);
         assert_debug_snapshot!(mixed_output);
 
         // Test with AI-only stats
         let ai_stats = CommitStats {
             human_additions: 0,
+            unknown_additions: 0,
             mixed_additions: 0,
             ai_additions: 100,
             ai_accepted: 95,
@@ -781,12 +793,13 @@ mod tests {
             tool_model_breakdown: BTreeMap::new(),
         };
 
-        let ai_only_output = write_stats_to_terminal(&ai_stats, true);
+        let ai_only_output = write_stats_to_terminal(&ai_stats, false);
         assert_debug_snapshot!(ai_only_output);
 
         // Test with human-only stats
         let human_stats = CommitStats {
             human_additions: 75,
+            unknown_additions: 0,
             mixed_additions: 0,
             ai_additions: 0,
             ai_accepted: 0,
@@ -798,12 +811,13 @@ mod tests {
             tool_model_breakdown: BTreeMap::new(),
         };
 
-        let human_only_output = write_stats_to_terminal(&human_stats, true);
+        let human_only_output = write_stats_to_terminal(&human_stats, false);
         assert_debug_snapshot!(human_only_output);
 
         // Test with minimal human contribution (should get at least 2 blocks)
         let minimal_human_stats = CommitStats {
             human_additions: 2,
+            unknown_additions: 0,
             mixed_additions: 0,
             ai_additions: 100,
             ai_accepted: 95,
@@ -815,12 +829,13 @@ mod tests {
             tool_model_breakdown: BTreeMap::new(),
         };
 
-        let minimal_human_output = write_stats_to_terminal(&minimal_human_stats, true);
+        let minimal_human_output = write_stats_to_terminal(&minimal_human_stats, false);
         assert_debug_snapshot!(minimal_human_output);
 
         // Test with deletion-only commit (no additions)
         let deletion_only_stats = CommitStats {
             human_additions: 0,
+            unknown_additions: 0,
             mixed_additions: 0,
             ai_additions: 0,
             ai_accepted: 0,
@@ -832,8 +847,91 @@ mod tests {
             tool_model_breakdown: BTreeMap::new(),
         };
 
-        let deletion_only_output = write_stats_to_terminal(&deletion_only_stats, true);
+        let deletion_only_output = write_stats_to_terminal(&deletion_only_stats, false);
         assert_debug_snapshot!(deletion_only_output);
+
+        // --- New test cases for untracked segment ---
+
+        // 18% human / 22% untracked / 60% AI — matches the design example
+        let untracked_stats = CommitStats {
+            human_additions: 180,
+            unknown_additions: 220,
+            mixed_additions: 0,
+            ai_additions: 600,
+            ai_accepted: 462,
+            time_waiting_for_ai: 60,
+            git_diff_deleted_lines: 0,
+            git_diff_added_lines: 1000,
+            total_ai_additions: 600,
+            total_ai_deletions: 0,
+            tool_model_breakdown: BTreeMap::new(),
+        };
+        let with_untracked_output = write_stats_to_terminal(&untracked_stats, false);
+        assert_debug_snapshot!(with_untracked_output);
+
+        // untracked exactly at the 1% threshold — should NOT show untracked segment
+        let threshold_stats = CommitStats {
+            human_additions: 49,
+            unknown_additions: 1,
+            mixed_additions: 0,
+            ai_additions: 50,
+            ai_accepted: 50,
+            time_waiting_for_ai: 0,
+            git_diff_deleted_lines: 0,
+            git_diff_added_lines: 100,
+            total_ai_additions: 50,
+            total_ai_deletions: 0,
+            tool_model_breakdown: BTreeMap::new(),
+        };
+        let untracked_at_threshold_output = write_stats_to_terminal(&threshold_stats, false);
+        assert_debug_snapshot!(untracked_at_threshold_output);
+
+        // untracked just above 1% threshold (~2%) — should show untracked segment
+        let above_threshold_stats = CommitStats {
+            human_additions: 97,
+            unknown_additions: 2,
+            mixed_additions: 0,
+            ai_additions: 0,
+            ai_accepted: 0,
+            time_waiting_for_ai: 0,
+            git_diff_deleted_lines: 0,
+            git_diff_added_lines: 99,
+            total_ai_additions: 0,
+            total_ai_deletions: 0,
+            tool_model_breakdown: BTreeMap::new(),
+        };
+        let untracked_just_above_output = write_stats_to_terminal(&above_threshold_stats, false);
+        assert_debug_snapshot!(untracked_just_above_output);
+
+        // 100% untracked — entire bar is · chars
+        let all_untracked_stats = CommitStats {
+            human_additions: 0,
+            unknown_additions: 100,
+            mixed_additions: 0,
+            ai_additions: 0,
+            ai_accepted: 0,
+            time_waiting_for_ai: 0,
+            git_diff_deleted_lines: 0,
+            git_diff_added_lines: 100,
+            total_ai_additions: 0,
+            total_ai_deletions: 0,
+            tool_model_breakdown: BTreeMap::new(),
+        };
+        let all_untracked_output = write_stats_to_terminal(&all_untracked_stats, false);
+        assert_debug_snapshot!(all_untracked_output);
+
+        // OSC 8 hyperlink emitted when is_interactive = true
+        // Not a snapshot test — asserts presence of the escape sequence directly.
+        let hyperlink_output = write_stats_to_terminal(&untracked_stats, true);
+        assert!(
+            hyperlink_output.contains("\x1b]8;;https://usegitai.com/docs/cli/untracked\x1b\\"),
+            "Expected OSC 8 hyperlink in interactive output, got: {:?}",
+            hyperlink_output
+        );
+        assert!(
+            hyperlink_output.contains("untracked"),
+            "Expected 'untracked' label in interactive output"
+        );
     }
 
     #[test]
@@ -841,6 +939,7 @@ mod tests {
         // Test with mixed human/AI stats
         let stats = CommitStats {
             human_additions: 50,
+            unknown_additions: 0,
             mixed_additions: 40,
             ai_additions: 100,
             ai_accepted: 25,
@@ -858,6 +957,7 @@ mod tests {
         // Test with AI-only stats
         let ai_stats = CommitStats {
             human_additions: 0,
+            unknown_additions: 0,
             mixed_additions: 0,
             ai_additions: 100,
             ai_accepted: 95,
@@ -875,6 +975,7 @@ mod tests {
         // Test with human-only stats
         let human_stats = CommitStats {
             human_additions: 75,
+            unknown_additions: 0,
             mixed_additions: 0,
             ai_additions: 0,
             ai_accepted: 0,
@@ -892,6 +993,7 @@ mod tests {
         // Test with minimal human contribution (should get at least 2 blocks)
         let minimal_human_stats = CommitStats {
             human_additions: 2,
+            unknown_additions: 0,
             mixed_additions: 0,
             ai_additions: 100,
             ai_accepted: 95,
@@ -909,6 +1011,7 @@ mod tests {
         // Test with deletion-only commit (no additions)
         let deletion_only_stats = CommitStats {
             human_additions: 0,
+            unknown_additions: 0,
             mixed_additions: 0,
             ai_additions: 0,
             ai_accepted: 0,
@@ -1004,6 +1107,8 @@ mod tests {
         let stats = stats_for_commit_stats(tmp_repo.gitai_repo(), &head_sha, &[]).unwrap();
 
         // Verify the stats
+        // trigger_checkpoint_with_author produces KnownHuman checkpoints (post Task 9),
+        // so human-written lines have h_-prefixed attestation entries → human_additions.
         assert_eq!(stats.human_additions, 2, "Human added 2 lines");
         assert_eq!(stats.ai_additions, 2, "AI added 2 lines");
         assert_eq!(stats.ai_accepted, 2, "AI lines were accepted");
@@ -1034,10 +1139,15 @@ mod tests {
         let head_sha = tmp_repo.get_head_commit_sha().unwrap();
         let stats = stats_for_commit_stats(tmp_repo.gitai_repo(), &head_sha, &[]).unwrap();
 
-        // For initial commit, everything should be additions
+        // KnownHuman checkpoints record h_<hash> attributions for all human-edited lines,
+        // so they appear as human_additions (not unknown) even on pure-human commits.
         assert_eq!(
             stats.human_additions, 3,
-            "Human authored 3 lines in initial commit"
+            "All 3 lines should be KnownHuman-attested human_additions"
+        );
+        assert_eq!(
+            stats.unknown_additions, 0,
+            "No unattested lines in a KnownHuman-checkpointed commit"
         );
         assert_eq!(stats.ai_additions, 0, "No AI additions in initial commit");
         assert_eq!(stats.ai_accepted, 0, "No AI lines to accept");
@@ -1137,7 +1247,9 @@ mod tests {
         let stats_filtered =
             stats_for_commit_stats(tmp_repo.gitai_repo(), &head_sha, &ignore_patterns).unwrap();
         assert_eq!(stats_filtered.git_diff_added_lines, 1);
+        // KnownHuman checkpoints record h_<hash> attributions, so the README line is human_additions.
         assert_eq!(stats_filtered.human_additions, 1);
+        assert_eq!(stats_filtered.unknown_additions, 0);
     }
 
     #[test]
@@ -1267,8 +1379,10 @@ mod tests {
     #[test]
     fn test_accepted_lines_no_authorship_log() {
         let added_lines: HashMap<String, Vec<u32>> = HashMap::new();
-        let (accepted, per_tool) = accepted_lines_from_attestations(None, &added_lines, false);
+        let (accepted, known_human, per_tool) =
+            accepted_lines_from_attestations(None, &added_lines, false);
         assert_eq!(accepted, 0);
+        assert_eq!(known_human, 0);
         assert!(per_tool.is_empty());
     }
 
@@ -1314,8 +1428,10 @@ mod tests {
         let mut added_lines: HashMap<String, Vec<u32>> = HashMap::new();
         added_lines.insert("foo.rs".to_string(), vec![1, 2, 3]);
 
-        let (accepted, per_tool) = accepted_lines_from_attestations(Some(&log), &added_lines, true);
+        let (accepted, known_human, per_tool) =
+            accepted_lines_from_attestations(Some(&log), &added_lines, true);
         assert_eq!(accepted, 0);
+        assert_eq!(known_human, 0);
         assert!(per_tool.is_empty());
     }
 
@@ -1361,9 +1477,10 @@ mod tests {
         let mut added_lines: HashMap<String, Vec<u32>> = HashMap::new();
         added_lines.insert("bar.rs".to_string(), vec![1, 2, 3]);
 
-        let (accepted, per_tool) =
+        let (accepted, known_human, per_tool) =
             accepted_lines_from_attestations(Some(&log), &added_lines, false);
         assert_eq!(accepted, 0);
+        assert_eq!(known_human, 0);
         assert!(per_tool.is_empty());
     }
 
@@ -1408,9 +1525,10 @@ mod tests {
         let mut added_lines: HashMap<String, Vec<u32>> = HashMap::new();
         added_lines.insert("foo.rs".to_string(), vec![1, 2, 3]);
 
-        let (accepted, per_tool) =
+        let (accepted, known_human, per_tool) =
             accepted_lines_from_attestations(Some(&log), &added_lines, false);
         assert_eq!(accepted, 3);
+        assert_eq!(known_human, 0);
 
         // Verify per-tool breakdown contains the right key
         let expected_key = "cursor::claude-3-sonnet".to_string();
@@ -1719,13 +1837,14 @@ mod tests {
 
     #[test]
     fn test_stats_from_authorship_log_no_log() {
-        let stats = stats_from_authorship_log(None, 10, 5, 3, &BTreeMap::new());
+        let stats = stats_from_authorship_log(None, 10, 5, 3, 0, &BTreeMap::new());
 
         assert_eq!(stats.git_diff_added_lines, 10);
         assert_eq!(stats.git_diff_deleted_lines, 5);
         assert_eq!(stats.ai_accepted, 3);
         assert_eq!(stats.ai_additions, 3); // ai_accepted when no mixed
-        assert_eq!(stats.human_additions, 7); // 10 - 3
+        assert_eq!(stats.human_additions, 0); // no known-human attestations passed
+        assert_eq!(stats.unknown_additions, 7); // 10 - 3 (unattested lines)
         assert_eq!(stats.mixed_additions, 0);
         assert_eq!(stats.total_ai_additions, 0);
         assert_eq!(stats.total_ai_deletions, 0);
@@ -1764,7 +1883,7 @@ mod tests {
         );
 
         // Only 10 lines added, 5 accepted by AI
-        let stats = stats_from_authorship_log(Some(&log), 10, 0, 5, &BTreeMap::new());
+        let stats = stats_from_authorship_log(Some(&log), 10, 0, 5, 0, &BTreeMap::new());
 
         // Mixed should be capped to max possible: 10 - 5 = 5
         assert_eq!(stats.mixed_additions, 5);

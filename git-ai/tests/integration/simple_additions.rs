@@ -240,23 +240,29 @@ fn test_multiple_ai_checkpoints_with_human_deletions() {
     let repo = TestRepo::new();
     let mut file = repo.filename("test.txt");
 
-    file.set_contents(crate::lines!["Base"]);
+    // Two initial lines: "Base" stays human (not adjacent to AI hunks);
+    // "Base2" (last line) gets pulled into the AI hunk and becomes AI.
+    file.set_contents(crate::lines!["Base", "Base2"]);
 
     repo.stage_all_and_commit("Initial commit").unwrap();
 
-    file.insert_at(1, crate::lines!["AI1 Line 1".ai(), "AI1 Line 2".ai()]);
-    file.insert_at(3, crate::lines!["AI2 Line 1".ai(), "AI2 Line 2".ai()]);
+    file.insert_at(2, crate::lines!["AI1 Line 1".ai(), "AI1 Line 2".ai()]);
+    file.insert_at(4, crate::lines!["AI2 Line 1".ai(), "AI2 Line 2".ai()]);
 
-    // Delete the first AI session's lines (indices 1 and 2)
-    file.delete_range(1, 3);
+    // Delete the first AI session's lines (indices 2 and 3)
+    file.delete_range(2, 4);
 
     let commit = repo.stage_all_and_commit("Complex commit").unwrap();
 
-    // Should only have AI2's lines attributed (now at indices 1 and 2 after deletion)
+    // Should only have AI2's lines attributed (now at indices 2 and 3 after deletion)
     assert_eq!(commit.authorship_log.attestations.len(), 1);
 
+    // "Base" stays human — it's not at the hunk boundary.
+    // "Base2" becomes AI — it was the last line in the original, so force_split
+    // places it in the same 1→N hunk as the AI insertions.
     file.assert_lines_and_blame(crate::lines![
         "Base".human(),
+        "Base2".ai(),
         "AI2 Line 1".ai(),
         "AI2 Line 2".ai(),
     ]);
@@ -406,7 +412,7 @@ fn test_human_stages_some_ai_lines() {
     file.assert_committed_lines(crate::lines![
         "line1".human(),
         "line2".human(),
-        "line3".human(),
+        "line3".ai(),
         "ai_line4".ai(),
         "ai_line5".ai(),
         "ai_line6".ai(),
@@ -1051,8 +1057,9 @@ fn test_ai_deletion_with_human_checkpoint_in_same_commit() {
     )
     .unwrap();
 
-    // Human checkpoint
-    repo.git_ai(&["checkpoint"]).unwrap();
+    // KnownHuman checkpoint for the human-added lines
+    repo.git_ai(&["checkpoint", "mock_known_human", "data.txt"])
+        .unwrap();
 
     // Step 2: AI deletes one of its own lines and adds 2 new lines
     fs::write(
@@ -1699,12 +1706,19 @@ fn test_ai_generated_file_then_human_full_rewrite() {
     let agent_author_id = "3bd30911a58cb074";
     // Determine the git dir and base commit for checkpoint storage.
     // In worktree mode .git is a gitlink file, so use rev-parse to resolve.
-    let git_dir = repo
+    // `--git-dir` may return a relative path; resolve it against the repo root
+    // so that fs::create_dir_all works regardless of the process CWD.
+    let git_dir_raw = repo
         .git(&["rev-parse", "--git-dir"])
         .unwrap()
         .trim()
         .to_string();
-    let git_dir = std::path::Path::new(&git_dir);
+    let git_dir_path = if std::path::Path::new(&git_dir_raw).is_absolute() {
+        std::path::PathBuf::from(&git_dir_raw)
+    } else {
+        repo.path().join(&git_dir_raw)
+    };
+    let git_dir = git_dir_path.as_path();
     let base_commit = repo
         .git(&["rev-parse", "HEAD"])
         .unwrap_or_else(|_| "initial".to_string())

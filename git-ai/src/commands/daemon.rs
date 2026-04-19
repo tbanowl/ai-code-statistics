@@ -5,9 +5,7 @@ use crate::daemon::{
 };
 use crate::utils::LockFile;
 #[cfg(windows)]
-use crate::utils::{
-    CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, debug_log,
-};
+use crate::utils::{CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW};
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -235,9 +233,9 @@ fn daemon_startup_is_blocked(config: &DaemonConfig) -> bool {
 }
 
 pub(crate) fn daemon_is_up(config: &DaemonConfig) -> bool {
-    local_socket_connects_with_timeout(&config.control_socket_path, Duration::from_millis(500))
+    local_socket_connects_with_timeout(&config.control_socket_path, Duration::from_millis(100))
         .is_ok()
-        && local_socket_connects_with_timeout(&config.trace_socket_path, Duration::from_millis(500))
+        && local_socket_connects_with_timeout(&config.trace_socket_path, Duration::from_millis(100))
             .is_ok()
 }
 
@@ -306,10 +304,10 @@ fn spawn_daemon_run_detached(config: &DaemonConfig) -> Result<(), String> {
         match child.spawn() {
             Ok(_) => Ok(()),
             Err(preferred_err) => {
-                debug_log(&format!(
+                tracing::debug!(
                     "detached daemon spawn with CREATE_BREAKAWAY_FROM_JOB failed, retrying without it: {}",
                     preferred_err
-                ));
+                );
                 child.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
                 child.spawn().map(|_| ()).map_err(|fallback_err| {
                     format!(
@@ -373,10 +371,10 @@ fn spawn_daemon_run_with_piped_stderr(
         match child.spawn() {
             Ok(c) => Ok(c),
             Err(preferred_err) => {
-                debug_log(&format!(
+                tracing::debug!(
                     "detached daemon spawn with CREATE_BREAKAWAY_FROM_JOB failed, retrying without it: {}",
                     preferred_err
-                ));
+                );
                 child.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
                 child.spawn().map_err(|fallback_err| {
                     format!(
@@ -396,6 +394,24 @@ fn spawn_daemon_run_with_piped_stderr(
 
 fn handle_status(repo_working_dir: String) -> Result<(), String> {
     let config = daemon_config_from_env_or_default_paths()?;
+
+    // Check if the path is inside a git repository before contacting the daemon.
+    // When run outside a git repo, still check daemon health but skip the
+    // family-level status query which requires a valid repo.
+    if crate::git::find_repository_in_path(&repo_working_dir).is_err() {
+        let daemon_running = daemon_is_up(&config);
+        let response = serde_json::json!({
+            "ok": true,
+            "git_repo": false,
+            "daemon_running": daemon_running,
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&response).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+
     let request = ControlRequest::StatusFamily { repo_working_dir };
     let response =
         send_control_request(&config.control_socket_path, &request).map_err(|e| e.to_string())?;

@@ -4,7 +4,6 @@
 //! for accurate line attribution tracking.
 
 use imara_diff::{Algorithm, Diff, InternedInput, TokenSource};
-use std::borrow::Cow;
 use std::hash::Hash;
 
 // ============================================================================
@@ -154,12 +153,6 @@ pub struct LineChange<'a> {
     value: &'a str,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct SplitLines<'a> {
-    lines: Vec<&'a str>,
-    normalized: String,
-}
-
 impl<'a> LineChange<'a> {
     /// Returns the tag indicating what kind of change this is.
     pub fn tag(&self) -> &LineChangeTag {
@@ -183,10 +176,16 @@ impl<'a> LineChange<'a> {
 /// # Returns
 /// A vector of `LineChange` representing each line's change status.
 pub fn compute_line_changes<'a>(old: &'a str, new: &'a str) -> Vec<LineChange<'a>> {
-    let old_lines = split_lines_with_terminators(old);
-    let new_lines = split_lines_with_terminators(new);
+    let old_lines: Vec<&str> = split_lines_with_terminators(old);
+    let new_lines: Vec<&str> = split_lines_with_terminators(new);
 
-    let input = InternedInput::new(old_lines.normalized.as_str(), new_lines.normalized.as_str());
+    // Normalize CRLF→LF for comparison so that line-ending differences alone
+    // don't cause every line to appear as changed (fixes inflated stats when
+    // files switch between CRLF and LF, e.g. on Windows or across editors).
+    let old_norm = normalize_line_endings(old);
+    let new_norm = normalize_line_endings(new);
+
+    let input = InternedInput::new(old_norm.as_ref(), new_norm.as_ref());
     let mut diff = Diff::compute(Algorithm::Myers, &input);
     diff.postprocess_lines(&input);
 
@@ -202,7 +201,7 @@ pub fn compute_line_changes<'a>(old: &'a str, new: &'a str) -> Vec<LineChange<'a
 
         // Add equal lines before this hunk
         while old_idx < hunk_old_start && new_idx < hunk_new_start {
-            if let Some(line) = new_lines.lines.get(new_idx) {
+            if let Some(line) = new_lines.get(new_idx) {
                 changes.push(LineChange {
                     tag: LineChangeTag::Equal,
                     value: line,
@@ -214,7 +213,7 @@ pub fn compute_line_changes<'a>(old: &'a str, new: &'a str) -> Vec<LineChange<'a
 
         // Add deleted lines
         for i in hunk_old_start..hunk_old_end {
-            if let Some(line) = old_lines.lines.get(i) {
+            if let Some(line) = old_lines.get(i) {
                 changes.push(LineChange {
                     tag: LineChangeTag::Delete,
                     value: line,
@@ -224,7 +223,7 @@ pub fn compute_line_changes<'a>(old: &'a str, new: &'a str) -> Vec<LineChange<'a
 
         // Add inserted lines
         for i in hunk_new_start..hunk_new_end {
-            if let Some(line) = new_lines.lines.get(i) {
+            if let Some(line) = new_lines.get(i) {
                 changes.push(LineChange {
                     tag: LineChangeTag::Insert,
                     value: line,
@@ -237,8 +236,8 @@ pub fn compute_line_changes<'a>(old: &'a str, new: &'a str) -> Vec<LineChange<'a
     }
 
     // Add remaining equal lines after last hunk
-    while new_idx < new_lines.lines.len() {
-        if let Some(line) = new_lines.lines.get(new_idx) {
+    while new_idx < new_lines.len() {
+        if let Some(line) = new_lines.get(new_idx) {
             changes.push(LineChange {
                 tag: LineChangeTag::Equal,
                 value: line,
@@ -250,41 +249,39 @@ pub fn compute_line_changes<'a>(old: &'a str, new: &'a str) -> Vec<LineChange<'a
     changes
 }
 
+/// Normalize line endings: strip `\r` from `\r\n` pairs so that CRLF and LF
+/// content compare identically at the line level. Returns a borrowed `Cow` when
+/// no `\r` is present (zero-copy fast path).
+///
+/// Only handles `\r\n` → `\n` (Windows CRLF). Bare `\r` is left unchanged
+/// because converting it to `\n` would increase the line count, breaking the
+/// index alignment between normalized diff hunks and original line arrays in
+/// `compute_line_changes`.
+pub(crate) fn normalize_line_endings(s: &str) -> std::borrow::Cow<'_, str> {
+    if !s.contains('\r') {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    std::borrow::Cow::Owned(s.replace("\r\n", "\n"))
+}
+
 /// Splits a string into lines, preserving line terminators.
-fn split_lines_with_terminators(s: &str) -> SplitLines<'_> {
+fn split_lines_with_terminators(s: &str) -> Vec<&str> {
     let mut lines = Vec::new();
-    let mut normalized = String::with_capacity(s.len());
     let mut start = 0;
 
     for (idx, ch) in s.char_indices() {
         if ch == '\n' {
-            let raw = &s[start..idx + 1];
-            lines.push(raw);
-            normalized.push_str(normalize_line_ending_for_diff(raw).as_ref());
+            lines.push(&s[start..idx + 1]);
             start = idx + 1;
         }
     }
 
     // Handle last line without trailing newline
     if start < s.len() {
-        let raw = &s[start..];
-        lines.push(raw);
-        normalized.push_str(normalize_line_ending_for_diff(raw).as_ref());
+        lines.push(&s[start..]);
     }
 
-    SplitLines { lines, normalized }
-}
-
-fn normalize_line_ending_for_diff(line: &str) -> Cow<'_, str> {
-    if let Some(without_crlf) = line.strip_suffix("\r\n") {
-        return Cow::Owned(format!("{}\n", without_crlf));
-    }
-
-    if let Some(without_cr) = line.strip_suffix('\r') {
-        return Cow::Owned(format!("{}\n", without_cr));
-    }
-
-    Cow::Borrowed(line)
+    lines
 }
 
 /// Converts imara-diff hunks to a vector of DiffOp.
@@ -502,75 +499,149 @@ mod tests {
     fn test_split_lines_with_terminators() {
         let s = "line1\nline2\nline3";
         let lines = split_lines_with_terminators(s);
-        assert_eq!(
-            lines,
-            SplitLines {
-                lines: vec!["line1\n", "line2\n", "line3"],
-                normalized: "line1\nline2\nline3".to_string(),
-            }
-        );
+        assert_eq!(lines, vec!["line1\n", "line2\n", "line3"]);
 
         let s_trailing = "line1\nline2\n";
         let lines_trailing = split_lines_with_terminators(s_trailing);
+        assert_eq!(lines_trailing, vec!["line1\n", "line2\n"]);
+    }
+
+    // ====================================================================
+    // CRLF / LF normalization tests
+    // ====================================================================
+
+    #[test]
+    fn test_compute_line_changes_crlf_to_lf_identical_content() {
+        // Old file has CRLF, new file has LF. Content is identical otherwise.
+        // Should produce NO changes (all Equal).
+        let old = "line1\r\nline2\r\nline3\r\n";
+        let new = "line1\nline2\nline3\n";
+
+        let changes = compute_line_changes(old, new);
+
+        let tags: Vec<_> = changes.iter().map(|c| c.tag().clone()).collect();
         assert_eq!(
-            lines_trailing,
-            SplitLines {
-                lines: vec!["line1\n", "line2\n"],
-                normalized: "line1\nline2\n".to_string(),
-            }
+            tags,
+            vec![
+                LineChangeTag::Equal,
+                LineChangeTag::Equal,
+                LineChangeTag::Equal,
+            ],
+            "CRLF→LF conversion with identical content should produce no changes"
         );
     }
 
     #[test]
-    fn test_split_lines_with_terminators_preserves_raw_and_normalizes_crlf() {
-        let s = "line1\r\nline2\r\nline3\r";
-        let lines = split_lines_with_terminators(s);
+    fn test_compute_line_changes_lf_to_crlf_identical_content() {
+        // Old file has LF, new file has CRLF. Content is identical otherwise.
+        // Should produce NO changes (all Equal).
+        let old = "line1\nline2\nline3\n";
+        let new = "line1\r\nline2\r\nline3\r\n";
 
+        let changes = compute_line_changes(old, new);
+
+        let tags: Vec<_> = changes.iter().map(|c| c.tag().clone()).collect();
         assert_eq!(
-            lines,
-            SplitLines {
-                lines: vec!["line1\r\n", "line2\r\n", "line3\r"],
-                normalized: "line1\nline2\nline3\n".to_string(),
-            }
+            tags,
+            vec![
+                LineChangeTag::Equal,
+                LineChangeTag::Equal,
+                LineChangeTag::Equal,
+            ],
+            "LF→CRLF conversion with identical content should produce no changes"
         );
     }
 
     #[test]
-    fn test_compute_line_changes_lf_to_crlf_with_appended_lines_treats_line_endings_as_equal() {
-        let previous_content = "1\n2\n3\n4\n5\n";
-        let current_content = "1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8\r\n9\r\n10\r\n";
+    fn test_compute_line_changes_crlf_old_with_real_addition() {
+        // Old file has CRLF (100-line-like scenario), new file has LF with real additions.
+        // Only the actual new lines should show as Insert.
+        let old = "line1\r\nline2\r\nline3\r\n";
+        let new = "line1\nline2\nnew_line\nline3\n";
 
-        let changes = compute_line_changes(previous_content, current_content);
+        let changes = compute_line_changes(old, new);
 
-        let additions = changes
-            .iter()
-            .filter(|change| matches!(change.tag(), LineChangeTag::Insert))
-            .count();
-        let deletions = changes
-            .iter()
-            .filter(|change| matches!(change.tag(), LineChangeTag::Delete))
-            .count();
-        let equals = changes
-            .iter()
-            .filter(|change| matches!(change.tag(), LineChangeTag::Equal))
-            .count();
-
+        let tags: Vec<_> = changes.iter().map(|c| c.tag().clone()).collect();
         assert_eq!(
-            additions, 5,
-            "expected only appended lines to be counted as inserts"
+            tags,
+            vec![
+                LineChangeTag::Equal,
+                LineChangeTag::Equal,
+                LineChangeTag::Insert,
+                LineChangeTag::Equal,
+            ],
+            "Only the genuinely new line should be an Insert, not CRLF→LF conversions"
         );
-        assert_eq!(
-            deletions, 0,
-            "expected line ending normalization to avoid delete churn"
-        );
-        assert_eq!(equals, 5, "expected shared logical lines to remain equal");
     }
 
     #[test]
-    fn test_normalize_line_ending_for_diff_normalizes_crlf_and_lone_cr() {
-        assert_eq!(normalize_line_ending_for_diff("line\r\n"), "line\n");
-        assert_eq!(normalize_line_ending_for_diff("line\r"), "line\n");
-        assert_eq!(normalize_line_ending_for_diff("line\n"), "line\n");
-        assert_eq!(normalize_line_ending_for_diff("line"), "line");
+    fn test_compute_line_changes_mixed_crlf_with_modification() {
+        // Old has CRLF, new has LF. One line is actually modified.
+        let old = "line1\r\nline2\r\nline3\r\n";
+        let new = "line1\nmodified\nline3\n";
+
+        let changes = compute_line_changes(old, new);
+
+        let tags: Vec<_> = changes.iter().map(|c| c.tag().clone()).collect();
+        assert_eq!(
+            tags,
+            vec![
+                LineChangeTag::Equal,
+                LineChangeTag::Delete,
+                LineChangeTag::Insert,
+                LineChangeTag::Equal,
+            ],
+            "Only the actually-modified line should show as Delete+Insert"
+        );
+    }
+
+    #[test]
+    fn test_compute_line_changes_crlf_large_file_few_additions() {
+        // Simulates the user-reported bug: 100-line CRLF file with 5 LF additions.
+        // Should show exactly 5 inserts, NOT 105 inserts + 100 deletes.
+        let mut old_lines = String::new();
+        for i in 1..=10 {
+            old_lines.push_str(&format!("line{}\r\n", i));
+        }
+
+        let mut new_lines = String::new();
+        for i in 1..=10 {
+            new_lines.push_str(&format!("line{}\n", i));
+        }
+        // Add 2 new lines at the end
+        new_lines.push_str("new_line_a\n");
+        new_lines.push_str("new_line_b\n");
+
+        let changes = compute_line_changes(&old_lines, &new_lines);
+
+        let insert_count = changes
+            .iter()
+            .filter(|c| *c.tag() == LineChangeTag::Insert)
+            .count();
+        let delete_count = changes
+            .iter()
+            .filter(|c| *c.tag() == LineChangeTag::Delete)
+            .count();
+
+        assert_eq!(insert_count, 2, "Should have exactly 2 inserts (new lines)");
+        assert_eq!(delete_count, 0, "Should have 0 deletes (no lines removed)");
+    }
+
+    #[test]
+    fn test_split_lines_with_terminators_crlf() {
+        // CRLF lines should be split the same way as LF lines
+        // (the \r should be treated as part of the line ending, not content)
+        let crlf = "line1\r\nline2\r\nline3\r\n";
+        let lf = "line1\nline2\nline3\n";
+
+        let crlf_lines = split_lines_with_terminators(crlf);
+        let lf_lines = split_lines_with_terminators(lf);
+
+        // After normalization, both should produce the same number of lines
+        assert_eq!(
+            crlf_lines.len(),
+            lf_lines.len(),
+            "CRLF and LF content should produce the same number of lines"
+        );
     }
 }

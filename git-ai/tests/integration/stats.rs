@@ -136,9 +136,17 @@ fn test_authorship_log_stats() {
     let raw = repo.git_ai(&["stats", "--json"]).unwrap();
     let json = extract_json_object(&raw);
     let stats: CommitStats = serde_json::from_str(&json).unwrap();
+    // The integration harness now uses mock_known_human (CheckpointKind::KnownHuman), which
+    // produces h_-prefixed attestation entries for lines written under a human checkpoint.
+    // Neptune (override) — human-overrides-AI line — gets h_<hash> attestation.
+    // Mercury, Venus, Jupiter also get h_<hash> attestation from the KnownHuman checkpoint.
+    // All 4 human-written lines now count as human_additions; unknown_additions = 0.
+    // Neptune (override) is now h_<hash> attested, so it counts as human_additions only,
+    // not mixed. mixed_additions = 0.
     assert_eq!(stats.human_additions, 4);
-    assert_eq!(stats.mixed_additions, 1);
-    assert_eq!(stats.ai_additions, 6); // Includes the one mixed line (Neptune (override))
+    assert_eq!(stats.unknown_additions, 0);
+    assert_eq!(stats.mixed_additions, 0);
+    assert_eq!(stats.ai_additions, 5); // Neptune (override) no longer counted as mixed AI
     assert_eq!(stats.ai_accepted, 5);
     assert_eq!(stats.total_ai_additions, 11);
     assert_eq!(stats.total_ai_deletions, 11);
@@ -338,8 +346,10 @@ fn test_stats_cli_empty_tree_range() {
     assert_eq!(stats.authorship_stats.total_commits, 2);
     assert_eq!(stats.range_stats.git_diff_added_lines, 2);
     assert_eq!(stats.range_stats.ai_additions, 1);
-    // human_additions is computed as git_diff_added_lines - ai_accepted
-    assert_eq!(stats.range_stats.human_additions, 1);
+    // Range stats use legacy Human checkpoints and pass known_human_accepted=0,
+    // so human lines appear as unknown_additions (not human_additions).
+    assert_eq!(stats.range_stats.human_additions, 0);
+    assert_eq!(stats.range_stats.unknown_additions, 1);
 }
 
 #[test]
@@ -349,6 +359,7 @@ fn test_markdown_stats_deletion_only() {
 
     let stats = CommitStats {
         human_additions: 0,
+        unknown_additions: 0,
         mixed_additions: 0,
         ai_additions: 0,
         ai_accepted: 0,
@@ -372,6 +383,7 @@ fn test_markdown_stats_all_human() {
 
     let stats = CommitStats {
         human_additions: 10,
+        unknown_additions: 0,
         mixed_additions: 0,
         ai_additions: 0,
         ai_accepted: 0,
@@ -395,6 +407,7 @@ fn test_markdown_stats_all_ai() {
 
     let stats = CommitStats {
         human_additions: 0,
+        unknown_additions: 0,
         mixed_additions: 0,
         ai_additions: 15,
         ai_accepted: 15,
@@ -418,6 +431,7 @@ fn test_markdown_stats_mixed() {
 
     let stats = CommitStats {
         human_additions: 10,
+        unknown_additions: 0,
         mixed_additions: 5,
         ai_additions: 20,
         ai_accepted: 15,
@@ -441,6 +455,7 @@ fn test_markdown_stats_no_mixed() {
 
     let stats = CommitStats {
         human_additions: 8,
+        unknown_additions: 0,
         mixed_additions: 0,
         ai_additions: 12,
         ai_accepted: 12,
@@ -465,6 +480,7 @@ fn test_markdown_stats_minimal_human() {
     // Test that humans get at least 2 visible blocks if they have more than 1 line
     let stats = CommitStats {
         human_additions: 2,
+        unknown_additions: 0,
         mixed_additions: 0,
         ai_additions: 98,
         ai_accepted: 98,
@@ -501,6 +517,7 @@ fn test_markdown_stats_formatting() {
 
     let stats = CommitStats {
         human_additions: 5,
+        unknown_additions: 0,
         mixed_additions: 2,
         ai_additions: 8,
         ai_accepted: 6,
@@ -744,6 +761,70 @@ fn test_post_commit_large_ignored_files_do_not_trigger_skip_warning() {
     assert_eq!(stats.human_additions, 0);
 }
 
+#[test]
+fn test_stats_ignores_renamed_files() {
+    // Test that stats correctly ignores pure renames (no content changes)
+    // Reproduces issue #923
+    let repo = TestRepo::new();
+
+    // Initial commit with files in a directory
+    repo.filename("misc/Development Notes.md")
+        .set_contents(crate::lines![
+            "# Development Notes",
+            "",
+            "Some content here",
+            "More content",
+            "Even more",
+            "Line 6",
+            "Line 7",
+            "Line 8",
+            "Line 9",
+            "Line 10",
+            "Line 11",
+            "Line 12",
+            "Line 13",
+            "Line 14",
+            "Line 15",
+            "Line 16"
+        ]);
+    repo.filename("misc/Usage Guide.md")
+        .set_contents(crate::lines!["# Usage Guide", "", "Usage info"]);
+    repo.stage_all_and_commit("Initial commit with misc directory")
+        .unwrap();
+
+    // Rename the directory (pure rename, no content changes)
+    let misc_dev = repo.path().join("misc/Development Notes.md");
+    let misc_usage = repo.path().join("misc/Usage Guide.md");
+    let new_dir = repo.path().join("Misc Docs");
+    fs::create_dir(&new_dir).unwrap();
+    fs::rename(&misc_dev, new_dir.join("Development Notes.md")).unwrap();
+    fs::rename(&misc_usage, new_dir.join("Usage Guide.md")).unwrap();
+    fs::remove_dir(repo.path().join("misc")).unwrap();
+
+    repo.stage_all_and_commit("Rename misc to Misc Docs")
+        .unwrap();
+
+    // Verify that git ai diff recognizes this as a rename
+    let diff_output = repo.git_ai(&["diff", "HEAD"]).unwrap();
+    assert!(
+        diff_output.contains("similarity index 100%") || diff_output.contains("rename from"),
+        "git ai diff should recognize pure renames"
+    );
+
+    // Stats should show 0 additions and 0 deletions for pure renames
+    let stats = stats_from_args(&repo, &["stats", "HEAD", "--json"]);
+    assert_eq!(
+        stats.git_diff_added_lines, 0,
+        "Pure renames should not count as additions"
+    );
+    assert_eq!(
+        stats.git_diff_deleted_lines, 0,
+        "Pure renames should not count as deletions"
+    );
+    assert_eq!(stats.ai_additions, 0);
+    assert_eq!(stats.human_additions, 0);
+}
+
 crate::reuse_tests_in_worktree!(
     test_authorship_log_stats,
     test_stats_cli_range,
@@ -763,4 +844,5 @@ crate::reuse_tests_in_worktree!(
     test_stats_ignore_flag_is_additive_to_defaults,
     test_stats_range_uses_default_ignores,
     test_post_commit_large_ignored_files_do_not_trigger_skip_warning,
+    test_stats_ignores_renamed_files,
 );

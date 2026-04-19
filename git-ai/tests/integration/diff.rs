@@ -357,6 +357,11 @@ fn checkpoint_human(repo: &TestRepo) {
         .expect("human checkpoint should succeed");
 }
 
+fn checkpoint_known_human(repo: &TestRepo, file_path: &str) {
+    repo.git_ai(&["checkpoint", "mock_known_human", file_path])
+        .expect("known human checkpoint should succeed");
+}
+
 fn commit_after_staging_all(repo: &TestRepo, message: &str) -> NewCommit {
     repo.git(&["add", "-A"]).expect("git add should succeed");
     repo.commit(message).expect("commit should succeed")
@@ -1347,7 +1352,7 @@ fn test_diff_json_include_stats_exact_multi_model_with_non_landing_prompt() {
             "codex-b2",
         ],
     );
-    checkpoint_human(&repo);
+    checkpoint_known_human(&repo, "multi_model_stats.txt");
 
     let commit = commit_after_staging_all(&repo, "multi model stats target");
     let diff = diff_json(
@@ -1428,7 +1433,7 @@ fn test_diff_json_include_stats_exact_human_landed_with_ai_generated() {
         "human_landed_stats.txt",
         &["base", "human-final-1", "human-final-2"],
     );
-    checkpoint_human(&repo);
+    checkpoint_known_human(&repo, "human_landed_stats.txt");
 
     let commit = commit_after_staging_all(&repo, "human landed target");
     let diff = diff_json(
@@ -2601,6 +2606,995 @@ fn test_diff_json_commit_author_is_full_ident() {
     assert_eq!(author, "Test User <test@example.com>");
 }
 
+/// Regression test for the bug where `apply_blame_for_side` set `detect_copies: 1` on
+/// `GitAiBlameOptions` but `blame_hunks_for_ranges` never translated that field into a `-C`
+/// flag on the git-blame command line.  The result was that lines *moved* within a file in the
+/// same commit were attributed to that commit instead of to the commit that originally wrote
+/// them, so they fell through as Human when they should have been AI.
+///
+/// Scenario
+/// --------
+/// Commit A (AI):   [func_one × 6 lines, func_two × 6 lines]  – fully AI-attested.
+/// Commit B (AI):   [new_func × 6 lines, func_two × 6 lines, func_one × 6 lines]
+///                  – AI attests only new_func (lines 1-6); func_one moved to lines 13-18.
+///
+/// Myers diff A→B represents the change as:
+///   - func_one (lines 1-6 in A) deleted / replaced by new_func
+///   - func_two unchanged (context)
+///   - func_one (lines 13-18 in B) added at the end  ← these are in `added_lines`
+///
+/// `git blame A..B -L 13,18` without `-C` → commit B  (B has no attestation for 13-18 → Human)
+/// `git blame A..B -L 13,18`  with  `-C` → commit A  (A's attestation covers func_one  → AI)
+#[test]
+fn test_diff_blame_uses_detect_copies_for_moved_ai_lines() {
+    let repo = TestRepo::new();
+
+    // --- Commit A: AI writes two substantial functions ---
+    let mut file = repo.filename("src.rs");
+    file.set_contents(crate::lines![
+        "fn func_one() {".ai(),
+        "    // original function one body".ai(),
+        "    let x: u32 = 1;".ai(),
+        "    let y: u32 = 2;".ai(),
+        "    x + y".ai(),
+        "}".ai(),
+        "fn func_two() {".ai(),
+        "    // original function two body".ai(),
+        "    let a = String::from(\"hello\");".ai(),
+        "    let b = String::from(\"world\");".ai(),
+        "    format!(\"{} {}\", a, b)".ai(),
+        "}".ai()
+    ]);
+    repo.stage_all_and_commit("A: AI writes func_one and func_two")
+        .unwrap();
+
+    // --- Commit B: AI adds new_func; func_one ends up at the bottom (moved, not re-written) ---
+    // Marking func_one / func_two as .human() here means B's AI attestation covers ONLY
+    // new_func (lines 1-6).  func_one at its new position (lines 13-18) is NOT in B's note.
+    file.set_contents(crate::lines![
+        "fn new_func() {".ai(),
+        "    // brand new function".ai(),
+        "    let z: u32 = 99;".ai(),
+        "    let w: u32 = 100;".ai(),
+        "    z + w".ai(),
+        "}".ai(),
+        "fn func_two() {".human(),
+        "    // original function two body".human(),
+        "    let a = String::from(\"hello\");".human(),
+        "    let b = String::from(\"world\");".human(),
+        "    format!(\"{} {}\", a, b)".human(),
+        "}".human(),
+        "fn func_one() {".human(),
+        "    // original function one body".human(),
+        "    let x: u32 = 1;".human(),
+        "    let y: u32 = 2;".human(),
+        "    x + y".human(),
+        "}".human()
+    ]);
+    let commit_b = repo
+        .stage_all_and_commit("B: AI adds new_func and moves func_one to end")
+        .unwrap();
+
+    // Confirm the Myers diff actually puts func_one as explicit `+` lines (not context),
+    // which is the precondition for the bug to fire.
+    let raw_diff = repo
+        .git_og(&[
+            "--no-pager",
+            "diff",
+            &format!("{}^", commit_b.commit_sha),
+            &commit_b.commit_sha,
+        ])
+        .expect("git diff should succeed");
+    assert!(
+        raw_diff.contains("+fn func_one() {"),
+        "precondition: Myers diff must show func_one as an explicit addition (+), got:\n{raw_diff}"
+    );
+
+    // Run git-ai diff and check that func_one at its new position is attributed AI, not Human.
+    let output = repo
+        .git_ai(&["diff", &commit_b.commit_sha])
+        .expect("git-ai diff should succeed");
+
+    let lines = parse_diff_output(&output);
+
+    // new_func lines must be AI (B's own attestation).
+    let new_func_line = lines
+        .iter()
+        .find(|l| l.prefix == "+" && l.content.contains("fn new_func()"))
+        .expect("diff output must contain +fn new_func()");
+    assert!(
+        new_func_line
+            .attribution
+            .as_ref()
+            .map(|a| a.contains("ai"))
+            .unwrap_or(false),
+        "new_func should be AI-attributed; got: {:?}",
+        new_func_line.attribution
+    );
+
+    // func_one at its moved position must also be AI (traced to A via -C).
+    // Without the fix (detect_copies not wired through to the git-blame args),
+    // git blame attributes these lines to commit B → no attestation in B → Human.
+    let func_one_line = lines
+        .iter()
+        .find(|l| l.prefix == "+" && l.content.contains("fn func_one()"))
+        .expect("diff output must contain +fn func_one() from its moved position");
+    assert!(
+        func_one_line
+            .attribution
+            .as_ref()
+            .map(|a| a.contains("ai"))
+            .unwrap_or(false),
+        "func_one (moved to end of file by commit B) should be AI-attributed via -C move \
+         detection, but got: {:?}\nFull diff output:\n{}",
+        func_one_line.attribution,
+        output
+    );
+}
+
+#[test]
+fn test_diff_visual_output_shows_human_author_name_not_id() {
+    let repo = TestRepo::new();
+
+    // Create a base commit
+    write_lines(&repo, "human_author.txt", &["line1", "line2"]);
+    checkpoint_human(&repo);
+    let _base = commit_after_staging_all(&repo, "base commit");
+
+    // Add lines and create a known human checkpoint with a specific author
+    write_lines(
+        &repo,
+        "human_author.txt",
+        &["line1", "line2", "line3", "line4"],
+    );
+    checkpoint_known_human(&repo, "human_author.txt");
+    let commit = commit_after_staging_all(&repo, "human changes");
+
+    // Get visual diff output (not JSON)
+    let output = repo
+        .git_ai(&["diff", &commit.commit_sha])
+        .expect("diff should succeed");
+
+    // Parse the diff to find the added lines
+    let lines = parse_diff_output(&output);
+    let line3 = lines
+        .iter()
+        .find(|l| l.prefix == "+" && l.content.contains("line3"))
+        .expect("should find +line3");
+    let line4 = lines
+        .iter()
+        .find(|l| l.prefix == "+" && l.content.contains("line4"))
+        .expect("should find +line4");
+
+    // The visual output should show the author name, not the h_-prefixed ID
+    assert!(line3.attribution.is_some(), "line3 should have attribution");
+    let attr = line3.attribution.as_ref().unwrap();
+    assert!(
+        attr.starts_with("human:"),
+        "line3 attribution should be human, got: {}",
+        attr
+    );
+
+    // Extract the displayed name from attribution (format is "human:<name>")
+    let displayed_name = attr.strip_prefix("human:").unwrap();
+
+    // Bug: Currently shows the h_-prefixed ID instead of the author name
+    // Expected behavior: should show a readable author name like "Test User <test@example.com>"
+    // Actual behavior: shows "h_9e95a89b42f1fb" (the hash ID)
+    // This assertion will fail until we fix it
+    assert!(
+        !displayed_name.starts_with("h_"),
+        "Visual output should show human author name, not human ID '{}'. Full output:\n{}",
+        displayed_name,
+        output
+    );
+
+    // Verify line4 has the same attribution
+    assert_eq!(
+        line4.attribution, line3.attribution,
+        "line4 should have same attribution as line3"
+    );
+}
+
+#[test]
+fn test_diff_json_output_includes_human_id_in_hunks() {
+    let repo = TestRepo::new();
+
+    // Create a base commit
+    write_lines(&repo, "human_json.txt", &["base1", "base2"]);
+    checkpoint_human(&repo);
+    let _base = commit_after_staging_all(&repo, "base commit");
+
+    // Add lines with known human checkpoint
+    write_lines(
+        &repo,
+        "human_json.txt",
+        &["base1", "base2", "human1", "human2"],
+    );
+    checkpoint_known_human(&repo, "human_json.txt");
+    let commit = commit_after_staging_all(&repo, "human additions");
+
+    // Get JSON diff output
+    let diff = diff_json(&repo, &["diff", &commit.commit_sha, "--json"]);
+
+    // Verify the hunks array contains human_id field
+    let hunks = diff["hunks"].as_array().expect("hunks should be an array");
+
+    // Find hunks for our file
+    let human_hunks: Vec<&Value> = hunks
+        .iter()
+        .filter(|h| h["file_path"] == "human_json.txt" && h["hunk_kind"] == "addition")
+        .collect();
+
+    assert!(!human_hunks.is_empty(), "should have addition hunks");
+
+    // Bug: Currently human_id field is missing from hunks
+    // Expected: hunks should have a "human_id" field set to the h_-prefixed hash
+    // Actual: only "prompt_id" field exists (for AI), no equivalent for humans
+    // This assertion will fail until we fix it
+    let has_human_id = human_hunks.iter().any(|h| h.get("human_id").is_some());
+    assert!(
+        has_human_id,
+        "At least one human hunk should have human_id field. Found hunks: {:?}",
+        human_hunks
+    );
+
+    // Verify the top-level humans map is present and can resolve human_id values
+    let humans = diff["humans"]
+        .as_object()
+        .expect("JSON should have top-level humans object");
+    assert!(
+        !humans.is_empty(),
+        "humans map should not be empty when there are human-authored hunks"
+    );
+
+    // If we get here, verify the human_id starts with "h_" and prompt_id is not set
+    // Also verify that each human_id can be resolved via the top-level humans map
+    for hunk in &human_hunks {
+        if let Some(human_id) = hunk.get("human_id").and_then(|v| v.as_str()) {
+            assert!(
+                human_id.starts_with("h_"),
+                "human_id should start with h_ prefix, got: {}",
+                human_id
+            );
+            assert!(
+                hunk["prompt_id"].is_null() || !hunk.as_object().unwrap().contains_key("prompt_id"),
+                "Human hunks should not have prompt_id when they have human_id"
+            );
+
+            // Verify the human_id can be resolved via the humans map
+            let human_record = humans.get(human_id).unwrap_or_else(|| {
+                panic!(
+                    "human_id '{}' from hunk should be resolvable in top-level humans map",
+                    human_id
+                )
+            });
+            let author = human_record["author"]
+                .as_str()
+                .expect("human record should have author field");
+            assert!(
+                !author.is_empty(),
+                "Resolved author name should not be empty"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_diff_json_humans_map_complete_across_multiple_commits() {
+    let repo = TestRepo::new();
+
+    // Create base commit
+    write_lines(&repo, "multi_human.txt", &["line1"]);
+    checkpoint_human(&repo);
+    let _base = commit_after_staging_all(&repo, "base");
+
+    // Commit 1: First human author
+    write_lines(
+        &repo,
+        "multi_human.txt",
+        &["line1", "human_a_1", "human_a_2"],
+    );
+    checkpoint_known_human(&repo, "multi_human.txt");
+    let _commit1 = commit_after_staging_all(&repo, "first human");
+
+    // Commit 2: Second human author (creates a different h_ ID)
+    write_lines(
+        &repo,
+        "multi_human.txt",
+        &["line1", "human_a_1", "human_a_2", "human_b_1", "human_b_2"],
+    );
+    checkpoint_known_human(&repo, "multi_human.txt");
+    let commit2 = commit_after_staging_all(&repo, "second human");
+
+    // Get JSON diff for commit2 (which includes lines from both human checkpoints)
+    let diff = diff_json(&repo, &["diff", &commit2.commit_sha, "--json"]);
+
+    // Extract all human_ids from all hunks
+    let hunks = diff["hunks"].as_array().expect("hunks should be array");
+    let mut human_ids_in_hunks: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+
+    for hunk in hunks {
+        if let Some(human_id) = hunk.get("human_id").and_then(|v| v.as_str()) {
+            human_ids_in_hunks.insert(human_id.to_string());
+        }
+    }
+
+    // Get the top-level humans map
+    let humans = diff["humans"].as_object().expect("should have humans map");
+
+    // Critical assertion: every human_id in hunks MUST be resolvable via the humans map
+    for human_id in &human_ids_in_hunks {
+        assert!(
+            humans.contains_key(human_id),
+            "human_id '{}' appears in hunks but is missing from top-level humans map. \
+             Hunks reference {} unique human_ids but humans map only contains {} entries: {:?}",
+            human_id,
+            human_ids_in_hunks.len(),
+            humans.len(),
+            humans.keys().collect::<Vec<_>>()
+        );
+
+        // Also verify the author field is present and non-empty
+        let author = humans[human_id]["author"]
+            .as_str()
+            .expect("author should be string");
+        assert!(!author.is_empty(), "author name should not be empty");
+    }
+
+    // We should have collected at least one human across the commits
+    assert!(
+        !human_ids_in_hunks.is_empty(),
+        "Should have at least one human_id across multiple commits"
+    );
+
+    // Verify humans map contains exactly the humans referenced by hunks (no orphans)
+    assert_eq!(
+        humans.len(),
+        human_ids_in_hunks.len(),
+        "humans map should contain exactly the humans referenced in hunks, no more, no less"
+    );
+}
+
+/// Regression test: when AI removes wrapper components and re-indents code,
+/// lines that happen to be textually identical between old and new (e.g. empty lines)
+/// should still be attributed to AI — not show [no-data].
+///
+/// Uses the actual content from the bug report: a large React component where AI
+/// removes header/meter sections and re-indents the grid. Empty lines between
+/// motion.div blocks are byte-for-byte identical in old and new, causing imara_diff
+/// to treat them as Equal — preserving "human" attribution that then gets stripped.
+#[test]
+fn test_diff_ai_reindented_lines_attributed_to_ai() {
+    let repo = TestRepo::new();
+
+    // This is the actual content from the user's bug report (component.tsx).
+    // The old content has wrapper divs with headers/meters before the grid.
+    // The AI removes the header/meters and re-indents the grid section,
+    // but empty lines between motion.div blocks stay identical.
+    let old_content = r##"import React from "react";
+import { motion } from "framer-motion";
+import {
+  Code2,
+  Star,
+  Zap,
+  Cpu,
+  Sparkles,
+  ChevronRight,
+} from "lucide-react";
+
+type LanguageCardProps = {
+  name?: string;
+  tagline?: string;
+  description?: string;
+  rank?: number;
+  popularity?: number;
+  speed?: number;
+  vibes?: number;
+  colorFrom?: string;
+  colorTo?: string;
+  icon?: React.ReactNode;
+};
+
+function Meter({
+  label,
+  value,
+}: {
+  label: string;
+  value: number;
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between text-sm">
+        <span className="text-white/70">{label}</span>
+        <span className="font-semibold text-white">{value}%</span>
+      </div>
+      <div className="h-3 overflow-hidden rounded-full bg-white/10 backdrop-blur">
+        <motion.div
+          initial={{ width: 0 }}
+          animate={{ width: `${value}%` }}
+          transition={{ duration: 1, ease: "easeOut" }}
+          className="h-full rounded-full bg-gradient-to-r from-white via-white/80 to-white/50"
+        />
+      </div>
+    </div>
+  );
+}
+
+export default function ExtraLanguageCard({
+  name = "TypeScript",
+  tagline = "Strongly typed. Ridiculously stylish.",
+  description = "A glamorous language card component for your portfolio, dashboard, or devtools UI. Because plain cards are for mortals.",
+  rank = 1,
+  popularity = 96,
+  speed = 84,
+  vibes = 100,
+  colorFrom = "#7c3aed",
+  colorTo = "#06b6d4",
+  icon = <Code2 className="h-8 w-8" />,
+}: LanguageCardProps) {
+  return (
+    <div className="min-h-screen bg-[#070b17] px-6 py-12 text-white">
+      <div className="mx-auto max-w-5xl">
+        <motion.div
+          initial={{ opacity: 0, y: 24, scale: 0.96 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          transition={{ duration: 0.6 }}
+          className="relative overflow-hidden rounded-[32px] border border-white/10 bg-white/5 shadow-2xl backdrop-blur-xl"
+        >
+          {/* Background glow */}
+          <div
+            className="absolute inset-0 opacity-90"
+            style={{
+              background: `
+                radial-gradient(circle at top left, ${colorFrom}55 0%, transparent 35%),
+                radial-gradient(circle at bottom right, ${colorTo}55 0%, transparent 40%),
+                linear-gradient(135deg, ${colorFrom}22, ${colorTo}22)
+              `,
+            }}
+          />
+
+          {/* Floating decorations */}
+          <motion.div
+            animate={{ y: [0, -10, 0], rotate: [0, 4, 0] }}
+            transition={{ repeat: Infinity, duration: 5, ease: "easeInOut" }}
+            className="absolute right-8 top-8 rounded-2xl border border-white/10 bg-white/10 p-3 backdrop-blur-md"
+          >
+            <Sparkles className="h-6 w-6 text-white/90" />
+          </motion.div>
+
+          <motion.div
+            animate={{ y: [0, 12, 0], rotate: [0, -5, 0] }}
+            transition={{ repeat: Infinity, duration: 6, ease: "easeInOut" }}
+            className="absolute bottom-10 left-10 rounded-full border border-white/10 bg-white/10 p-4 backdrop-blur-md"
+          >
+            <Zap className="h-5 w-5 text-white/90" />
+          </motion.div>
+
+          <div className="relative z-10 grid gap-8 p-8 md:grid-cols-[1.3fr_0.9fr] md:p-10">
+            {/* Left side */}
+            <div className="space-y-6">
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-white/80">
+                  <Star className="h-4 w-4" />
+                  Featured Language
+                </span>
+
+                <span className="inline-flex items-center rounded-full bg-white px-3 py-1 text-xs font-black text-slate-900">
+                  #{rank} Trending
+                </span>
+              </div>
+
+              <div className="flex items-start gap-4">
+                <div
+                  className="rounded-[24px] border border-white/15 p-4 shadow-xl"
+                  style={{
+                    background: `linear-gradient(135deg, ${colorFrom}, ${colorTo})`,
+                  }}
+                >
+                  {icon}
+                </div>
+
+                <div>
+                  <h1 className="text-4xl font-black tracking-tight md:text-6xl">
+                    {name}
+                  </h1>
+                  <p className="mt-2 text-lg text-white/75 md:text-xl">
+                    {tagline}
+                  </p>
+                </div>
+              </div>
+
+              <p className="max-w-2xl text-base leading-7 text-white/80 md:text-lg">
+                {description}
+              </p>
+
+              <div className="flex flex-wrap gap-3">
+                {["Type Safe", "Modern DX", "Production Ready", "Elite Vibes"].map(
+                  (badge) => (
+                    <motion.span
+                      key={badge}
+                      whileHover={{ scale: 1.06, y: -2 }}
+                      className="rounded-full border border-white/15 bg-white/10 px-4 py-2 text-sm font-medium text-white/90 backdrop-blur"
+                    >
+                      {badge}
+                    </motion.span>
+                  )
+                )}
+              </div>
+
+              <div className="flex flex-wrap gap-4 pt-2">
+                <motion.button
+                  whileHover={{ scale: 1.04 }}
+                  whileTap={{ scale: 0.98 }}
+                  className="group inline-flex items-center gap-2 rounded-2xl bg-white px-5 py-3 font-bold text-slate-900 shadow-xl"
+                >
+                  Explore Language
+                  <ChevronRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
+                </motion.button>
+
+                <motion.button
+                  whileHover={{ scale: 1.04 }}
+                  whileTap={{ scale: 0.98 }}
+                  className="inline-flex items-center gap-2 rounded-2xl border border-white/15 bg-white/10 px-5 py-3 font-semibold text-white backdrop-blur"
+                >
+                  <Cpu className="h-4 w-4" />
+                  Compare Stats
+                </motion.button>
+              </div>
+            </div>
+
+            {/* Right side */}
+            <div className="space-y-5 rounded-[28px] border border-white/10 bg-black/20 p-6 backdrop-blur-xl">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl font-bold">Power Metrics</h2>
+                <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-xs font-semibold text-emerald-300">
+                  MAXED OUT
+                </span>
+              </div>
+
+              <Meter label="Popularity" value={popularity} />
+              <Meter label="Performance" value={speed} />
+              <Meter label="Developer Vibes" value={vibes} />
+
+              <div className="grid grid-cols-2 gap-4 pt-4">
+                <motion.div
+                  whileHover={{ y: -4 }}
+                  className="rounded-2xl border border-white/10 bg-white/5 p-4"
+                >
+                  <div className="text-sm text-white/65">Ecosystem</div>
+                  <div className="mt-2 text-2xl font-black">Huge</div>
+                </motion.div>
+
+                <motion.div
+                  whileHover={{ y: -4 }}
+                  className="rounded-2xl border border-white/10 bg-white/5 p-4"
+                >
+                  <div className="text-sm text-white/65">Learning Curve</div>
+                  <div className="mt-2 text-2xl font-black">Smooth-ish</div>
+                </motion.div>
+
+                <motion.div
+                  whileHover={{ y: -4 }}
+                  className="rounded-2xl border border-white/10 bg-white/5 p-4"
+                >
+                  <div className="text-sm text-white/65">Use Case</div>
+                  <div className="mt-2 text-2xl font-black">Everything</div>
+                </motion.div>
+
+                <motion.div
+                  whileHover={{ y: -4 }}
+                  className="rounded-2xl border border-white/10 bg-white/5 p-4"
+                >
+                  <div className="text-sm text-white/65">Aura</div>
+                  <div className="mt-2 text-2xl font-black">Legendary</div>
+                </motion.div>
+              </div>
+            </div>
+          </div>
+
+          {/* Bottom shine */}
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-white/10 to-transparent" />
+        </motion.div>
+      </div>
+    </div>
+  );
+}
+"##;
+
+    // New content: AI removed header/meters, kept the grid section but re-indented.
+    // Empty lines between motion.div blocks are byte-for-byte identical to old content.
+    let new_content = r##"import React from "react";
+import { motion } from "framer-motion";
+import {
+  Code2,
+  Star,
+  Zap,
+  Cpu,
+  Sparkles,
+  ChevronRight,
+} from "lucide-react";
+
+type LanguageCardProps = {
+  name?: string;
+  tagline?: string;
+  description?: string;
+  rank?: number;
+  popularity?: number;
+  speed?: number;
+  vibes?: number;
+  colorFrom?: string;
+  colorTo?: string;
+  icon?: React.ReactNode;
+};
+
+function Meter({
+  label,
+  value,
+}: {
+  label: string;
+  value: number;
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between text-sm">
+        <span className="text-white/70">{label}</span>
+        <span className="font-semibold text-white">{value}%</span>
+      </div>
+      <div className="h-3 overflow-hidden rounded-full bg-white/10 backdrop-blur">
+        <motion.div
+          initial={{ width: 0 }}
+          animate={{ width: `${value}%` }}
+          transition={{ duration: 1, ease: "easeOut" }}
+          className="h-full rounded-full bg-gradient-to-r from-white via-white/80 to-white/50"
+        />
+      </div>
+    </div>
+  );
+}
+
+export default function ExtraLanguageCard({
+  name = "TypeScript",
+  tagline = "Strongly typed. Ridiculously stylish.",
+  description = "A glamorous language card component for your portfolio, dashboard, or devtools UI. Because plain cards are for mortals.",
+  rank = 1,
+  popularity = 96,
+  speed = 84,
+  vibes = 100,
+  colorFrom = "#7c3aed",
+  colorTo = "#06b6d4",
+  icon = <Code2 className="h-8 w-8" />,
+}: LanguageCardProps) {
+  return (
+    <div className="min-h-screen bg-[#070b17] px-6 py-12 text-white">
+      <div className="mx-auto max-w-5xl">
+        <motion.div
+          initial={{ opacity: 0, y: 24, scale: 0.96 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          transition={{ duration: 0.6 }}
+          className="relative overflow-hidden rounded-[32px] border border-white/10 bg-white/5 shadow-2xl backdrop-blur-xl"
+        >
+          {/* Background glow */}
+          <div
+            className="absolute inset-0 opacity-90"
+            style={{
+              background: `
+                radial-gradient(circle at top left, ${colorFrom}55 0%, transparent 35%),
+                radial-gradient(circle at bottom right, ${colorTo}55 0%, transparent 40%),
+                linear-gradient(135deg, ${colorFrom}22, ${colorTo}22)
+              `,
+            }}
+          />
+
+          {/* Floating decorations */}
+          <motion.div
+            animate={{ y: [0, -10, 0], rotate: [0, 4, 0] }}
+            transition={{ repeat: Infinity, duration: 5, ease: "easeInOut" }}
+            className="absolute right-8 top-8 rounded-2xl border border-white/10 bg-white/10 p-3 backdrop-blur-md"
+          >
+            <Sparkles className="h-6 w-6 text-white/90" />
+          </motion.div>
+
+          <motion.div
+            animate={{ y: [0, 12, 0], rotate: [0, -5, 0] }}
+            transition={{ repeat: Infinity, duration: 6, ease: "easeInOut" }}
+            className="absolute bottom-10 left-10 rounded-full border border-white/10 bg-white/10 p-4 backdrop-blur-md"
+          >
+            <Zap className="h-5 w-5 text-white/90" />
+          </motion.div>
+
+          <div className="relative z-10 grid gap-8 p-8 md:grid-cols-[1.3fr_0.9fr] md:p-10">
+            {/* Left side */}
+            <div className="space-y-6">
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-white/80">
+                  <Star className="h-4 w-4" />
+                  Featured Language
+                </span>
+
+                <span className="inline-flex items-center rounded-full bg-white px-3 py-1 text-xs font-black text-slate-900">
+                  #{rank} Trending
+                </span>
+              </div>
+
+              <div className="flex items-start gap-4">
+                <div
+                  className="rounded-[24px] border border-white/15 p-4 shadow-xl"
+                  style={{
+                    background: `linear-gradient(135deg, ${colorFrom}, ${colorTo})`,
+                  }}
+                >
+                  {icon}
+                </div>
+
+                <div>
+                  <h1 className="text-4xl font-black tracking-tight md:text-6xl">
+                    {name}
+                  </h1>
+                  <p className="mt-2 text-lg text-white/75 md:text-xl">
+                    {tagline}
+                  </p>
+                </div>
+              </div>
+
+              <p className="max-w-2xl text-base leading-7 text-white/80 md:text-lg">
+                {description}
+              </p>
+
+              <div className="flex flex-wrap gap-3">
+                {["Type Safe", "Modern DX", "Production Ready", "Elite Vibes"].map(
+                  (badge) => (
+                    <motion.span
+                      key={badge}
+                      whileHover={{ scale: 1.06, y: -2 }}
+                      className="rounded-full border border-white/15 bg-white/10 px-4 py-2 text-sm font-medium text-white/90 backdrop-blur"
+                    >
+                      {badge}
+                    </motion.span>
+                  )
+                )}
+              </div>
+
+              <div className="flex flex-wrap gap-4 pt-2">
+                <motion.button
+                  whileHover={{ scale: 1.04 }}
+                  whileTap={{ scale: 0.98 }}
+                  className="group inline-flex items-center gap-2 rounded-2xl bg-white px-5 py-3 font-bold text-slate-900 shadow-xl"
+                >
+                  Explore Language
+                  <ChevronRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
+                </motion.button>
+
+                <motion.button
+                  whileHover={{ scale: 1.04 }}
+                  whileTap={{ scale: 0.98 }}
+                  className="inline-flex items-center gap-2 rounded-2xl border border-white/15 bg-white/10 px-5 py-3 font-semibold text-white backdrop-blur"
+                >
+                  <Cpu className="h-4 w-4" />
+                  Compare Stats
+                </motion.button>
+              </div>
+            </div>
+
+            {/* Right side */}
+            <div className="space-y-5 rounded-[28px] border border-white/10 bg-black/20 p-6 backdrop-blur-xl">
+            <div className="grid grid-cols-2 gap-4 pt-4">
+              <motion.div
+                whileHover={{ y: -4 }}
+                className="rounded-2xl border border-white/10 bg-white/5 p-4"
+              >
+                <div className="text-sm text-white/65">Ecosystem</div>
+                <div className="mt-2 text-2xl font-black">Huge</div>
+              </motion.div>
+
+              <motion.div
+                whileHover={{ y: -4 }}
+                className="rounded-2xl border border-white/10 bg-white/5 p-4"
+              >
+                <div className="text-sm text-white/65">Learning Curve</div>
+                <div className="mt-2 text-2xl font-black">Smooth-ish</div>
+              </motion.div>
+
+              <motion.div
+                whileHover={{ y: -4 }}
+                className="rounded-2xl border border-white/10 bg-white/5 p-4"
+              >
+                <div className="text-sm text-white/65">Use Case</div>
+                <div className="mt-2 text-2xl font-black">Everything</div>
+              </motion.div>
+
+              <motion.div
+                whileHover={{ y: -4 }}
+                className="rounded-2xl border border-white/10 bg-white/5 p-4"
+              >
+                <div className="text-sm text-white/65">Aura</div>
+                <div className="mt-2 text-2xl font-black">Legendary</div>
+              </motion.div>
+            </div>
+            </div>
+          </div>
+
+          {/* Bottom shine */}
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-white/10 to-transparent" />
+        </motion.div>
+      </div>
+    </div>
+  );
+}
+"##;
+
+    // Step 1: write old content and commit (initial human commit)
+    let file_path = "component.tsx";
+    let full_path = repo.path().join(file_path);
+    fs::write(&full_path, old_content).expect("write old content");
+    repo.git(&["add", file_path]).expect("git add");
+    repo.git_og(&["commit", "-m", "initial"])
+        .expect("initial commit");
+
+    // Step 2: AI makes changes — write new content and checkpoint as AI
+    fs::write(&full_path, new_content).expect("write new content");
+    repo.git_ai(&["checkpoint", "mock_ai", file_path])
+        .expect("checkpoint should succeed");
+
+    // Step 3: commit
+    repo.git(&["add", file_path]).expect("git add");
+    let commit = repo.commit("ai refactor").expect("commit should succeed");
+
+    // Step 4: run git ai diff and verify ALL added lines are attributed to AI
+    let diff_output = repo
+        .git_ai(&["diff", &commit.commit_sha])
+        .expect("git ai diff should succeed");
+
+    let diff_lines = parse_diff_output(&diff_output);
+
+    // Every added line (prefix "+") should be attributed to AI (ai:mock_ai),
+    // not [no-data]. Deleted lines (prefix "-") don't need attribution.
+    let added_lines: Vec<&DiffLine> = diff_lines.iter().filter(|l| l.prefix == "+").collect();
+
+    assert!(
+        !added_lines.is_empty(),
+        "Expected added lines in diff output, got none.\nFull diff:\n{}",
+        diff_output
+    );
+
+    let no_data_lines: Vec<&&DiffLine> = added_lines
+        .iter()
+        .filter(|l| l.attribution.as_deref() == Some("no-data"))
+        .collect();
+
+    assert!(
+        no_data_lines.is_empty(),
+        "Found {} added lines with [no-data] attribution that should be attributed to AI:\n{}\nFull diff:\n{}",
+        no_data_lines.len(),
+        no_data_lines
+            .iter()
+            .map(|l| format!("  +{} [no-data]", l.content))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        diff_output
+    );
+
+    // Additionally verify that all added lines have ai:mock_ai attribution
+    for line in &added_lines {
+        assert!(
+            line.attribution
+                .as_ref()
+                .is_some_and(|a| a.contains("ai:mock_ai")),
+            "Added line should be attributed to mock_ai, but got {:?}: content='{}'\nFull diff:\n{}",
+            line.attribution,
+            line.content,
+            diff_output
+        );
+    }
+}
+
+/// Regression test: AI inserts comments and a blank line into an existing AI-written file.
+/// The blank line is byte-identical to existing blank lines, so imara-diff matches it as
+/// Equal. Git diff treats it as inserted. Without gap-filling, it shows as [no-data].
+/// Reproduces exact scenario from user bug report with calcb.py.
+#[test]
+fn test_diff_ai_inserted_blank_line_with_comments_attributed_to_ai() {
+    let repo = TestRepo::new();
+
+    // Step 1: AI writes the initial file (first Claude session)
+    let file_path = "calcb.py";
+    let initial_content = "\
+import sys
+
+
+def add(a: int, b: int) -> int:
+    return a + b
+
+
+def main():
+    if len(sys.argv) != 3:
+        print(\"Usage: python calcb.py <int1> <int2>\")
+        sys.exit(1)
+    a = int(sys.argv[1])
+    b = int(sys.argv[2])
+    result = add(a, b)
+    print(f\"{a} + {b} = {result}\")
+
+
+if __name__ == \"__main__\":
+    main()
+";
+
+    let full_path = repo.path().join(file_path);
+    fs::write(&full_path, initial_content).expect("write initial content");
+    repo.git_ai(&["checkpoint", "mock_ai", file_path])
+        .expect("checkpoint initial write");
+    repo.git(&["add", file_path]).expect("git add");
+    repo.commit("initial").expect("initial commit");
+
+    // Step 2: AI adds comments and a blank line (second Claude session edit)
+    let edited_content = "\
+import sys
+
+# Simple integer addition calculator
+# Accepts two integers as command-line arguments
+
+
+def add(a: int, b: int) -> int:
+    \"\"\"Return the sum of two integers.\"\"\"
+    return a + b
+
+
+def main():
+    # Validate that exactly two arguments are provided
+    if len(sys.argv) != 3:
+        print(\"Usage: python calcb.py <int1> <int2>\")
+        sys.exit(1)
+    a = int(sys.argv[1])
+    b = int(sys.argv[2])
+    result = add(a, b)
+    # Display the result in a readable format
+    print(f\"{a} + {b} = {result}\")
+
+
+if __name__ == \"__main__\":
+    main()
+";
+
+    fs::write(&full_path, edited_content).expect("write edited content");
+    repo.git_ai(&["checkpoint", "mock_ai", file_path])
+        .expect("checkpoint edit");
+    repo.git(&["add", file_path]).expect("git add");
+    let commit = repo.commit("add comments").expect("commit");
+
+    // Step 3: verify no [no-data] lines in the diff
+    let diff_output = repo
+        .git_ai(&["diff", &commit.commit_sha])
+        .expect("git ai diff should succeed");
+
+    let diff_lines = parse_diff_output(&diff_output);
+    let added_lines: Vec<&DiffLine> = diff_lines.iter().filter(|l| l.prefix == "+").collect();
+
+    assert!(
+        !added_lines.is_empty(),
+        "Expected added lines in diff output.\nFull diff:\n{}",
+        diff_output
+    );
+
+    let no_data_lines: Vec<&&DiffLine> = added_lines
+        .iter()
+        .filter(|l| l.attribution.as_deref() == Some("no-data"))
+        .collect();
+
+    assert!(
+        no_data_lines.is_empty(),
+        "Found {} added lines with [no-data] that should be attributed to AI:\n{}\nFull diff:\n{}",
+        no_data_lines.len(),
+        no_data_lines
+            .iter()
+            .map(|l| format!("  +{} [no-data]", l.content))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        diff_output
+    );
+}
+
 crate::reuse_tests_in_worktree!(
     test_diff_single_commit,
     test_diff_commit_range,
@@ -2641,4 +3635,9 @@ crate::reuse_tests_in_worktree!(
     test_diff_json_deleted_hunks_strict_mixed_origins_and_contiguous_segments,
     test_diff_json_deleted_hunks_same_content_but_different_origins,
     test_diff_json_commit_author_is_full_ident,
+    test_diff_visual_output_shows_human_author_name_not_id,
+    test_diff_json_output_includes_human_id_in_hunks,
+    test_diff_json_humans_map_complete_across_multiple_commits,
+    test_diff_ai_reindented_lines_attributed_to_ai,
+    test_diff_ai_inserted_blank_line_with_comments_attributed_to_ai,
 );

@@ -1,7 +1,7 @@
 use crate::git::refs::{
-    copy_ref, fallback_merge_notes_ours, get_commits_with_notes_from_list, merge_notes_from_ref,
-    note_blob_oids_for_commits, notes_add_batch, ref_exists, show_authorship_note,
-    tracking_ref_for_remote, CommitAuthorship, AI_AUTHORSHIP_PUSH_REFSPEC,
+    AI_AUTHORSHIP_PUSH_REFSPEC, CommitAuthorship, copy_ref, fallback_merge_notes_ours,
+    get_commits_with_notes_from_list, merge_notes_from_ref, note_blob_oids_for_commits,
+    notes_add_batch, ref_exists, show_authorship_note, tracking_ref_for_remote,
 };
 use crate::{
     api::{ApiClient, ApiContext},
@@ -9,7 +9,6 @@ use crate::{
     error::GitAiError,
     git::{cli_parser::ParsedGitInvocation, repository::exec_git},
     repo_url::normalize_repo_url,
-    utils::debug_log,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -110,26 +109,26 @@ pub fn fetch_missing_notes_for_commits(repository: &Repository, source_commits: 
         return;
     }
 
-    debug_log(&format!(
+    tracing::debug!(
         "Source commits missing notes: {:?}, trying to fetch from remotes",
         missing
-    ));
+    );
 
     if let Ok(remotes) = repository.remotes_with_urls() {
         for (remote_name, _) in remotes {
-            debug_log(&format!(
+            tracing::debug!(
                 "Attempting safe notes fetch from remote {}",
                 remote_name
-            ));
+            );
             match fetch_authorship_notes(repository, &remote_name) {
-                Ok(_) => debug_log(&format!(
+                Ok(_) => tracing::debug!(
                     "✓ Fetched and merged notes from remote {}",
                     remote_name
-                )),
-                Err(e) => debug_log(&format!(
+                ),
+                Err(e) => tracing::debug!(
                     "Notes fetch from remote {} failed (best-effort): {}",
                     remote_name, e
-                )),
+                ),
             }
         }
     }
@@ -146,22 +145,17 @@ pub fn fetch_authorship_notes(
     if Config::get().notes_store() == "rest" {
         // Fetch notes via REST API instead of git fetch, if configured
         let api = ApiClient::new(ApiContext::new(None));
-        let remote_url = resolve_remote_name_or_url(repository, remote_name)?;
-        let normalized_repo_url = normalize_repo_url(&remote_url).map_err(|e| {
-            GitAiError::Generic(format!(
-                "Invalid remote URL for REST notes sync '{}': {}",
-                remote_url, e
-            ))
-        })?;
+        let normalized_repo_url = normalized_rest_repo_url(repository, remote_name)?;
         return rest_fetch_authorship_notes(repository, &api, &normalized_repo_url);
-    } 
+    }
     // Generate tracking ref for this remote
     let tracking_ref = tracking_ref_for_remote(remote_name);
 
-    debug_log(&format!(
+    tracing::debug!(
         "fetching authorship notes for remote '{}' to tracking ref '{}'",
-        remote_name, tracking_ref
-    ));
+        remote_name,
+        tracking_ref
+    );
 
     // Fetch notes to tracking ref with explicit refspec.
     // If the remote does not have refs/notes/ai yet, treat that as NotFound.
@@ -175,28 +169,28 @@ pub fn fetch_authorship_notes(
         &fetch_refspec,
     );
 
-    debug_log(&format!("fetch command: {:?}", fetch_authorship));
+    tracing::debug!("fetch command: {:?}", fetch_authorship);
 
     match exec_git(&fetch_authorship) {
         Ok(output) => {
-            debug_log(&format!(
+            tracing::debug!(
                 "fetch stdout: '{}'",
                 String::from_utf8_lossy(&output.stdout)
-            ));
-            debug_log(&format!(
+            );
+            tracing::debug!(
                 "fetch stderr: '{}'",
                 String::from_utf8_lossy(&output.stderr)
-            ));
+            );
         }
         Err(e) => {
             if is_missing_remote_notes_ref_error(&e) {
-                debug_log(&format!(
+                tracing::debug!(
                     "no authorship notes found on remote '{}', nothing to sync",
                     remote_name
-                ));
+                );
                 return Ok(NotesExistence::NotFound);
             }
-            debug_log(&format!("authorship fetch failed: {}", e));
+            tracing::debug!("authorship fetch failed: {}", e);
             return Err(e);
         }
     }
@@ -207,33 +201,32 @@ pub fn fetch_authorship_notes(
     if crate::git::refs::ref_exists(repository, &tracking_ref) {
         if crate::git::refs::ref_exists(repository, local_notes_ref) {
             // Both exist - merge them
-            debug_log(&format!(
+            tracing::debug!(
                 "merging authorship notes from {} into {}",
-                tracking_ref, local_notes_ref
-            ));
+                tracking_ref,
+                local_notes_ref
+            );
             if let Err(e) = merge_notes_from_ref(repository, &tracking_ref) {
-                debug_log(&format!("notes merge failed: {}", e));
+                tracing::debug!("notes merge failed: {}", e);
                 // Fallback: manually merge notes when git notes merge crashes
                 if let Err(e2) = fallback_merge_notes_ours(repository, &tracking_ref) {
-                    debug_log(&format!("fallback merge also failed: {}", e2));
+                    tracing::debug!("fallback merge also failed: {}", e2);
                 }
             }
         } else {
             // Only tracking ref exists - copy it to local
-            debug_log(&format!(
+            tracing::debug!(
                 "initializing {} from tracking ref {}",
-                local_notes_ref, tracking_ref
-            ));
+                local_notes_ref,
+                tracking_ref
+            );
             if let Err(e) = copy_ref(repository, &tracking_ref, local_notes_ref) {
-                debug_log(&format!("notes copy failed: {}", e));
+                tracing::debug!("notes copy failed: {}", e);
                 // Don't fail on copy errors, just log and continue
             }
         }
     } else {
-        debug_log(&format!(
-            "tracking ref {} was not created after fetch",
-            tracking_ref
-        ));
+        tracing::debug!("tracking ref {} was not created after fetch", tracking_ref);
     }
 
     Ok(NotesExistence::Found)
@@ -260,24 +253,18 @@ const PUSH_NOTES_MAX_ATTEMPTS: usize = 3;
 pub fn push_authorship_notes(repository: &Repository, remote_name: &str) -> Result<(), GitAiError> {
     if Config::get().notes_store() == "rest" {
         let api = ApiClient::new(ApiContext::new(None));
-        let remote_url = resolve_remote_name_or_url(repository, remote_name)?;
-        let normalized_repo_url = normalize_repo_url(&remote_url).map_err(|e| {
-            GitAiError::Generic(format!(
-                "Invalid remote URL for REST notes sync '{}': {}",
-                remote_url, e
-            ))
-        })?;
+        let normalized_repo_url = normalized_rest_repo_url(repository, remote_name)?;
         return rest_push_notes(repository, &api, &normalized_repo_url);
     }
     let mut last_error = None;
 
     for attempt in 0..PUSH_NOTES_MAX_ATTEMPTS {
         if attempt > 0 {
-            debug_log(&format!(
+            tracing::debug!(
                 "retrying notes push (attempt {}/{})",
                 attempt + 1,
                 PUSH_NOTES_MAX_ATTEMPTS
-            ));
+            );
         }
 
         fetch_and_merge_tracking_notes(repository, remote_name);
@@ -285,15 +272,12 @@ pub fn push_authorship_notes(repository: &Repository, remote_name: &str) -> Resu
         // Push notes without force (requires fast-forward)
         let push_args = build_authorship_push_args(repository.global_args_for_exec(), remote_name);
 
-        debug_log(&format!(
-            "pushing authorship refs (no force): {:?}",
-            &push_args
-        ));
+        tracing::debug!("pushing authorship refs (no force): {:?}", &push_args);
 
         match exec_git(&push_args) {
             Ok(_) => return Ok(()),
             Err(e) => {
-                debug_log(&format!("authorship push failed: {}", e));
+                tracing::debug!("authorship push failed: {}", e);
                 if is_non_fast_forward_error(&e) && attempt + 1 < PUSH_NOTES_MAX_ATTEMPTS {
                     // Another pusher updated remote notes between our merge and push.
                     // Retry the full fetch-merge-push cycle.
@@ -311,6 +295,22 @@ pub fn push_authorship_notes(repository: &Repository, remote_name: &str) -> Resu
 
 /// Fetch remote notes into a tracking ref and merge into local refs/notes/ai.
 fn fetch_and_merge_tracking_notes(repository: &Repository, remote_name: &str) {
+    if Config::get().notes_store() == "rest" {
+        let api = ApiClient::new(ApiContext::new(None));
+        let normalized_repo_url = match normalized_rest_repo_url(repository, remote_name) {
+            Ok(repo_url) => repo_url,
+            Err(e) => {
+                tracing::debug!("pre-push REST notes remote resolution failed: {}", e);
+                return;
+            }
+        };
+
+        if let Err(e) = rest_fetch_authorship_notes(repository, &api, &normalized_repo_url) {
+            tracing::debug!("pre-push REST notes fetch failed: {}", e);
+        }
+        return;
+    }
+
     let tracking_ref = tracking_ref_for_remote(remote_name);
     let fetch_refspec = format!("+refs/notes/ai:{}", tracking_ref);
 
@@ -320,7 +320,7 @@ fn fetch_and_merge_tracking_notes(repository: &Repository, remote_name: &str) {
         &fetch_refspec,
     );
 
-    debug_log(&format!("pre-push authorship fetch: {:?}", &fetch_args));
+    tracing::debug!("pre-push authorship fetch: {:?}", &fetch_args);
 
     // Fetch is best-effort; if it fails (e.g., no remote notes yet), continue
     if exec_git(&fetch_args).is_err() {
@@ -335,28 +335,30 @@ fn fetch_and_merge_tracking_notes(repository: &Repository, remote_name: &str) {
 
     if !ref_exists(repository, local_notes_ref) {
         // Only tracking ref exists - copy it to local
-        debug_log(&format!(
+        tracing::debug!(
             "pre-push: initializing {} from {}",
-            local_notes_ref, tracking_ref
-        ));
+            local_notes_ref,
+            tracking_ref
+        );
         if let Err(e) = copy_ref(repository, &tracking_ref, local_notes_ref) {
-            debug_log(&format!("pre-push notes copy failed: {}", e));
+            tracing::debug!("pre-push notes copy failed: {}", e);
         }
         return;
     }
 
     // Both exist - merge them
-    debug_log(&format!(
+    tracing::debug!(
         "pre-push: merging {} into {}",
-        tracking_ref, local_notes_ref
-    ));
+        tracking_ref,
+        local_notes_ref
+    );
     if let Err(e) = merge_notes_from_ref(repository, &tracking_ref) {
-        debug_log(&format!("pre-push notes merge failed: {}", e));
+        tracing::debug!("pre-push notes merge failed: {}", e);
         // Fallback: manually merge notes when git notes merge crashes
         // (e.g., due to corrupted/mixed-fanout notes trees, or git bugs
         // with fanout-level mismatches on older git versions like macOS)
         if let Err(e2) = fallback_merge_notes_ours(repository, &tracking_ref) {
-            debug_log(&format!("pre-push fallback merge also failed: {}", e2));
+            tracing::debug!("pre-push fallback merge also failed: {}", e2);
         }
     }
 }
@@ -370,15 +372,30 @@ fn is_non_fast_forward_error(error: &GitAiError) -> bool {
 
 fn extract_remote_from_fetch_args(args: &[String]) -> Option<String> {
     let mut after_double_dash = false;
+    let mut i = 0;
 
-    for arg in args {
+    while i < args.len() {
+        let arg = &args[i];
         if !after_double_dash {
             if arg == "--" {
                 after_double_dash = true;
+                i += 1;
                 continue;
             }
+
             if arg.starts_with('-') {
-                // Option; skip
+                if is_fetch_option_with_inline_value(arg).is_some() {
+                    i += 1;
+                    continue;
+                }
+
+                if fetch_option_consumes_separate_value(arg) {
+                    i += 2;
+                    continue;
+                }
+
+                // Option without a separate value; skip
+                i += 1;
                 continue;
             }
         }
@@ -417,6 +434,35 @@ fn extract_remote_from_fetch_args(args: &[String]) -> Option<String> {
     }
 
     None
+}
+
+fn is_fetch_option_with_inline_value(arg: &str) -> Option<(&str, &str)> {
+    if let Some((flag, value)) = arg.split_once('=') {
+        Some((flag, value))
+    } else if (arg.starts_with("-C") || arg.starts_with("-c")) && arg.len() > 2 {
+        Some((&arg[..2], &arg[2..]))
+    } else {
+        None
+    }
+}
+
+fn fetch_option_consumes_separate_value(arg: &str) -> bool {
+    matches!(
+        arg,
+        "-c" | "-C"
+            | "--config-env"
+            | "--upload-pack"
+            | "--server-option"
+            | "-o"
+            | "-j"
+            | "--jobs"
+            | "--depth"
+            | "--deepen"
+            | "--shallow-since"
+            | "--shallow-exclude"
+            | "--negotiation-tip"
+            | "--recurse-submodules-default"
+    )
 }
 
 fn with_disabled_hooks(mut args: Vec<String>) -> Vec<String> {
@@ -485,6 +531,19 @@ fn resolve_remote_name_or_url(
                 candidate
             ))
         })
+}
+
+fn normalized_rest_repo_url(
+    repository: &Repository,
+    remote_name: &str,
+) -> Result<String, GitAiError> {
+    let remote_url = resolve_remote_name_or_url(repository, remote_name)?;
+    normalize_repo_url(&remote_url).map_err(|e| {
+        GitAiError::Generic(format!(
+            "Invalid remote URL for REST notes sync '{}': {}",
+            remote_url, e
+        ))
+    })
 }
 
 fn list_local_authorship_notes_with_blob_oid(
@@ -721,6 +780,10 @@ fn get_current_branch(repository: &Repository) -> Result<String, GitAiError> {
 mod tests {
     use super::*;
 
+    fn strings(args: &[&str]) -> Vec<String> {
+        args.iter().map(|arg| (*arg).to_string()).collect()
+    }
+
     #[test]
     fn authorship_fetch_args_always_disable_hooks() {
         let disabled_hooks = disabled_hooks_config();
@@ -730,9 +793,10 @@ mod tests {
             "+refs/notes/ai:refs/notes/ai-remote/origin",
         );
 
-        assert!(args
-            .windows(2)
-            .any(|pair| pair[0] == "-c" && pair[1] == disabled_hooks));
+        assert!(
+            args.windows(2)
+                .any(|pair| pair[0] == "-c" && pair[1] == disabled_hooks)
+        );
         assert!(args.contains(&"fetch".to_string()));
     }
 
@@ -742,9 +806,10 @@ mod tests {
         let args =
             build_authorship_push_args(vec!["-C".to_string(), "/tmp/repo".to_string()], "origin");
 
-        assert!(args
-            .windows(2)
-            .any(|pair| pair[0] == "-c" && pair[1] == disabled_hooks));
+        assert!(
+            args.windows(2)
+                .any(|pair| pair[0] == "-c" && pair[1] == disabled_hooks)
+        );
         assert!(args.contains(&"push".to_string()));
     }
 
@@ -767,5 +832,20 @@ mod tests {
             args: vec!["fetch".to_string(), "origin".to_string()],
         };
         assert!(!is_missing_remote_notes_ref_error(&err));
+    }
+
+    #[test]
+    fn extract_remote_from_fetch_args_skips_c_flag_values() {
+        let args = strings(&["-C", "/tmp/repo", "origin", "main"]);
+        assert_eq!(extract_remote_from_fetch_args(&args), None);
+    }
+
+    #[test]
+    fn extract_remote_from_fetch_args_detects_url_after_options() {
+        let args = strings(&["--no-tags", "https://github.com/example/repo.git", "main"]);
+        assert_eq!(
+            extract_remote_from_fetch_args(&args).as_deref(),
+            Some("https://github.com/example/repo.git")
+        );
     }
 }

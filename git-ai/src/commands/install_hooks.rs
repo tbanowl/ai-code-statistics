@@ -1,7 +1,7 @@
 use crate::config;
 use crate::daemon::DaemonConfig;
 use crate::error::GitAiError;
-use crate::mdm::agents::{get_all_installers, get_installers};
+use crate::mdm::agents::get_all_installers;
 use crate::mdm::git_client_installer::GitClientInstallerParams;
 use crate::mdm::git_clients::get_all_git_client_installers;
 use crate::mdm::hook_installer::HookInstallerParams;
@@ -348,7 +348,10 @@ pub fn run(args: &[String]) -> Result<HashMap<String, String>, GitAiError> {
 
     // In async mode, daemon trace2 config must be in place before any install work starts.
     // If async mode was disabled, tear down any leftover daemon and trace2 config.
-    maybe_configure_async_mode_daemon_trace2(dry_run)?;
+    // Non-fatal: the global git config may be read-only (e.g. Nix store symlink).
+    if let Err(e) = maybe_configure_async_mode_daemon_trace2(dry_run) {
+        eprintln!("Warning: could not configure trace2 (non-fatal): {e}");
+    }
     maybe_teardown_async_mode(dry_run);
     maybe_ensure_daemon(dry_run);
 
@@ -365,6 +368,9 @@ pub fn run(args: &[String]) -> Result<HashMap<String, String>, GitAiError> {
 
     // Run async operations with smol and convert result
     let statuses = smol::block_on(async_run_install(&params, dry_run, verbose))?;
+
+    // Spawn background processes to flush metrics
+    crate::observability::spawn_background_flush();
 
     // Clean up legacy envelope logs directory and related artifacts.
     // These are no longer used — all telemetry now routes through the daemon.
@@ -483,7 +489,7 @@ async fn async_run_install(
     // === Coding Agents ===
     println!("\n\x1b[1mCoding Agents\x1b[0m");
 
-    let installers = get_installers();
+    let installers = get_all_installers();
     let mut installed_tools: HashSet<String> = HashSet::new();
     // Track agents whose hooks were updated (name, process_names) for restart warnings
     let mut updated_agents: Vec<(String, Vec<String>)> = Vec::new();

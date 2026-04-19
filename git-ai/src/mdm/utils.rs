@@ -1,6 +1,5 @@
 use crate::authorship::imara_diff_utils::{LineChangeTag, compute_line_changes};
 use crate::error::GitAiError;
-use crate::utils::debug_log;
 use jsonc_parser::ParseOptions;
 use jsonc_parser::cst::CstRootNode;
 use std::fs;
@@ -193,11 +192,11 @@ fn find_editor_cli_js(cli_name: &str) -> Option<EditorCliCommand> {
 
     for (electron_path, cli_js_path) in candidates {
         if electron_path.is_file() && cli_js_path.is_file() {
-            debug_log(&format!(
+            tracing::debug!(
                 "{}: CLI not in PATH, using cli.js fallback at {}",
                 cli_name,
                 cli_js_path.display()
-            ));
+            );
             return Some(EditorCliCommand::from_cli_js(&electron_path, &cli_js_path));
         }
     }
@@ -253,6 +252,53 @@ fn get_editor_cli_candidates(cli_name: &str) -> Vec<(PathBuf, PathBuf)> {
                     let base = PathBuf::from(&localappdata).join("Programs").join("Cursor");
                     candidates.push((
                         base.join("Cursor.exe"),
+                        base.join("resources")
+                            .join("app")
+                            .join("out")
+                            .join("cli.js"),
+                    ));
+                }
+            }
+        }
+        "windsurf" => {
+            #[cfg(target_os = "macos")]
+            {
+                for apps_dir in [PathBuf::from("/Applications"), home.join("Applications")] {
+                    let app = apps_dir.join("Windsurf.app");
+                    candidates.push((
+                        app.join("Contents").join("MacOS").join("Windsurf"),
+                        app.join("Contents")
+                            .join("Resources")
+                            .join("app")
+                            .join("out")
+                            .join("cli.js"),
+                    ));
+                }
+            }
+            #[cfg(all(unix, not(target_os = "macos")))]
+            {
+                for base in [
+                    PathBuf::from("/opt/Windsurf"),
+                    home.join(".local").join("share").join("windsurf"),
+                    home.join(".local").join("share").join("Windsurf"),
+                ] {
+                    candidates.push((
+                        base.join("windsurf"),
+                        base.join("resources")
+                            .join("app")
+                            .join("out")
+                            .join("cli.js"),
+                    ));
+                }
+            }
+            #[cfg(windows)]
+            {
+                if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+                    let base = PathBuf::from(local_app_data)
+                        .join("Programs")
+                        .join("Windsurf");
+                    candidates.push((
+                        base.join("Windsurf.exe"),
                         base.join("resources")
                             .join("app")
                             .join("out")
@@ -371,30 +417,70 @@ pub fn home_dir() -> PathBuf {
     }
 }
 
+/// Claude config directory, respecting the CLAUDE_CONFIG_DIR env var.
+/// Falls back to ~/.claude when unset.
+pub fn claude_config_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR")
+        && !dir.is_empty()
+    {
+        return PathBuf::from(dir);
+    }
+    home_dir().join(".claude")
+}
+
 /// Write data to a file atomically (write to temp, then rename)
 /// If the path is a symlink, writes to the target file (preserving the symlink)
 pub fn write_atomic(path: &Path, data: &[u8]) -> Result<(), GitAiError> {
     let target_path = if path.is_symlink() {
-        fs::canonicalize(path)?
+        fs::canonicalize(path).map_err(|e| {
+            GitAiError::Generic(format!(
+                "Failed to resolve symlink {}: {}",
+                path.display(),
+                e
+            ))
+        })?
     } else {
         path.to_path_buf()
     };
 
+    // Ensure parent directory exists before writing. This guards against
+    // environments (e.g. nushell) where the parent may not yet exist when
+    // write_atomic is reached. See #1039.
+    ensure_parent_dir(&target_path)?;
+
     let tmp_path = target_path.with_extension("tmp");
     {
-        let mut file = fs::File::create(&tmp_path)?;
+        let mut file = fs::File::create(&tmp_path).map_err(|e| {
+            GitAiError::Generic(format!(
+                "Failed to create temp file {}: {}",
+                tmp_path.display(),
+                e
+            ))
+        })?;
         file.write_all(data)?;
         file.sync_all()?;
     }
-    fs::rename(&tmp_path, &target_path)?;
+    fs::rename(&tmp_path, &target_path).map_err(|e| {
+        GitAiError::Generic(format!(
+            "Failed to rename {} to {}: {}",
+            tmp_path.display(),
+            target_path.display(),
+            e
+        ))
+    })?;
     Ok(())
 }
 
 /// Ensure parent directory exists
-#[allow(dead_code)]
 pub fn ensure_parent_dir(path: &Path) -> Result<(), GitAiError> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+        fs::create_dir_all(parent).map_err(|e| {
+            GitAiError::Generic(format!(
+                "Failed to create directory {}: {}",
+                parent.display(),
+                e
+            ))
+        })?;
     }
     Ok(())
 }
@@ -839,6 +925,7 @@ pub fn update_vscode_chat_hook_settings(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::fs;
     use tempfile::TempDir;
 
@@ -1455,5 +1542,87 @@ mod tests {
         let path = PathBuf::from("/usr/local/bin/git");
         let result = to_windows_git_bash_style_path(&path);
         assert_eq!(result, "/usr/local/bin/git");
+    }
+
+    #[test]
+    #[serial]
+    fn test_claude_config_dir_defaults_to_home_dot_claude() {
+        unsafe {
+            std::env::remove_var("CLAUDE_CONFIG_DIR");
+        }
+        let dir = claude_config_dir();
+        assert_eq!(dir, home_dir().join(".claude"));
+    }
+
+    #[test]
+    #[serial]
+    fn test_claude_config_dir_respects_env_var() {
+        let custom = "/tmp/my-claude-config";
+        unsafe {
+            std::env::set_var("CLAUDE_CONFIG_DIR", custom);
+        }
+        let dir = claude_config_dir();
+        unsafe {
+            std::env::remove_var("CLAUDE_CONFIG_DIR");
+        }
+        assert_eq!(dir, PathBuf::from(custom));
+    }
+
+    #[test]
+    #[serial]
+    fn test_claude_config_dir_ignores_empty_env_var() {
+        unsafe {
+            std::env::set_var("CLAUDE_CONFIG_DIR", "");
+        }
+        let dir = claude_config_dir();
+        unsafe {
+            std::env::remove_var("CLAUDE_CONFIG_DIR");
+        }
+        assert_eq!(dir, home_dir().join(".claude"));
+    }
+
+    /// Regression test for #1039: write_atomic should create parent directories
+    /// if they do not exist, preventing "No such file or directory" errors.
+    #[test]
+    fn test_write_atomic_creates_parent_dirs() {
+        let temp_dir = TempDir::new().unwrap();
+        // Path whose parent directory does NOT yet exist
+        let file_path = temp_dir
+            .path()
+            .join("nonexistent")
+            .join("subdir")
+            .join("test.json");
+        assert!(!file_path.parent().unwrap().exists());
+
+        write_atomic(&file_path, b"{\"key\": \"value\"}").unwrap();
+
+        assert!(file_path.exists());
+        let content = fs::read_to_string(&file_path).unwrap();
+        assert_eq!(content, "{\"key\": \"value\"}");
+    }
+
+    /// Regression test for #1039: ensure_parent_dir handles nested missing dirs.
+    #[test]
+    fn test_ensure_parent_dir_creates_nested() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir
+            .path()
+            .join("a")
+            .join("b")
+            .join("c")
+            .join("file.txt");
+        assert!(!temp_dir.path().join("a").exists());
+
+        ensure_parent_dir(&file_path).unwrap();
+
+        assert!(file_path.parent().unwrap().exists());
+    }
+
+    /// Regression test for #1039: ensure_parent_dir is a no-op for root-level paths.
+    #[test]
+    fn test_ensure_parent_dir_no_parent() {
+        // A path with no parent component should not error
+        let path = Path::new("standalone_file.txt");
+        ensure_parent_dir(path).unwrap();
     }
 }
