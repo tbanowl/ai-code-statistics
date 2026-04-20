@@ -2247,7 +2247,7 @@ async fn get_checkpoint_entries(
         .and_then(|c| c.tree().ok())
         .map(|t| t.id().to_string());
 
-    const MAX_CONCURRENT: usize = 30;
+    const MAX_CONCURRENT: usize = if cfg!(windows) { 4 } else { 30 };
 
     // Create a semaphore to limit concurrent tasks
     let semaphore = Arc::new(smol::lock::Semaphore::new(MAX_CONCURRENT));

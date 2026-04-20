@@ -420,12 +420,6 @@ fn handle_checkpoint(args: &[String]) {
         }
     }
 
-    tracing::debug!(
-        "Checkpoint arguments: {:?}, hook_input: {:?}",
-        args,
-        hook_input
-    );
-
     let mut agent_run_result = None;
     // Handle preset arguments after parsing all flags
     if !args.is_empty() {
@@ -865,8 +859,6 @@ fn handle_checkpoint(args: &[String]) {
 
         observability::spawn_background_flush();
     }
-
-    tracing::debug!("Agent run result: {:?}", agent_run_result);
 
     let final_working_dir = agent_run_result
         .as_ref()

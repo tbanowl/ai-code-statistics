@@ -1019,7 +1019,7 @@ fn proxy_to_git(
 
     #[cfg(not(unix))]
     match child {
-        Ok(mut child) => {
+        Ok(child) => {
             #[cfg(windows)]
             {
                 let status = wait_for_git_with_retry_windows(
