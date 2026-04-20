@@ -1091,7 +1091,7 @@ fn wait_for_git_with_retry_windows(
                 }
 
                 let next_attempt = attempt + 2;
-                debug_log(&format!(
+                tracing::debug!(&format!(
                     "git command timed out after {}ms on Windows; retrying attempt {}/{}, git args: {:?}",
                     timeout.as_millis(),
                     next_attempt,
@@ -1134,7 +1134,7 @@ fn wait_for_git_process_windows(
 
         if Instant::now() >= deadline {
             let pid = child.id();
-            debug_log(&format!(
+            tracing::debug!(&format!(
                 "git process {} timed out after {}ms on Windows; terminating process tree",
                 pid,
                 timeout.as_millis()
@@ -1146,7 +1146,7 @@ fn wait_for_git_process_windows(
 
             match child.wait() {
                 Ok(status) => {
-                    debug_log(&format!(
+                    tracing::debug!(&format!(
                         "git process {} terminated after timeout with status {}",
                         pid, status
                     ));
