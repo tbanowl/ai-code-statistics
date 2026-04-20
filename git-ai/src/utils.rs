@@ -212,7 +212,6 @@ impl LockFile {
 #[cfg(unix)]
 impl Drop for LockFile {
     fn drop(&mut self) {
-        
         unsafe { libc::flock(self.fd, libc::LOCK_UN) };
     }
 }

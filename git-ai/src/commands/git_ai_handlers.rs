@@ -129,6 +129,9 @@ pub fn handle_git_ai(args: &[String]) {
         "status" => {
             commands::status::handle_status(&args[1..]);
         }
+        "checkpoint-recover" => {
+            commands::checkpoint_recover::handle_checkpoint_recover(&args[1..]);
+        }
         "show" => {
             commands::show::handle_show(&args[1..]);
         }
@@ -417,7 +420,11 @@ fn handle_checkpoint(args: &[String]) {
         }
     }
 
-    tracing::debug!("Checkpoint arguments: {:?}, hook_input: {:?}", args, hook_input);
+    tracing::debug!(
+        "Checkpoint arguments: {:?}, hook_input: {:?}",
+        args,
+        hook_input
+    );
 
     let mut agent_run_result = None;
     // Handle preset arguments after parsing all flags

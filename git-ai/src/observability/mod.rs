@@ -143,8 +143,8 @@ fn append_envelope(envelope: LogEnvelope) {
         };
         if let Some(te) = telemetry_envelope {
             crate::daemon::telemetry_handle::submit_telemetry(vec![te]);
-        }        
-        
+        }
+
         return;
     }
 
@@ -173,8 +173,6 @@ fn append_envelope(envelope: LogEnvelope) {
         }
     }
 }
-
-
 
 /// Submit telemetry envelopes via the best available path:
 /// 1. External daemon control socket (wrapper processes)
@@ -238,7 +236,6 @@ pub fn log_performance(
         tags,
     };
     append_envelope(LogEnvelope::Performance(envelope));
-    
 }
 
 /// Log a message to Sentry (info, warning, etc.) (via daemon telemetry worker)
@@ -329,7 +326,6 @@ fn should_spawn_background_flush() -> bool {
     let _ = std::fs::write(&marker, now_secs.to_string());
     true
 }
-
 
 /// Log a batch of metric events (via daemon telemetry worker).
 ///

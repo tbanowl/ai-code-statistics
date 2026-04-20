@@ -18,6 +18,7 @@ fn setup() {
     let test_flags = FeatureFlags {
         rewrite_stash: true,
         inter_commit_move: true,
+        checkpoint_tasks: false,
         auth_keyring: false,
         async_mode: false,
         git_hooks_enabled: false,

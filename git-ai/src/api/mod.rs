@@ -1,8 +1,8 @@
+pub mod authorship_notes;
 pub mod bundle;
 pub mod cas;
 pub mod client;
 pub mod metrics;
-pub mod authorship_notes;
 pub mod types;
 
 pub use client::{ApiClient, ApiContext};

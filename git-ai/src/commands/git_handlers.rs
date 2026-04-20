@@ -223,18 +223,27 @@ pub fn handle_git(args: &[String]) {
     let find_repository_start = Instant::now();
     let mut repository_option = find_repository(&parsed_args.global_args).ok();
     let find_repository_duration = find_repository_start.elapsed();
-    tracing::debug!("[handle-git] find_repository {}ms", find_repository_duration.as_millis());
+    tracing::debug!(
+        "[handle-git] find_repository {}ms",
+        find_repository_duration.as_millis()
+    );
 
     let check_hooks_start = Instant::now();
     let has_repo = repository_option.is_some();
 
     let get_config_start = Instant::now();
     let config = config::Config::get();
-    tracing::debug!("[handle-git] get_config_start {}ms", get_config_start.elapsed().as_millis());
+    tracing::debug!(
+        "[handle-git] get_config_start {}ms",
+        get_config_start.elapsed().as_millis()
+    );
 
     let is_allowed_repository_start = Instant::now();
     let skip_hooks = !config.is_allowed_repository(&repository_option);
-    tracing::debug!("[handle-git] is_allowed_repository_start {}ms", is_allowed_repository_start.elapsed().as_millis());
+    tracing::debug!(
+        "[handle-git] is_allowed_repository_start {}ms",
+        is_allowed_repository_start.elapsed().as_millis()
+    );
 
     if skip_hooks {
         tracing::debug!(
@@ -254,7 +263,10 @@ pub fn handle_git(args: &[String]) {
         exit_with_status(exit_status);
     }
     let check_hooks_duration = check_hooks_start.elapsed();
-    tracing::debug!("[handle-git] check_hooks_duration {}ms", check_hooks_duration.as_millis());
+    tracing::debug!(
+        "[handle-git] check_hooks_duration {}ms",
+        check_hooks_duration.as_millis()
+    );
 
     // run with hooks
     let exit_status = if !parsed_args.is_help && has_repo && !skip_hooks {
@@ -275,7 +287,10 @@ pub fn handle_git(args: &[String]) {
             parsed_args = resolved;
         }
         let resolve_alias_invocation_duration = resolve_alias_invocation_start.elapsed();
-        tracing::debug!("[handle-git] resolve_alias_invocation_start {}ms", resolve_alias_invocation_duration.as_millis());
+        tracing::debug!(
+            "[handle-git] resolve_alias_invocation_start {}ms",
+            resolve_alias_invocation_duration.as_millis()
+        );
 
         let pre_command_start = Instant::now();
         run_pre_command_hooks(&mut command_hooks_context, &mut parsed_args, repository);
@@ -328,12 +343,11 @@ pub fn handle_git(args: &[String]) {
 
 fn is_command_skip_hooks(parsed_args: &ParsedGitInvocation) -> bool {
     return match parsed_args.command.as_deref() {
-        Some("commit") | Some("pull") | Some("push") | Some("reset") | Some("merge") 
-        | Some("rebase") | Some("cherry-pick") | Some("stash") | Some("checkout") 
-        | Some("switch") | Some("update-ref") | Some("clone") 
-        => false,
-        _ => true
-    }
+        Some("commit") | Some("pull") | Some("push") | Some("reset") | Some("merge")
+        | Some("rebase") | Some("cherry-pick") | Some("stash") | Some("checkout")
+        | Some("switch") | Some("update-ref") | Some("clone") => false,
+        _ => true,
+    };
 }
 
 /// Handle alias invocations

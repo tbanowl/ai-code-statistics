@@ -38,8 +38,7 @@ fn command_tracing_dir() -> Option<PathBuf> {
 fn command_tracing_log_path(command_kind: &str) -> Option<PathBuf> {
     // yyyy-mm-dd
     let date = chrono::Local::now().format("%Y-%m-%d").to_string();
-    command_tracing_dir()
-        .map(|dir| dir.join(format!("{}-{}.log", command_kind, date)))
+    command_tracing_dir().map(|dir| dir.join(format!("{}-{}.log", command_kind, date)))
 }
 
 pub fn init_command_tracing(command_kind: &'static str) {

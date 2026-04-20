@@ -5,6 +5,26 @@ use crate::git::cli_parser::{ParsedGitInvocation, RebaseArgsSummary, is_dry_run}
 use crate::git::repository::Repository;
 use crate::git::rewrite_log::RewriteLogEvent;
 
+fn invalidate_checkpoint_tasks_on_rebase_complete(repository: &Repository, reason: &str) {
+    if let Ok(repo_workdir) = repository
+        .workdir()
+        .map(|path| path.to_string_lossy().to_string())
+        && let Ok(new_epoch) = crate::checkpoint_tasks::lineage::bump_epoch(
+            &repo_workdir,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis(),
+        )
+    {
+        let _ = crate::checkpoint_tasks::lineage::obsolete_tasks_from_old_epochs(
+            &repo_workdir,
+            new_epoch,
+            reason,
+        );
+    }
+}
+
 pub fn pre_rebase_hook(
     parsed_args: &ParsedGitInvocation,
     repository: &mut Repository,
@@ -244,6 +264,8 @@ fn process_completed_rebase(
         tracing::debug!("Rebase resulted in no changes (fast-forward or empty)");
         return;
     }
+
+    invalidate_checkpoint_tasks_on_rebase_complete(repository, "rebase");
 
     // Build commit mappings
     tracing::debug!(
@@ -488,7 +510,12 @@ fn summarize_rebase_args(parsed_args: &ParsedGitInvocation) -> RebaseArgsSummary
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::checkpoint_tasks::store;
+    use crate::checkpoint_tasks::types::{CheckpointTaskRecord, CheckpointTaskState};
     use crate::git::cli_parser::ParsedGitInvocation;
+    use crate::git::find_repository_in_path;
+    use crate::git::test_utils::TmpRepo;
+    use serial_test::serial;
 
     /// Build a `ParsedGitInvocation` whose `command` is "rebase" and whose
     /// `command_args` are the supplied strings.
@@ -581,5 +608,93 @@ mod tests {
         let summary = summarize_rebase_args(&parsed);
         assert!(!summary.is_control_mode);
         assert_eq!(summary.positionals, vec!["origin/main".to_string()]);
+    }
+
+    fn pending_task(repo: &TmpRepo, task_id: &str, base_commit: String) -> CheckpointTaskRecord {
+        CheckpointTaskRecord {
+            task_id: task_id.to_string(),
+            repo_workdir: repo
+                .gitai_repo()
+                .workdir()
+                .unwrap()
+                .to_string_lossy()
+                .to_string(),
+            base_commit,
+            lineage_epoch: crate::checkpoint_tasks::lineage::get_current_epoch(
+                repo.gitai_repo()
+                    .workdir()
+                    .unwrap()
+                    .to_string_lossy()
+                    .as_ref(),
+            )
+            .unwrap(),
+            state: CheckpointTaskState::Ready,
+            dedupe_key: format!("dedupe-{}", task_id),
+            kind: "human".to_string(),
+            author: "author".to_string(),
+            payload_ref: repo
+                .path()
+                .join(format!("{}.json", task_id))
+                .to_string_lossy()
+                .to_string(),
+            explicit_paths: vec!["lines.md".to_string()],
+            is_pre_commit: false,
+            captured_at_ms: 1,
+            processing_started_at_ms: None,
+            applied_at_ms: None,
+            completed_at_ms: None,
+            obsolete_at_ms: None,
+            attempts: 0,
+            last_error: None,
+            next_retry_at_ms: None,
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_process_completed_rebase_obsoletes_pending_tasks_and_bumps_epoch() {
+        let (repo, mut file, _) = TmpRepo::new_with_base_commit().unwrap();
+        let default_branch = repo.repo().head().unwrap().shorthand().unwrap().to_string();
+
+        repo.create_branch("feature").unwrap();
+        file.append("feature line\n").unwrap();
+        repo.commit_with_message("feature commit").unwrap();
+        let original_head = repo.get_head_commit_sha().unwrap();
+
+        repo.switch_branch(&default_branch).unwrap();
+        file.append("main line\n").unwrap();
+        repo.commit_with_message("main commit").unwrap();
+        let onto_head = repo.get_head_commit_sha().unwrap();
+
+        repo.switch_branch("feature").unwrap();
+
+        let repo_workdir = repo
+            .gitai_repo()
+            .workdir()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        store::create_task(&pending_task(
+            &repo,
+            "rebase-pending",
+            original_head.clone(),
+        ))
+        .unwrap();
+        let epoch_before =
+            crate::checkpoint_tasks::lineage::get_current_epoch(&repo_workdir).unwrap();
+
+        repo.rebase_onto(&default_branch, &default_branch).unwrap();
+
+        let mut repository = find_repository_in_path(repo.path().to_str().unwrap()).unwrap();
+        let parsed = make_rebase_invocation(&[&default_branch]);
+        process_completed_rebase(&mut repository, &original_head, Some(&onto_head), &parsed);
+
+        let epoch_after =
+            crate::checkpoint_tasks::lineage::get_current_epoch(&repo_workdir).unwrap();
+        assert_eq!(epoch_after, epoch_before + 1);
+
+        let task = store::get_task("rebase-pending").unwrap().unwrap();
+        assert_eq!(task.state, CheckpointTaskState::Obsolete);
+        assert_eq!(task.last_error.as_deref(), Some("rebase"));
     }
 }

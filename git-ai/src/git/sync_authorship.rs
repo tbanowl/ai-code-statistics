@@ -116,18 +116,13 @@ pub fn fetch_missing_notes_for_commits(repository: &Repository, source_commits: 
 
     if let Ok(remotes) = repository.remotes_with_urls() {
         for (remote_name, _) in remotes {
-            tracing::debug!(
-                "Attempting safe notes fetch from remote {}",
-                remote_name
-            );
+            tracing::debug!("Attempting safe notes fetch from remote {}", remote_name);
             match fetch_authorship_notes(repository, &remote_name) {
-                Ok(_) => tracing::debug!(
-                    "✓ Fetched and merged notes from remote {}",
-                    remote_name
-                ),
+                Ok(_) => tracing::debug!("✓ Fetched and merged notes from remote {}", remote_name),
                 Err(e) => tracing::debug!(
                     "Notes fetch from remote {} failed (best-effort): {}",
-                    remote_name, e
+                    remote_name,
+                    e
                 ),
             }
         }

@@ -1,7 +1,8 @@
 use crate::api::client::ApiClient;
 use crate::api::types::{
-    ApiErrorResponse, AuthorshipNotesBatchRequest, AuthorshipBatchResponse, AuthorshipNotesListRequest, AuthorshipNotesListResponse,
-    AuthorshipNotesPushRequest, AuthorshipNotesPushResponse,
+    ApiErrorResponse, AuthorshipBatchResponse, AuthorshipNotesBatchRequest,
+    AuthorshipNotesListRequest, AuthorshipNotesListResponse, AuthorshipNotesPushRequest,
+    AuthorshipNotesPushResponse,
 };
 use crate::error::GitAiError;
 
@@ -12,8 +13,13 @@ fn parse_api_error_message(body: &str, fallback: &str) -> String {
 }
 
 impl ApiClient {
-    pub fn authorship_notes_list(&self, request: &AuthorshipNotesListRequest) -> Result<AuthorshipNotesListResponse, GitAiError> {
-        let response = self.context().post_json("/worker/authorship_notes/list", request)?;
+    pub fn authorship_notes_list(
+        &self,
+        request: &AuthorshipNotesListRequest,
+    ) -> Result<AuthorshipNotesListResponse, GitAiError> {
+        let response = self
+            .context()
+            .post_json("/worker/authorship_notes/list", request)?;
         let status_code = response.status_code;
         let body = response
             .as_str()
@@ -41,7 +47,9 @@ impl ApiClient {
         &self,
         request: &AuthorshipNotesBatchRequest,
     ) -> Result<AuthorshipBatchResponse, GitAiError> {
-        let response = self.context().post_json("/worker/authorship_notes/batch", request)?;
+        let response = self
+            .context()
+            .post_json("/worker/authorship_notes/batch", request)?;
         let status_code = response.status_code;
         let body = response
             .as_str()
@@ -65,8 +73,13 @@ impl ApiClient {
         Ok(parsed)
     }
 
-    pub fn authorship_notes_push(&self, request: &AuthorshipNotesPushRequest) -> Result<AuthorshipNotesPushResponse, GitAiError> {
-        let response = self.context().post_json("/worker/authorship_notes/push", request)?;
+    pub fn authorship_notes_push(
+        &self,
+        request: &AuthorshipNotesPushRequest,
+    ) -> Result<AuthorshipNotesPushResponse, GitAiError> {
+        let response = self
+            .context()
+            .post_json("/worker/authorship_notes/push", request)?;
         let status_code = response.status_code;
         let body = response
             .as_str()
