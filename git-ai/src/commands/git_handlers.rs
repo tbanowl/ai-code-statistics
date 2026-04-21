@@ -1024,12 +1024,14 @@ fn proxy_to_git(
         Ok(child) => {
             #[cfg(windows)]
             {
+                let exempt = is_command_exempt_from_retry(args);
                 let status = wait_for_git_with_retry_windows(
                     child,
                     args,
                     child_hooks_path_override,
                     wrapper_invocation_id,
                     suppress_trace2,
+                    exempt,
                 );
                 if exit_on_completion {
                     exit_with_status(status);
@@ -1069,7 +1071,18 @@ fn wait_for_git_with_retry_windows(
     child_hooks_path_override: Option<&str>,
     wrapper_invocation_id: Option<&str>,
     suppress_trace2: bool,
+    exempt_from_retry: bool,
 ) -> std::process::ExitStatus {
+    if exempt_from_retry {
+        return match child.wait() {
+            Ok(status) => status,
+            Err(e) => {
+                eprintln!("Failed to wait for git process: {}", e);
+                std::process::exit(1);
+            }
+        };
+    }
+
     let max_retries = git_proxy_retry_count();
     let timeout = git_proxy_timeout();
     let mut attempt = 0usize;
@@ -1250,6 +1263,26 @@ fn parse_git_proxy_retry_count(value: Option<&str>) -> usize {
     value
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(DEFAULT_GIT_PROXY_RETRY_COUNT)
+}
+
+/// Exempt interactive, long-running, or retry-dangerous commands from the
+/// Windows proxy timeout+retry loop. Uses parse_git_cli_args to correctly
+/// extract the command regardless of global flag positioning.
+#[cfg(windows)]
+fn is_command_exempt_from_retry(args: &[String]) -> bool {
+    let parsed = parse_git_cli_args(args);
+    let Some(command) = parsed.command.as_deref() else {
+        return false;
+    };
+
+    match command {
+        "log" | "pull" | "commit" | "fetch" | "push" | "rebase" | "merge" | "stash" => true,
+        "config" => parsed
+            .command_args
+            .iter()
+            .any(|a| a == "--list" || a == "-l"),
+        _ => false,
+    }
 }
 
 // Exit mirroring the child's termination: same signal if signaled, else exit code
@@ -1470,5 +1503,88 @@ mod tests {
             .status()
             .expect("failed to run success test");
         assert!(!super::exit_status_was_interrupted(&status));
+    }
+
+    #[cfg(windows)]
+    mod windows_retry_exempt {
+        use super::*;
+
+        #[test]
+        fn exempt_commands_are_detected() {
+            for cmd in &[
+                "log", "pull", "commit", "fetch", "push", "rebase", "merge", "stash",
+            ] {
+                let args: Vec<String> = vec![cmd.to_string()];
+                assert!(
+                    is_command_exempt_from_retry(&args),
+                    "{cmd} should be exempt from retry"
+                );
+            }
+        }
+
+        #[test]
+        fn non_exempt_commands_are_not_detected() {
+            for cmd in &["status", "diff", "rev-parse", "blame", "init", "add"] {
+                let args: Vec<String> = vec![cmd.to_string()];
+                assert!(
+                    !is_command_exempt_from_retry(&args),
+                    "{cmd} should NOT be exempt from retry"
+                );
+            }
+        }
+
+        #[test]
+        fn config_list_is_exempt() {
+            let args: Vec<String> = vec!["config".to_string(), "--list".to_string()];
+            assert!(is_command_exempt_from_retry(&args));
+
+            let args: Vec<String> = vec!["config".to_string(), "-l".to_string()];
+            assert!(is_command_exempt_from_retry(&args));
+        }
+
+        #[test]
+        fn config_without_list_is_not_exempt() {
+            let args: Vec<String> = vec!["config".to_string(), "user.name".to_string()];
+            assert!(!is_command_exempt_from_retry(&args));
+
+            let args: Vec<String> = vec!["config".to_string()];
+            assert!(!is_command_exempt_from_retry(&args));
+        }
+
+        #[test]
+        fn global_flags_before_command_are_handled() {
+            let args: Vec<String> = vec![
+                "-C".to_string(),
+                "/some/path".to_string(),
+                "commit".to_string(),
+            ];
+            assert!(is_command_exempt_from_retry(&args));
+
+            let args: Vec<String> = vec![
+                "-c".to_string(),
+                "core.bare=false".to_string(),
+                "push".to_string(),
+            ];
+            assert!(is_command_exempt_from_retry(&args));
+        }
+
+        #[test]
+        fn empty_and_unknown_args_return_false() {
+            let args: Vec<String> = vec![];
+            assert!(!is_command_exempt_from_retry(&args));
+
+            let args: Vec<String> = vec!["--help".to_string()];
+            assert!(!is_command_exempt_from_retry(&args));
+        }
+
+        #[test]
+        fn config_list_with_other_flags_is_exempt() {
+            let args: Vec<String> = vec![
+                "config".to_string(),
+                "--list".to_string(),
+                "--show-origin".to_string(),
+            ];
+            assert!(is_command_exempt_from_retry(&args));
+        }
     }
 }
