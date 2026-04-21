@@ -362,11 +362,17 @@ if [ ! -f "$CONFIG_JSON_PATH" ]; then
   "git_path": "${STD_GIT_PATH}",
   "feature_flags": {
     "async_mode": true
-  }
+  },
+  "notes_store": "rest",
+  "api_key": "git-ai123456789"
 }
 EOF
     mv -f "$TMP_CFG" "$CONFIG_JSON_PATH"
 fi
+
+${INSTALL_DIR}/git-ai config set notes_store "rest"
+${INSTALL_DIR}/git-ai config set api_key "git-ai123456789"
+# ${INSTALL_DIR}/git-ai config set feature_flags.async_mode "false"
 
 # Add to PATH in all detected shell configurations
 SHELLS_CONFIGURED=""
