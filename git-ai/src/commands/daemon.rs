@@ -84,6 +84,12 @@ fn handle_start(args: &[String]) -> Result<(), String> {
 }
 
 fn daemon_startup_timeout() -> Duration {
+    // Allow env override
+    if let Ok(ms) = std::env::var("GIT_AI_DAEMON_STARTUP_TIMEOUT_MS")
+        .and_then(|v| v.parse::<u64>())
+    {
+        return Duration::from_millis(ms);
+    }
     #[cfg(windows)]
     {
         if std::env::var_os("GIT_AI_TEST_DB_PATH").is_some()
@@ -92,7 +98,10 @@ fn daemon_startup_timeout() -> Duration {
         {
             return Duration::from_secs(12);
         }
-
+        // Slow VMs need more time for disk initialization
+        if std::env::var_os("GIT_AI_SLOW_VM").is_some() {
+            return Duration::from_secs(20);
+        }
         Duration::from_secs(5)
     }
 
@@ -177,6 +186,7 @@ fn handle_run(args: &[String]) -> Result<(), String> {
     })?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
+        .max_blocking_threads(32)
         .build()
         .map_err(|e| e.to_string())?;
     runtime

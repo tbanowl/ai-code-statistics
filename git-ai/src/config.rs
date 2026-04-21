@@ -170,8 +170,6 @@ static TEST_FEATURE_FLAGS_OVERRIDE: RwLock<Option<FeatureFlags>> = RwLock::new(N
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ConfigPatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub git_path: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exclude_prompts_in_repositories: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telemetry_oss_disabled: Option<bool>,
@@ -1069,9 +1067,6 @@ fn apply_test_config_patch(config: &mut Config) {
     if let Ok(patch_json) = env::var("GIT_AI_TEST_CONFIG_PATCH")
         && let Ok(patch) = serde_json::from_str::<ConfigPatch>(&patch_json)
     {
-        if let Some(git_path) = patch.git_path {
-            config.git_path = git_path;
-        }
         if let Some(patterns) = patch.exclude_prompts_in_repositories {
             config.exclude_prompts_in_repositories = patterns
                     .into_iter()
@@ -1136,7 +1131,6 @@ fn apply_test_config_patch(config: &mut Config) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serial_test::serial;
 
     fn create_test_config(
         allow_repositories: Vec<String>,
@@ -1175,27 +1169,6 @@ mod tests {
     fn test_notes_store_defaults_to_git_in_test_helpers() {
         let config = create_test_config(vec![], vec![]);
         assert_eq!(config.notes_store(), "rest");
-    }
-
-    #[test]
-    #[serial]
-    fn test_apply_test_config_patch_overrides_git_path() {
-        let mut config = create_test_config(vec![], vec![]);
-        let patch = ConfigPatch {
-            git_path: Some("/opt/custom/git".to_string()),
-            ..Default::default()
-        };
-
-        let patch_json = serde_json::to_string(&patch).unwrap();
-        unsafe {
-            env::set_var("GIT_AI_TEST_CONFIG_PATCH", &patch_json);
-        }
-        apply_test_config_patch(&mut config);
-        unsafe {
-            env::remove_var("GIT_AI_TEST_CONFIG_PATCH");
-        }
-
-        assert_eq!(config.git_cmd(), "/opt/custom/git");
     }
 
     #[test]

@@ -26,8 +26,6 @@ use crate::observability::wrapper_performance_targets::log_performance_target_if
 use crate::utils::CREATE_NO_WINDOW;
 #[cfg(windows)]
 use crate::utils::is_interactive_terminal;
-#[cfg(windows)]
-use crate::utils::kill_process_tree_windows;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 #[cfg(unix)]
@@ -753,6 +751,7 @@ fn maybe_show_async_post_commit_stats(parsed: &ParsedGitInvocation, repo: &Repos
 
     // Use a longer timeout under test to avoid flakiness on saturated CI machines.
     // GIT_AI_POST_COMMIT_TIMEOUT_MS allows tests to override the timeout.
+    // On slow VMs (GIT_AI_SLOW_VM=1), default increases from 500ms to 10s.
     let timeout = if let Some(ms) = std::env::var("GIT_AI_POST_COMMIT_TIMEOUT_MS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
@@ -760,6 +759,8 @@ fn maybe_show_async_post_commit_stats(parsed: &ParsedGitInvocation, repo: &Repos
         std::time::Duration::from_millis(ms)
     } else if std::env::var_os("GIT_AI_TEST_DB_PATH").is_some() {
         std::time::Duration::from_secs(20)
+    } else if std::env::var_os("GIT_AI_SLOW_VM").is_some() {
+        std::time::Duration::from_secs(10)
     } else {
         std::time::Duration::from_millis(500)
     };
@@ -1021,7 +1022,7 @@ fn proxy_to_git(
 
     #[cfg(not(unix))]
     match child {
-        Ok(child) => {
+        Ok(mut child) => {
             #[cfg(windows)]
             {
                 let status = wait_for_git_with_retry_windows(
@@ -1093,7 +1094,7 @@ fn wait_for_git_with_retry_windows(
                 }
 
                 let next_attempt = attempt + 2;
-                tracing::debug!(&format!(
+                debug_log(&format!(
                     "git command timed out after {}ms on Windows; retrying attempt {}/{}, git args: {:?}",
                     timeout.as_millis(),
                     next_attempt,
@@ -1136,7 +1137,7 @@ fn wait_for_git_process_windows(
 
         if Instant::now() >= deadline {
             let pid = child.id();
-            tracing::debug!(&format!(
+            debug_log(&format!(
                 "git process {} timed out after {}ms on Windows; terminating process tree",
                 pid,
                 timeout.as_millis()
@@ -1148,7 +1149,7 @@ fn wait_for_git_process_windows(
 
             match child.wait() {
                 Ok(status) => {
-                    tracing::debug!(&format!(
+                    debug_log(&format!(
                         "git process {} terminated after timeout with status {}",
                         pid, status
                     ));
@@ -1220,6 +1221,31 @@ fn spawn_git_child_windows(
             std::process::exit(1);
         }
     }
+}
+
+#[cfg(windows)]
+fn kill_process_tree_windows(pid: u32) -> Result<(), String> {
+    let output = Command::new("taskkill")
+        .args(["/F", "/T", "/PID", &pid.to_string()])
+        .output()
+        .map_err(|e| format!("failed to run taskkill: {}", e))?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr_trimmed = stderr.trim();
+    if stderr_trimmed.contains("not found")
+        || stderr_trimmed.contains("There is no running instance")
+    {
+        return Ok(());
+    }
+
+    Err(format!(
+        "taskkill /F /T /PID {} failed: {}",
+        pid, stderr_trimmed
+    ))
 }
 
 #[cfg(windows)]

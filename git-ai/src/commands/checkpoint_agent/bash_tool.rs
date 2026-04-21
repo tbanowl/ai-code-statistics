@@ -58,19 +58,35 @@ std::thread_local! {
 }
 
 /// Return the walk timeout, honouring any test-time thread-local override.
+/// On slow VMs (GIT_AI_SLOW_VM=1), this is multiplied by 4 to avoid premature
+/// fallback on slow disks. Can be overridden via GIT_AI_WALK_TIMEOUT_MS.
 fn effective_walk_timeout_ms() -> u64 {
     #[cfg(any(test, feature = "test-support"))]
     if let Some(v) = TEST_WALK_TIMEOUT_MS.with(|c| c.get()) {
         return v;
     }
+    if let Ok(v) = std::env::var("GIT_AI_WALK_TIMEOUT_MS").and_then(|v| v.parse::<u64>()) {
+        return v;
+    }
+    if std::env::var_os("GIT_AI_SLOW_VM").is_some() {
+        return WALK_TIMEOUT_MS * 4; // 1500 → 6000ms
+    }
     WALK_TIMEOUT_MS
 }
 
 /// Return the hook timeout, honouring any test-time thread-local override.
+/// On slow VMs (GIT_AI_SLOW_VM=1), this is multiplied by 4. Can be overridden
+/// via GIT_AI_HOOK_TIMEOUT_MS.
 fn effective_hook_timeout_ms() -> u64 {
     #[cfg(any(test, feature = "test-support"))]
     if let Some(v) = TEST_HOOK_TIMEOUT_MS.with(|c| c.get()) {
         return v;
+    }
+    if let Ok(v) = std::env::var("GIT_AI_HOOK_TIMEOUT_MS").and_then(|v| v.parse::<u64>()) {
+        return v;
+    }
+    if std::env::var_os("GIT_AI_SLOW_VM").is_some() {
+        return HOOK_TIMEOUT_MS * 4; // 4000 → 16000ms
     }
     HOOK_TIMEOUT_MS
 }
@@ -848,28 +864,28 @@ pub fn save_snapshot(snapshot: &StatSnapshot) -> Result<(), GitAiError> {
     Ok(())
 }
 
-/// Load a pre-snapshot from the cache and remove it (consume).
-pub fn load_and_consume_snapshot(
+/// Load a pre-snapshot from the cache.
+/// The snapshot file is NOT deleted immediately — the caller is responsible
+/// for deleting it after successful processing. This ensures the snapshot
+/// remains available for retry or commit replay if processing fails.
+pub fn load_snapshot_if_exists(
     repo_root: &Path,
     invocation_key: &str,
-) -> Result<Option<StatSnapshot>, GitAiError> {
+) -> Result<Option<(StatSnapshot, PathBuf)>, GitAiError> {
     let cache_dir = snapshot_cache_dir(repo_root)?;
     let filename = sanitize_key(invocation_key);
     let path = cache_dir.join(format!("{}.json", filename));
 
-    // Read and then delete atomically: skip the exists() check to avoid a
-    // TOCTOU race where a concurrent post-hook deletes the file between the
-    // check and the read.  NotFound after the read means it was already
-    // consumed; any other error is a real failure.
+    // Read without the exists() check to avoid TOCTOU race.
+    // NotFound means no pre-snapshot exists yet (normal for new session).
+    // Any other error is a real failure.
     let data = match fs::read(&path) {
         Ok(d) => d,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(GitAiError::IoError(e)),
     };
-    let snapshot: StatSnapshot = serde_json::from_slice(&data).map_err(GitAiError::JsonError)?;
-
-    // Consume: remove the file after a successful read.
-    let _ = fs::remove_file(&path);
+    let snapshot: StatSnapshot =
+        serde_json::from_slice(&data).map_err(GitAiError::JsonError)?;
 
     tracing::debug!(
         "Loaded pre-snapshot: {} ({} entries)",
@@ -877,7 +893,10 @@ pub fn load_and_consume_snapshot(
         snapshot.entries.len()
     );
 
-    Ok(Some(snapshot))
+    // NOTE: do NOT delete the file here. Let the caller delete it only after
+    // all processing (post-snapshot, diff, checkpoint) succeeds. If the caller
+    // fails, the snapshot persists and can be retried or used by commit replay.
+    Ok(Some((snapshot, path)))
 }
 
 /// Clean up stale snapshots older than SNAPSHOT_STALE_SECS.
@@ -1589,10 +1608,10 @@ pub fn handle_bash_tool(
         }
         HookEvent::PostToolUse => {
             // Try to load the pre-snapshot
-            let pre_snapshot = load_and_consume_snapshot(repo_root, &invocation_key)?;
+            let pre_snapshot_result = load_snapshot_if_exists(repo_root, &invocation_key)?;
 
-            match pre_snapshot {
-                Some(pre) => {
+            match pre_snapshot_result {
+                Some((pre, pre_snapshot_path)) => {
                     if hook_start.elapsed() >= hook_timeout {
                         hook_timeout_fallback!("post-hook before snapshot");
                     }
@@ -1620,6 +1639,13 @@ pub fn handle_bash_tool(
                     match snapshot(repo_root, session_id, tool_use_id, post_wm.as_ref()) {
                         Ok(post) => {
                             let diff_result = diff(&pre, &post);
+
+                            // Snapshot was successfully used — delete the pre-snapshot file now.
+                            // This happens after the diff so the snapshot had a chance to
+                            // contribute to attribution. If post-processing had failed,
+                            // the snapshot file would remain and could be retried or used
+                            // by commit replay.
+                            let _ = fs::remove_file(&pre_snapshot_path);
 
                             if diff_result.is_empty() {
                                 tracing::debug!(
@@ -1664,17 +1690,45 @@ pub fn handle_bash_tool(
                     }
                 }
                 None => {
-                    // Pre-snapshot lost (process restart, etc.) — return fallback.
-                    // We do not call git status here: it is extremely slow on large
-                    // monorepos and cannot be relied on at this point in the flow.
-                    tracing::debug!(
-                        "Pre-snapshot not found for {}; returning fallback (no git status)",
-                        invocation_key
-                    );
-                    Ok(BashToolResult {
-                        action: BashCheckpointAction::Fallback,
-                        captured_checkpoint: None,
-                    })
+                    // Pre-snapshot lost (process restart, etc.) — try git_status_fallback
+                    // as a last resort to recover attribution. Only fall through to bare
+                    // Fallback if git status also fails.
+                    match git_status_fallback(repo_root) {
+                        Ok(changed_files) if !changed_files.is_empty() => {
+                            tracing::info!(
+                                "Pre-snapshot not found for {}; recovered {} changed files via git_status_fallback",
+                                invocation_key,
+                                changed_files.len()
+                            );
+                            Ok(BashToolResult {
+                                action: BashCheckpointAction::Checkpoint(changed_files),
+                                captured_checkpoint: None,
+                            })
+                        }
+                        Ok(_) => {
+                            // git status succeeded but found no changes — nothing to do
+                            tracing::debug!(
+                                "Pre-snapshot not found for {}; git_status_fallback found no changes",
+                                invocation_key
+                            );
+                            Ok(BashToolResult {
+                                action: BashCheckpointAction::NoChanges,
+                                captured_checkpoint: None,
+                            })
+                        }
+                        Err(e) => {
+                            // Both snapshot and git status failed — last resort fallback
+                            tracing::warn!(
+                                "Pre-snapshot not found for {} and git_status_fallback failed: {}",
+                                invocation_key,
+                                e
+                            );
+                            Ok(BashToolResult {
+                                action: BashCheckpointAction::Fallback,
+                                captured_checkpoint: None,
+                            })
+                        }
+                    }
                 }
             }
         }

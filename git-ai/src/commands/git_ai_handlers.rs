@@ -129,9 +129,6 @@ pub fn handle_git_ai(args: &[String]) {
         "status" => {
             commands::status::handle_status(&args[1..]);
         }
-        "checkpoint-recover" => {
-            commands::checkpoint_recover::handle_checkpoint_recover(&args[1..]);
-        }
         "show" => {
             commands::show::handle_show(&args[1..]);
         }
@@ -395,22 +392,22 @@ fn handle_checkpoint(args: &[String]) {
                         let mut buffer = String::new();
                         if let Err(e) = stdin.read_to_string(&mut buffer) {
                             eprintln!("Failed to read stdin for hook input: {}", e);
-                            std::process::exit(0);
+                            std::process::exit(1);
                         }
                         if !buffer.trim().is_empty() {
                             hook_input = Some(strip_utf8_bom(buffer));
                         } else {
                             eprintln!("No hook input provided (via --hook-input or stdin).");
-                            std::process::exit(0);
+                            std::process::exit(1);
                         }
                     } else if hook_input.as_ref().unwrap().trim().is_empty() {
                         eprintln!("Error: --hook-input requires a value");
-                        std::process::exit(0);
+                        std::process::exit(1);
                     }
                     i += 2;
                 } else {
                     eprintln!("Error: --hook-input requires a value or 'stdin' to read from stdin");
-                    std::process::exit(0);
+                    std::process::exit(1);
                 }
             }
 
@@ -419,6 +416,12 @@ fn handle_checkpoint(args: &[String]) {
             }
         }
     }
+
+    tracing::debug!(
+        "Checkpoint arguments: {:?}, hook_input: {:?}",
+        args,
+        hook_input
+    );
 
     let mut agent_run_result = None;
     // Handle preset arguments after parsing all flags
@@ -436,7 +439,7 @@ fn handle_checkpoint(args: &[String]) {
                     }
                     Err(e) => {
                         eprintln!("Claude preset error: {}", e);
-                        std::process::exit(0);
+                        std::process::exit(1);
                     }
                 }
             }
@@ -452,7 +455,7 @@ fn handle_checkpoint(args: &[String]) {
                     }
                     Err(e) => {
                         eprintln!("Codex preset error: {}", e);
-                        std::process::exit(0);
+                        std::process::exit(1);
                     }
                 }
             }
@@ -468,7 +471,7 @@ fn handle_checkpoint(args: &[String]) {
                     }
                     Err(e) => {
                         eprintln!("Gemini preset error: {}", e);
-                        std::process::exit(0);
+                        std::process::exit(1);
                     }
                 }
             }
@@ -484,7 +487,7 @@ fn handle_checkpoint(args: &[String]) {
                     }
                     Err(e) => {
                         eprintln!("Windsurf preset error: {}", e);
-                        std::process::exit(0);
+                        std::process::exit(1);
                     }
                 }
             }
@@ -500,7 +503,7 @@ fn handle_checkpoint(args: &[String]) {
                     }
                     Err(e) => {
                         eprintln!("Continue CLI preset error: {}", e);
-                        std::process::exit(0);
+                        std::process::exit(1);
                     }
                 }
             }
@@ -516,7 +519,7 @@ fn handle_checkpoint(args: &[String]) {
                     }
                     Err(e) => {
                         eprintln!("Error running Cursor preset: {}", e);
-                        std::process::exit(0);
+                        std::process::exit(1);
                     }
                 }
             }
@@ -529,7 +532,7 @@ fn handle_checkpoint(args: &[String]) {
                     }
                     Err(e) => {
                         eprintln!("Github Copilot preset error: {}", e);
-                        std::process::exit(0);
+                        std::process::exit(1);
                     }
                 }
             }
@@ -545,7 +548,7 @@ fn handle_checkpoint(args: &[String]) {
                     }
                     Err(e) => {
                         eprintln!("Amp preset error: {}", e);
-                        std::process::exit(0);
+                        std::process::exit(1);
                     }
                 }
             }
@@ -561,7 +564,7 @@ fn handle_checkpoint(args: &[String]) {
                     }
                     Err(e) => {
                         eprintln!("ai_tab preset error: {}", e);
-                        std::process::exit(0);
+                        std::process::exit(1);
                     }
                 }
             }
@@ -577,7 +580,7 @@ fn handle_checkpoint(args: &[String]) {
                     }
                     Err(e) => {
                         eprintln!("Firebender preset error: {}", e);
-                        std::process::exit(0);
+                        std::process::exit(1);
                     }
                 }
             }
@@ -590,7 +593,7 @@ fn handle_checkpoint(args: &[String]) {
                     }
                     Err(e) => {
                         eprintln!("Agent V1 preset error: {}", e);
-                        std::process::exit(0);
+                        std::process::exit(1);
                     }
                 }
             }
@@ -606,7 +609,7 @@ fn handle_checkpoint(args: &[String]) {
                     }
                     Err(e) => {
                         eprintln!("Droid preset error: {}", e);
-                        std::process::exit(0);
+                        std::process::exit(1);
                     }
                 }
             }
@@ -622,7 +625,7 @@ fn handle_checkpoint(args: &[String]) {
                     }
                     Err(e) => {
                         eprintln!("OpenCode preset error: {}", e);
-                        std::process::exit(0);
+                        std::process::exit(1);
                     }
                 }
             }
@@ -638,7 +641,7 @@ fn handle_checkpoint(args: &[String]) {
                     }
                     Err(e) => {
                         eprintln!("Pi preset error: {}", e);
-                        std::process::exit(0);
+                        std::process::exit(1);
                     }
                 }
             }
@@ -860,6 +863,8 @@ fn handle_checkpoint(args: &[String]) {
         observability::spawn_background_flush();
     }
 
+    tracing::debug!("Agent run result: {:?}", agent_run_result);
+
     let final_working_dir = agent_run_result
         .as_ref()
         .and_then(|r| r.repo_working_dir.clone())
@@ -876,7 +881,7 @@ fn handle_checkpoint(args: &[String]) {
         eprintln!(
             "Skipping checkpoint because repository is excluded or not in allow_repositories list"
         );
-        std::process::exit(0);
+        std::process::exit(1);
     }
 
     // If the working directory is not a git repository, we need to detect repos from file paths
@@ -951,7 +956,7 @@ fn handle_checkpoint(args: &[String]) {
                     "Failed to find any git repositories for the edited files. Orphaned files: {:?}",
                     orphan_files
                 );
-                std::process::exit(0);
+                std::process::exit(1);
             }
 
             // Log orphan files if any
@@ -1099,7 +1104,7 @@ fn handle_checkpoint(args: &[String]) {
         eprintln!(
             "Failed to find repository: workspace root is not a git repository and no edited files provided"
         );
-        std::process::exit(0);
+        std::process::exit(1);
     }
 
     // Standard single-repo mode
@@ -1333,7 +1338,7 @@ fn handle_checkpoint(args: &[String]) {
     }
 
     if local_checkpoint_failed {
-        std::process::exit(0);
+        std::process::exit(1);
     }
 }
 

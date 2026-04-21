@@ -13,11 +13,8 @@ use crate::git::sync_authorship::{fetch_authorship_notes, push_authorship_notes}
 use crate::utils::is_debug_enabled;
 #[cfg(windows)]
 use crate::utils::is_interactive_terminal;
-#[cfg(windows)]
-use crate::utils::kill_process_tree_windows;
 use unicode_normalization::UnicodeNormalization;
 
-use git2::Oid;
 use gix_index::entry::Stage;
 use regex::Regex;
 use std::cell::Cell;
@@ -39,28 +36,7 @@ thread_local! {
 }
 static INTERNAL_GIT_HOOKS_DISABLED_DEPTH_GLOBAL: AtomicUsize = AtomicUsize::new(0);
 
-const EXEC_GIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
-const EXEC_GIT_TIMEOUT_STDERR: &str = "Command timed out";
-
-struct GitExecRequest {
-    args: Vec<String>,
-    profile: InternalGitProfile,
-    stdin_data: Option<Vec<u8>>,
-    env_overrides: Vec<(String, String)>,
-    timeout: Option<Duration>,
-}
-
-struct GitExecPolicy {
-    max_attempts: usize,
-    backoff_delays: &'static [Duration],
-    retry_on_timeout: bool,
-    retry_on_transient_error: bool,
-}
-
-struct PreparedGitCommand {
-    cmd: Command,
-    effective_args: Vec<String>,
-}
+const EXEC_GIT_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct InternalGitHooksGuard;
 
@@ -303,280 +279,6 @@ fn args_with_internal_git_profile(args: &[String], profile: InternalGitProfile) 
     out
 }
 
-const DEFAULT_EXEC_GIT_TIMEOUT: Duration = Duration::from_secs(60);
-
-fn default_git_exec_policy() -> GitExecPolicy {
-    GitExecPolicy {
-        max_attempts: 1,
-        backoff_delays: &[],
-        retry_on_timeout: false,
-        retry_on_transient_error: false,
-    }
-}
-
-fn build_git_command(request: &GitExecRequest) -> PreparedGitCommand {
-    let effective_args = args_with_internal_git_profile(
-        &args_with_disabled_hooks_if_needed(&request.args),
-        request.profile,
-    );
-
-    let mut cmd = Command::new(config::Config::get().git_cmd());
-    cmd.args(&effective_args);
-    cmd.stdin(if request.stdin_data.is_some() {
-        std::process::Stdio::piped()
-    } else {
-        std::process::Stdio::null()
-    })
-    .stdout(std::process::Stdio::piped())
-    .stderr(std::process::Stdio::piped());
-
-    for (k, v) in &request.env_overrides {
-        cmd.env(k, v);
-    }
-
-    cmd.env_remove("GIT_EXTERNAL_DIFF");
-    cmd.env_remove("GIT_DIFF_OPTS");
-    cmd.env("GIT_TERMINAL_PROMPT", "0");
-
-    #[cfg(windows)]
-    {
-        if !is_interactive_terminal() {
-            cmd.creation_flags(CREATE_NO_WINDOW);
-        }
-    }
-
-    if is_debug_enabled() {
-        tracing::debug!("[exec_git] cmd = {:?}", cmd);
-        cmd.env("GIT_TRACE", "1");
-        cmd.env("GIT_TRACE2", "1");
-    }
-
-    PreparedGitCommand {
-        cmd,
-        effective_args,
-    }
-}
-
-fn write_stdin_in_background(
-    child: &mut std::process::Child,
-    stdin_data: &[u8],
-) -> Option<std::thread::JoinHandle<std::io::Result<()>>> {
-    let stdin = child.stdin.take()?;
-    let data = stdin_data.to_vec();
-    Some(std::thread::spawn(move || {
-        use std::io::Write;
-        let mut stdin = stdin;
-        stdin.write_all(&data)
-    }))
-}
-
-fn read_pipe_in_background<R>(
-    reader: Option<R>,
-) -> Option<std::thread::JoinHandle<std::io::Result<Vec<u8>>>>
-where
-    R: std::io::Read + Send + 'static,
-{
-    reader.map(|mut reader| {
-        std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            reader.read_to_end(&mut buf)?;
-            Ok(buf)
-        })
-    })
-}
-
-fn finalize_stdin_writer(
-    handle: Option<std::thread::JoinHandle<std::io::Result<()>>>,
-) -> Result<(), GitAiError> {
-    if let Some(handle) = handle {
-        let result = handle.join().expect("stdin writer thread panicked");
-        if let Err(e) = result
-            && e.kind() != std::io::ErrorKind::BrokenPipe
-        {
-            return Err(GitAiError::IoError(e));
-        }
-    }
-    Ok(())
-}
-
-fn finalize_pipe_reader(
-    handle: Option<std::thread::JoinHandle<std::io::Result<Vec<u8>>>>,
-) -> Result<Vec<u8>, GitAiError> {
-    match handle {
-        Some(handle) => handle
-            .join()
-            .expect("pipe reader thread panicked")
-            .map_err(GitAiError::IoError),
-        None => Ok(Vec::new()),
-    }
-}
-
-fn run_git_once(request: &GitExecRequest) -> Result<Output, GitAiError> {
-    let PreparedGitCommand {
-        mut cmd,
-        effective_args,
-    } = build_git_command(request);
-
-    let cmd_start = Instant::now();
-    let trace_id = uuid::Uuid::new_v4();
-    tracing::debug!("[exec_git] {} Starting git command execution", trace_id);
-
-    let mut child = cmd.spawn().map_err(GitAiError::IoError)?;
-    let stdin_handle = request
-        .stdin_data
-        .as_deref()
-        .and_then(|stdin_data| write_stdin_in_background(&mut child, stdin_data));
-    let stdout_handle = read_pipe_in_background(child.stdout.take());
-    let stderr_handle = read_pipe_in_background(child.stderr.take());
-
-    let status = match request.timeout {
-        Some(timeout) => loop {
-            if let Some(status) = child.try_wait().map_err(GitAiError::IoError)? {
-                break status;
-            }
-
-            if cmd_start.elapsed() >= timeout {
-                tracing::debug!(
-                    "git command [{:?}] timed out after {}ms",
-                    effective_args.first(),
-                    timeout.as_millis()
-                );
-
-                #[cfg(windows)]
-                let _ = kill_process_tree_windows(child.id());
-                #[cfg(not(windows))]
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = finalize_stdin_writer(stdin_handle);
-                let _ = finalize_pipe_reader(stdout_handle);
-                let _ = finalize_pipe_reader(stderr_handle);
-
-                return Err(GitAiError::GitCliError {
-                    code: Some(1),
-                    stderr: EXEC_GIT_TIMEOUT_STDERR.to_string(),
-                    args: effective_args,
-                });
-            }
-
-            std::thread::sleep(EXEC_GIT_POLL_INTERVAL);
-        },
-        None => child.wait().map_err(GitAiError::IoError)?,
-    };
-
-    let stdout = finalize_pipe_reader(stdout_handle)?;
-    let stderr = finalize_pipe_reader(stderr_handle)?;
-    let output = Output {
-        status,
-        stdout,
-        stderr,
-    };
-
-    finalize_stdin_writer(stdin_handle)?;
-
-    let elapsed = cmd_start.elapsed();
-    tracing::debug!(
-        "[exec_git] {} git command [{:?}] execution total {}ms",
-        trace_id,
-        effective_args,
-        elapsed.as_millis()
-    );
-    if elapsed > std::time::Duration::from_secs(3) {
-        eprintln!(
-            "[git-ai:slow] git {:?} took {}ms",
-            effective_args.first(),
-            elapsed.as_millis()
-        );
-    }
-
-    Ok(output)
-}
-
-fn is_timeout_error(err: &GitAiError) -> bool {
-    matches!(
-        err,
-        GitAiError::GitCliError { stderr, .. } if stderr == EXEC_GIT_TIMEOUT_STDERR
-    )
-}
-
-fn is_retryable_io_error(err: &std::io::Error) -> bool {
-    matches!(
-        err.kind(),
-        std::io::ErrorKind::TimedOut
-            | std::io::ErrorKind::Interrupted
-            | std::io::ErrorKind::WouldBlock
-    )
-}
-
-fn is_retryable_git_cli_error(code: Option<i32>, stderr: &str) -> bool {
-    let stderr = stderr.to_ascii_lowercase();
-    let _ = code;
-
-    stderr.contains("index.lock")
-        || (stderr.contains(".lock") && stderr.contains("unable to create"))
-        || stderr.contains("resource temporarily unavailable")
-        || stderr.contains("timed out")
-}
-
-fn is_retryable_error(err: &GitAiError) -> bool {
-    match err {
-        GitAiError::IoError(io_err) => is_retryable_io_error(io_err),
-        GitAiError::GitCliError { code, stderr, .. } => {
-            is_timeout_error(err) || is_retryable_git_cli_error(*code, stderr)
-        }
-        _ => false,
-    }
-}
-
-fn run_git_with_retry(
-    request: &GitExecRequest,
-    policy: &GitExecPolicy,
-) -> Result<Output, GitAiError> {
-    let started = Instant::now();
-
-    for attempt in 1..=policy.max_attempts {
-        match run_git_once(request) {
-            Ok(output) => {
-                tracing::debug!(
-                    "[exec_git retry] succeeded on attempt {}/{} after {}ms",
-                    attempt,
-                    policy.max_attempts,
-                    started.elapsed().as_millis()
-                );
-                return Ok(output);
-            }
-            Err(err) => {
-                let retryable = is_retryable_error(&err)
-                    && ((policy.retry_on_timeout && is_timeout_error(&err))
-                        || (policy.retry_on_transient_error && !is_timeout_error(&err)));
-
-                if !retryable || attempt == policy.max_attempts {
-                    return Err(err);
-                }
-
-                let delay = policy
-                    .backoff_delays
-                    .get(attempt - 1)
-                    .copied()
-                    .or_else(|| policy.backoff_delays.last().copied())
-                    .unwrap_or(Duration::ZERO);
-
-                tracing::debug!(
-                    "[exec_git retry] retrying attempt {}/{} after {}ms due to: {}",
-                    attempt + 1,
-                    policy.max_attempts,
-                    delay.as_millis(),
-                    err
-                );
-                std::thread::sleep(delay);
-            }
-        }
-    }
-
-    Err(GitAiError::Generic(
-        "git retry loop exited unexpectedly".to_string(),
-    ))
-}
-
 pub struct Object<'a> {
     repo: &'a Repository,
     oid: String,
@@ -587,13 +289,19 @@ impl<'a> Object<'a> {
         self.oid.clone()
     }
 
+    // Recursively peel an object until a commit is found.
     pub fn peel_to_commit(&self) -> Result<Commit<'a>, GitAiError> {
-        let g2repo = self.repo.open_git2()
-            .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let oid = Oid::from_str(&self.oid).map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let obj = g2repo.find_object(oid, None).map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let commit_oid = obj.peel_to_commit().map_err(|e| GitAiError::Generic(e.to_string()))?.id().to_string();
-        Ok(Commit { repo: self.repo, oid: commit_oid, authorship_log: std::cell::OnceCell::new() })
+        let mut args = self.repo.global_args_for_exec();
+        args.push("rev-parse".to_string());
+        // args.push("-q".to_string());
+        args.push("--verify".to_string());
+        args.push(format!("{}^{}", self.oid, "{commit}"));
+        let output = exec_git(&args)?;
+        Ok(Commit {
+            repo: self.repo,
+            oid: String::from_utf8(output.stdout)?.trim().to_string(),
+            authorship_log: std::cell::OnceCell::new(),
+        })
     }
 }
 
@@ -701,41 +409,59 @@ impl<'a> CommitRange<'a> {
     pub fn is_valid(&self) -> Result<(), GitAiError> {
         const EMPTY_TREE_HASH: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
-        self.repo.find_commit(self.end_oid.clone())?;
+        // Check that both commits exist
+        // Skip validation for empty tree hash - it's a special git object that may not exist in the repo
         if self.start_oid != EMPTY_TREE_HASH {
             self.repo.find_commit(self.start_oid.clone())?;
         }
+        self.repo.find_commit(self.end_oid.clone())?;
 
-        let g2repo = self.repo.open_git2()
-            .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let refname_oid = g2repo
-            .find_reference(&self.refname)
-            .and_then(|r| r.resolve())
-            .and_then(|r| r.target().ok_or_else(|| git2::Error::from_str("no target")))
-            .map_err(|e| GitAiError::Generic(e.to_string()))?;
-
-        let is_ancestor = |commit_str: &str, tip: git2::Oid| -> Result<(), GitAiError> {
-            let oid = Oid::from_str(commit_str).map_err(|e| GitAiError::Generic(e.to_string()))?;
-            let base = g2repo.merge_base(oid, tip).map_err(|e| GitAiError::Generic(e.to_string()))?;
-            if base == oid {
-                Ok(())
-            } else {
-                Err(GitAiError::Generic(format!("Commit {} is not reachable from refname {}", commit_str, self.refname)))
-            }
-        };
-
+        // Check that both commits exist on the refname
+        // Use git merge-base --is-ancestor <commit> <refname>
+        // Skip merge-base check for empty tree hash since it's not part of commit history
         if self.start_oid != EMPTY_TREE_HASH {
-            is_ancestor(&self.start_oid, refname_oid)?;
+            let mut args = self.repo.global_args_for_exec();
+            args.push("merge-base".to_string());
+            args.push("--is-ancestor".to_string());
+            args.push(self.start_oid.clone());
+            args.push(self.refname.clone());
+
+            exec_git(&args).map_err(|_| {
+                GitAiError::Generic(format!(
+                    "Commit {} is not reachable from refname {}",
+                    self.start_oid, self.refname
+                ))
+            })?;
         }
-        is_ancestor(&self.end_oid, refname_oid)?;
 
+        let mut args = self.repo.global_args_for_exec();
+        args.push("merge-base".to_string());
+        args.push("--is-ancestor".to_string());
+        args.push(self.end_oid.clone());
+        args.push(self.refname.clone());
+
+        exec_git(&args).map_err(|_| {
+            GitAiError::Generic(format!(
+                "Commit {} is not reachable from refname {}",
+                self.end_oid, self.refname
+            ))
+        })?;
+
+        // Check that start is an ancestor of end (direct path between them)
+        // Skip for empty tree hash - it's not part of the commit DAG
         if self.start_oid != EMPTY_TREE_HASH {
-            let start = Oid::from_str(&self.start_oid).map_err(|e| GitAiError::Generic(e.to_string()))?;
-            let end = Oid::from_str(&self.end_oid).map_err(|e| GitAiError::Generic(e.to_string()))?;
-            let base = g2repo.merge_base(start, end).map_err(|e| GitAiError::Generic(e.to_string()))?;
-            if base != start {
-                return Err(GitAiError::Generic(format!("Commit {} is not an ancestor of {}", self.start_oid, self.end_oid)));
-            }
+            let mut args = self.repo.global_args_for_exec();
+            args.push("merge-base".to_string());
+            args.push("--is-ancestor".to_string());
+            args.push(self.start_oid.clone());
+            args.push(self.end_oid.clone());
+
+            exec_git(&args).map_err(|_| {
+                GitAiError::Generic(format!(
+                    "Commit {} is not an ancestor of {}",
+                    self.start_oid, self.end_oid
+                ))
+            })?;
         }
 
         Ok(())
@@ -743,25 +469,20 @@ impl<'a> CommitRange<'a> {
 
     #[allow(dead_code)]
     pub fn length(&self) -> usize {
-        const EMPTY_TREE_HASH: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
-        if self.start_oid.is_empty() && self.end_oid.is_empty() {
-            return 0;
+        // Use git rev-list --count to get the number of commits between start and end
+        // Format: start_oid..end_oid means commits reachable from end_oid but not from start_oid
+        let mut args = self.repo.global_args_for_exec();
+        args.push("rev-list".to_string());
+        args.push("--count".to_string());
+        args.push(format!("{}..{}", self.start_oid, self.end_oid));
+
+        match exec_git(&args) {
+            Ok(output) => {
+                let count_str = String::from_utf8(output.stdout).unwrap_or_default();
+                count_str.trim().parse().unwrap_or(0)
+            }
+            Err(_) => 0, // If they don't share lineage or error occurs, return 0
         }
-        if self.start_oid == self.end_oid {
-            return 0;
-        }
-        let Ok(g2repo) = self.repo.open_git2() else { return 0 };
-        let Ok(end) = Oid::from_str(&self.end_oid) else { return 0 };
-        let mut walk = match g2repo.revwalk() {
-            Ok(w) => w,
-            Err(_) => return 0,
-        };
-        if walk.push(end).is_err() { return 0; }
-        if self.start_oid != EMPTY_TREE_HASH {
-            let Ok(start) = Oid::from_str(&self.start_oid) else { return 0 };
-            if walk.hide(start).is_err() { return 0; }
-        }
-        walk.count()
     }
 
     pub fn all_commits(&self) -> Vec<String> {
@@ -780,26 +501,47 @@ impl<'a> IntoIterator for CommitRange<'a> {
     type IntoIter = CommitRangeIterator<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
-        const EMPTY_TREE_HASH: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+        // Empty range - return empty iterator
         if self.start_oid.is_empty() && self.end_oid.is_empty() {
-            return CommitRangeIterator { repo: self.repo, commit_oids: Vec::new(), index: 0 };
+            return CommitRangeIterator {
+                repo: self.repo,
+                commit_oids: Vec::new(),
+                index: 0,
+            };
         }
+
+        // ie for single commit branches
         if self.start_oid == self.end_oid {
-            return CommitRangeIterator { repo: self.repo, commit_oids: vec![self.end_oid], index: 0 };
+            return CommitRangeIterator {
+                repo: self.repo,
+                commit_oids: vec![self.end_oid.clone()],
+                index: 0,
+            };
         }
-        let commit_oids = (|| -> Option<Vec<String>> {
-            let g2repo = self.repo.open_git2().ok()?;
-            let end = Oid::from_str(&self.end_oid).ok()?;
-            let mut walk = g2repo.revwalk().ok()?;
-            walk.push(end).ok()?;
-            if self.start_oid != EMPTY_TREE_HASH {
-                let start = Oid::from_str(&self.start_oid).ok()?;
-                walk.hide(start).ok()?;
+
+        // Use git rev-list to get all commits between start and end
+        // Format: start_oid..end_oid means commits reachable from end_oid but not from start_oid
+        let mut args = self.repo.global_args_for_exec();
+        args.push("rev-list".to_string());
+        args.push(format!("{}..{}", self.start_oid, self.end_oid));
+
+        let commit_oids: Vec<String> = match exec_git(&args) {
+            Ok(output) => {
+                let stdout = String::from_utf8(output.stdout).unwrap_or_default();
+                stdout
+                    .lines()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
             }
-            Some(walk.filter_map(|r| r.ok().map(|o| o.to_string())).collect())
-        })()
-        .unwrap_or_default();
-        CommitRangeIterator { repo: self.repo, commit_oids, index: 0 }
+            Err(_) => Vec::new(), // If they don't share lineage or error occurs, return empty
+        };
+
+        CommitRangeIterator {
+            repo: self.repo,
+            commit_oids,
+            index: 0,
+        }
     }
 }
 
@@ -903,90 +645,146 @@ impl<'a> Commit<'a> {
         self.oid.clone()
     }
 
-    fn with_git2<T, F: FnOnce(&git2::Commit) -> T>(&self, f: F) -> Result<T, GitAiError> {
-        let g2repo = self.repo.open_git2()
-            .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let oid = Oid::from_str(&self.oid).map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let commit = g2repo
-            .find_commit(oid)
-            .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        Ok(f(&commit))
-    }
-
     pub fn tree(&self) -> Result<Tree<'a>, GitAiError> {
-        let tree_oid = self.with_git2(|c| c.tree_id().to_string())?;
-        Ok(Tree { repo: self.repo, oid: tree_oid })
+        let mut args = self.repo.global_args_for_exec();
+        args.push("rev-parse".to_string());
+        // args.push("-q".to_string());
+        args.push("--verify".to_string());
+        args.push(format!("{}^{}", self.oid, "{tree}"));
+        let output = exec_git(&args)?;
+        Ok(Tree {
+            repo: self.repo,
+            oid: String::from_utf8(output.stdout)?.trim().to_string(),
+        })
     }
 
     pub fn parent(&self, i: usize) -> Result<Commit<'a>, GitAiError> {
-        let g2repo = self.repo.open_git2()
-            .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let oid = Oid::from_str(&self.oid).map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let commit = g2repo.find_commit(oid).map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let parent_oid = commit.parent_id(i).map_err(|e| GitAiError::Generic(e.to_string()))?.to_string();
-        Ok(Commit { repo: self.repo, oid: parent_oid, authorship_log: std::cell::OnceCell::new() })
+        let mut args = self.repo.global_args_for_exec();
+        args.push("rev-parse".to_string());
+        // args.push("-q".to_string());
+        args.push("--verify".to_string());
+        // libgit2 uses 0-based indexing; Git's rev syntax uses 1-based parent selectors.
+        args.push(format!("{}^{}", self.oid, i + 1));
+        let output = exec_git(&args)?;
+        Ok(Commit {
+            repo: self.repo,
+            oid: String::from_utf8(output.stdout)?.trim().to_string(),
+            authorship_log: std::cell::OnceCell::new(),
+        })
     }
 
+    // Return an iterator over the parents of this commit.
     pub fn parents(&self) -> Parents<'a> {
-        let parent_oids = self
-            .with_git2(|c| c.parent_ids().map(|id| id.to_string()).collect::<Vec<_>>())
-            .unwrap_or_default();
-        Parents { repo: self.repo, parent_oids, index: 0 }
-    }
+        // Use `git show -s --format=%P <oid>` to get whitespace-separated parent OIDs
+        let mut args = self.repo.global_args_for_exec();
+        args.push("show".to_string());
+        args.push("-s".to_string());
+        args.push("--format=%P".to_string());
+        args.push(self.oid.clone());
 
-    #[allow(dead_code)]
-    pub fn parent_count(&self) -> Result<usize, GitAiError> {
-        self.with_git2(|c| c.parent_count())
-    }
+        let parent_oids: Vec<String> = match exec_git(&args) {
+            Ok(output) => {
+                let stdout = String::from_utf8(output.stdout).unwrap_or_default();
+                stdout.split_whitespace().map(|s| s.to_string()).collect()
+            }
+            Err(_) => Vec::new(),
+        };
 
-    pub fn summary(&self) -> Result<String, GitAiError> {
-        self.with_git2(|c| c.summary().unwrap_or("").to_string())
-    }
-
-    pub fn body(&self) -> Result<String, GitAiError> {
-        self.with_git2(|c| c.body().unwrap_or("").to_string())
-    }
-
-    fn sig_from_git2(repo: &'a Repository, sig: &git2::Signature<'_>) -> Signature<'a> {
-        let t = sig.when();
-        let dt = chrono::DateTime::from_timestamp(t.seconds(), 0)
-            .unwrap_or_default()
-            .with_timezone(
-                &chrono::FixedOffset::east_opt(t.offset_minutes() * 60)
-                    .unwrap_or_else(|| chrono::FixedOffset::east_opt(0).unwrap()),
-            );
-        Signature {
-            repo,
-            name: sig.name().unwrap_or("").to_string(),
-            email: sig.email().unwrap_or("").to_string(),
-            time_iso8601: dt.to_rfc3339(),
+        Parents {
+            repo: self.repo,
+            parent_oids,
+            index: 0,
         }
     }
 
+    // Get the number of parents of this commit.
+    // Use the parents iterator to return an iterator over all parents.
+    #[allow(dead_code)]
+    pub fn parent_count(&self) -> Result<usize, GitAiError> {
+        Ok(self.parents().count())
+    }
+
+    // Get the short "summary" of the git commit message. The returned message is the summary of the commit, comprising the first paragraph of the message with whitespace trimmed and squashed. None may be returned if an error occurs or if the summary is not valid utf-8.
+    pub fn summary(&self) -> Result<String, GitAiError> {
+        let mut args = self.repo.global_args_for_exec();
+        args.push("show".to_string());
+        args.push("-s".to_string());
+        args.push("--no-notes".to_string());
+        args.push("--encoding=UTF-8".to_string());
+        args.push("--format=%s".to_string());
+        args.push(self.oid.clone());
+        let output = exec_git(&args)?;
+        Ok(String::from_utf8(output.stdout)?.trim().to_string())
+    }
+
+    // Get the body of the git commit message (everything after the first paragraph).
+    // Returns an empty string if there is no body.
+    pub fn body(&self) -> Result<String, GitAiError> {
+        let mut args = self.repo.global_args_for_exec();
+        args.push("show".to_string());
+        args.push("-s".to_string());
+        args.push("--no-notes".to_string());
+        args.push("--encoding=UTF-8".to_string());
+        args.push("--format=%b".to_string());
+        args.push(self.oid.clone());
+        let output = exec_git(&args)?;
+        Ok(String::from_utf8(output.stdout)?.trim().to_string())
+    }
+
+    // Get the author of this commit.
     #[allow(dead_code)]
     pub fn author(&self) -> Result<Signature<'a>, GitAiError> {
-        let g2repo = self.repo.open_git2()
-            .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let oid = Oid::from_str(&self.oid).map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let commit = g2repo.find_commit(oid).map_err(|e| GitAiError::Generic(e.to_string()))?;
-        Ok(Self::sig_from_git2(self.repo, &commit.author()))
+        let mut args = self.repo.global_args_for_exec();
+        args.push("show".to_string());
+        args.push("-s".to_string());
+        args.push("--no-notes".to_string());
+        args.push("--encoding=UTF-8".to_string());
+        args.push("--format=%an%n%ae%n%aI".to_string());
+        args.push(self.oid.clone());
+        let output = exec_git(&args)?;
+        let stdout = String::from_utf8(output.stdout)?;
+        let mut lines = stdout.lines();
+        let name = lines.next().unwrap_or("").trim().to_string();
+        let email = lines.next().unwrap_or("").trim().to_string();
+        let time_iso8601 = lines.next().unwrap_or("").trim().to_string();
+        Ok(Signature {
+            repo: self.repo,
+            name,
+            email,
+            time_iso8601,
+        })
     }
 
+    // Get the committer of this commit.
     #[allow(dead_code)]
     pub fn committer(&self) -> Result<Signature<'a>, GitAiError> {
-        let g2repo = self.repo.open_git2()
-            .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let oid = Oid::from_str(&self.oid).map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let commit = g2repo.find_commit(oid).map_err(|e| GitAiError::Generic(e.to_string()))?;
-        Ok(Self::sig_from_git2(self.repo, &commit.committer()))
+        let mut args = self.repo.global_args_for_exec();
+        args.push("show".to_string());
+        args.push("-s".to_string());
+        args.push("--no-notes".to_string());
+        args.push("--encoding=UTF-8".to_string());
+        args.push("--format=%cn%n%ce%n%cI".to_string());
+        args.push(self.oid.clone());
+        let output = exec_git(&args)?;
+        let stdout = String::from_utf8(output.stdout)?;
+        let mut lines = stdout.lines();
+        let name = lines.next().unwrap_or("").trim().to_string();
+        let email = lines.next().unwrap_or("").trim().to_string();
+        let time_iso8601 = lines.next().unwrap_or("").trim().to_string();
+        Ok(Signature {
+            repo: self.repo,
+            name,
+            email,
+            time_iso8601,
+        })
     }
 
+    // Get the commit time (i.e. committer time) of a commit.
+    // The first element of the tuple is the time, in seconds, since the epoch. The second element is the offset, in minutes, of the time zone of the committer's preferred time zone.
     #[allow(dead_code)]
     pub fn time(&self) -> Result<Time, GitAiError> {
-        self.with_git2(|c| {
-            let t = c.committer().when();
-            Time { seconds: t.seconds(), offset_minutes: t.offset_minutes() }
-        })
+        let signature = self.committer()?;
+        Ok(signature.when())
     }
 
     // lazy load the authorship log
@@ -1012,33 +810,56 @@ impl<'a> Commit<'a> {
     /// # Returns
     /// The first parent commit that is reachable from the specified refname
     pub fn parent_on_refname(&self, refname: &str) -> Result<Commit<'a>, GitAiError> {
-        let g2repo = self.repo.open_git2()
-            .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let fq_refname = g2repo
-            .find_reference(refname)
-            .or_else(|_| {
-                let full = if refname.starts_with("refs/") {
-                    refname.to_string()
-                } else {
-                    format!("refs/heads/{}", refname)
-                };
-                g2repo.find_reference(&full)
-            })
-            .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let tip = fq_refname.resolve()
-            .and_then(|r| r.target().ok_or_else(|| git2::Error::from_str("no target")))
-            .map_err(|e| GitAiError::Generic(e.to_string()))?;
+        // Normalize the refname to fully qualified form
+        let fq_refname = {
+            let mut rp_args = self.repo.global_args_for_exec();
+            rp_args.push("rev-parse".to_string());
+            rp_args.push("--verify".to_string());
+            rp_args.push("--symbolic-full-name".to_string());
+            rp_args.push(refname.to_string());
 
-        for parent in self.parents() {
-            let parent_oid = Oid::from_str(&parent.id())
-                .map_err(|e| GitAiError::Generic(e.to_string()))?;
-            if let Ok(base) = g2repo.merge_base(parent_oid, tip) {
-                if base == parent_oid {
-                    return Ok(parent);
+            match exec_git(&rp_args) {
+                Ok(output) => {
+                    let s = String::from_utf8(output.stdout).unwrap_or_default();
+                    let s = s.trim();
+                    if s.is_empty() {
+                        if refname.starts_with("refs/") {
+                            refname.to_string()
+                        } else {
+                            format!("refs/heads/{}", refname)
+                        }
+                    } else {
+                        s.to_string()
+                    }
                 }
+                Err(_) => {
+                    if refname.starts_with("refs/") {
+                        refname.to_string()
+                    } else {
+                        format!("refs/heads/{}", refname)
+                    }
+                }
+            }
+        };
+
+        // Iterate through parents and find the first one that's on the refname
+        for parent in self.parents() {
+            let parent_sha = parent.id();
+
+            // Check if this parent is an ancestor of the refname
+            // git merge-base --is-ancestor <parent> <refname>
+            let mut args = self.repo.global_args_for_exec();
+            args.push("merge-base".to_string());
+            args.push("--is-ancestor".to_string());
+            args.push(parent_sha.clone());
+            args.push(fq_refname.clone());
+
+            if exec_git(&args).is_ok() {
+                return Ok(parent);
             }
         }
 
+        // If no parent is on the refname, return an error
         Err(GitAiError::Generic(format!(
             "No parent of commit {} is reachable from refname {}",
             self.oid, refname
@@ -1089,26 +910,68 @@ impl<'a> Tree<'a> {
         }
     }
 
+    // Retrieve a tree entry contained in a tree or in any of its subtrees, given its relative path.
     pub fn get_path(&self, path: &Path) -> Result<TreeEntry<'a>, GitAiError> {
-        let g2repo = self.repo.open_git2()
-            .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let oid = Oid::from_str(&self.oid).map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let tree = g2repo.find_tree(oid).map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let entry = tree.get_path(path).map_err(|_| {
-            GitAiError::Generic(format!("Path not found in tree: {}", path.to_string_lossy()))
-        })?;
-        let object_type = match entry.kind() {
-            Some(git2::ObjectType::Blob) => "blob",
-            Some(git2::ObjectType::Tree) => "tree",
-            _ => "unknown",
-        }.to_string();
-        Ok(TreeEntry {
-            repo: self.repo,
-            oid: entry.id().to_string(),
-            object_type,
-            mode: format!("{:06o}", entry.filemode()),
-            path: path.to_string_lossy().to_string(),
-        })
+        // Use `git ls-tree -z -d <tree-oid> -- <path>` to get exactly the entry for the path.
+        // -z ensures NUL-terminated records; -d shows the directory itself instead of listing contents
+        let mut args = self.repo.global_args_for_exec();
+        args.push("ls-tree".to_string());
+        args.push("-z".to_string());
+        // Use recursive to locate files in nested paths and return blob entries
+        args.push("-r".to_string());
+        args.push(self.oid.clone());
+        args.push("--".to_string());
+        let path_str = path.to_string_lossy().to_string();
+        args.push(path_str.clone());
+
+        let output = exec_git(&args)?;
+        let bytes = output.stdout;
+
+        // Each record: "<mode> <type> <object>\t<file>\0"
+        // We expect at most one record for an exact path query.
+        let mut found_entry: Option<TreeEntry<'a>> = None;
+
+        for chunk in bytes.split(|b| *b == 0u8) {
+            if chunk.is_empty() {
+                continue;
+            }
+            // Split metadata and path on first tab
+            let mut parts = chunk.splitn(2, |b| *b == b'\t');
+            let meta = parts.next().unwrap_or(&[]);
+            let file_bytes = parts.next().unwrap_or(&[]);
+
+            // Parse meta: "<mode> <type> <object>"
+            let meta_str = String::from_utf8_lossy(meta);
+            let mut meta_iter = meta_str.split_whitespace();
+            let mode = meta_iter.next().unwrap_or("").to_string();
+            let object_type = meta_iter.next().unwrap_or("").to_string();
+            let oid = meta_iter.next().unwrap_or("").to_string();
+
+            if mode.is_empty() || object_type.is_empty() || oid.is_empty() {
+                continue;
+            }
+
+            let file_path = String::from_utf8_lossy(file_bytes).to_string();
+
+            // Prefer exact path match if multiple records somehow appear
+            if found_entry.is_none() || file_path == path_str {
+                found_entry = Some(TreeEntry {
+                    repo: self.repo,
+                    oid,
+                    object_type,
+                    mode,
+                    path: file_path,
+                });
+            }
+        }
+
+        match found_entry {
+            Some(entry) => Ok(entry),
+            None => Err(GitAiError::Generic(format!(
+                "Path not found in tree: {}",
+                path.to_string_lossy()
+            ))),
+        }
     }
 }
 
@@ -1125,11 +988,12 @@ impl<'a> Blob<'a> {
 
     // Get the content of this blob.
     pub fn content(&self) -> Result<Vec<u8>, GitAiError> {
-        let g2repo = self.repo.open_git2()
-            .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let oid = Oid::from_str(&self.oid).map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let blob = g2repo.find_blob(oid).map_err(|e| GitAiError::Generic(e.to_string()))?;
-        Ok(blob.content().to_vec())
+        let mut args = self.repo.global_args_for_exec();
+        args.push("cat-file".to_string());
+        args.push("blob".to_string());
+        args.push(self.oid.clone());
+        let output = exec_git(&args)?;
+        Ok(output.stdout)
     }
 }
 
@@ -1149,41 +1013,52 @@ impl<'a> Reference<'a> {
     }
 
     pub fn shorthand(&self) -> Result<String, GitAiError> {
-        let g2repo = self.repo.open_git2()
-            .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let r = g2repo.find_reference(&self.ref_name)
-            .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        Ok(r.shorthand().unwrap_or(&self.ref_name).to_string())
+        let mut args = self.repo.global_args_for_exec();
+        args.push("rev-parse".to_string());
+        args.push("--abbrev-ref".to_string());
+        args.push(self.ref_name.clone());
+        let output = exec_git(&args)?;
+        Ok(String::from_utf8(output.stdout)?.trim().to_string())
     }
 
     pub fn target(&self) -> Result<String, GitAiError> {
-        let g2repo = self.repo.open_git2()
-            .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let r = g2repo.find_reference(&self.ref_name)
-            .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let resolved = r.resolve().map_err(|e| GitAiError::Generic(e.to_string()))?;
-        Ok(resolved.target().map(|o| o.to_string())
-            .ok_or_else(|| GitAiError::Generic(format!("reference {} has no target", self.ref_name)))?)
+        let mut args = self.repo.global_args_for_exec();
+        args.push("rev-parse".to_string());
+        args.push(self.ref_name.clone());
+        let output = exec_git(&args)?;
+        Ok(String::from_utf8(output.stdout)?.trim().to_string())
     }
 
+    // Peel a reference to a blob
+    // This method recursively peels the reference until it reaches a blob.
     #[allow(dead_code)]
     pub fn peel_to_blob(&self) -> Result<Blob<'a>, GitAiError> {
-        let g2repo = self.repo.open_git2()
-            .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let r = g2repo.find_reference(&self.ref_name)
-            .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let blob_oid = r.peel_to_blob().map_err(|e| GitAiError::Generic(e.to_string()))?.id().to_string();
-        Ok(Blob { repo: self.repo, oid: blob_oid })
+        let mut args = self.repo.global_args_for_exec();
+        args.push("rev-parse".to_string());
+        // args.push("-q".to_string());
+        args.push("--verify".to_string());
+        args.push(format!("{}^{}", self.ref_name, "{blob}"));
+        let output = exec_git(&args)?;
+        Ok(Blob {
+            repo: self.repo,
+            oid: String::from_utf8(output.stdout)?.trim().to_string(),
+        })
     }
 
+    // Peel a reference to a commit This method recursively peels the reference until it reaches a commit.
     #[allow(dead_code)]
     pub fn peel_to_commit(&self) -> Result<Commit<'a>, GitAiError> {
-        let g2repo = self.repo.open_git2()
-            .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let r = g2repo.find_reference(&self.ref_name)
-            .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let commit_oid = r.peel_to_commit().map_err(|e| GitAiError::Generic(e.to_string()))?.id().to_string();
-        Ok(Commit { repo: self.repo, oid: commit_oid, authorship_log: std::cell::OnceCell::new() })
+        let mut args = self.repo.global_args_for_exec();
+        args.push("rev-parse".to_string());
+        // args.push("-q".to_string());
+        args.push("--verify".to_string());
+        args.push(format!("{}^{}", self.ref_name, "{commit}"));
+        let output = exec_git(&args)?;
+        Ok(Commit {
+            repo: self.repo,
+            oid: String::from_utf8(output.stdout)?.trim().to_string(),
+            authorship_log: std::cell::OnceCell::new(),
+        })
     }
 }
 
@@ -1320,8 +1195,6 @@ pub struct Repository {
     canonical_workdir: PathBuf,
     /// Cached git author identity resolved via `git var GIT_COMMITTER_IDENT`.
     cached_author_identity: std::sync::OnceLock<GitAuthorIdentity>,
-    /// Whether this repository is bare (cached from git2 discovery).
-    is_bare: bool,
 }
 
 impl Repository {
@@ -1398,41 +1271,44 @@ impl Repository {
 
     // Internal util to get the git object type for a given OID
     fn object_type(&self, oid: &str) -> Result<String, GitAiError> {
-        let g2repo = self.open_git2()
-            .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let id = Oid::from_str(oid).map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let obj = g2repo.find_object(id, None).map_err(|e| GitAiError::Generic(e.to_string()))?;
-        Ok(match obj.kind() {
-            Some(git2::ObjectType::Commit) => "commit",
-            Some(git2::ObjectType::Tree) => "tree",
-            Some(git2::ObjectType::Blob) => "blob",
-            Some(git2::ObjectType::Tag) => "tag",
-            _ => "unknown",
-        }.to_string())
+        let mut args = self.global_args_for_exec();
+        args.push("cat-file".to_string());
+        args.push("-t".to_string());
+        args.push(oid.to_string());
+        let output = exec_git(&args)?;
+        Ok(String::from_utf8(output.stdout)?.trim().to_string())
     }
 
     // Retrieve and resolve the reference pointed at by HEAD.
     // If HEAD is a symbolic ref, return the refname (e.g., "refs/heads/main").
     // Otherwise, return "HEAD".
     pub fn head<'a>(&'a self) -> Result<Reference<'a>, GitAiError> {
-        let g2repo = self.open_git2()
-            .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let ref_name = match g2repo.head() {
-            Ok(head) if head.is_branch() => head.name().unwrap_or("HEAD").to_string(),
-            _ => "HEAD".to_string(),
-        };
-        Ok(Reference { repo: self, ref_name })
+        let mut args = self.global_args_for_exec();
+        args.push("symbolic-ref".to_string());
+        // args.push("-q".to_string());
+        args.push("HEAD".to_string());
+
+        let output = exec_git(&args);
+
+        match output {
+            Ok(output) if output.status.success() => {
+                let refname = String::from_utf8(output.stdout)?;
+                Ok(Reference {
+                    repo: self,
+                    ref_name: refname.trim().to_string(),
+                })
+            }
+            _ => Ok(Reference {
+                repo: self,
+                ref_name: "HEAD".to_string(),
+            }),
+        }
     }
 
     // Returns the path to the .git folder for normal repositories or the repository itself for bare repositories.
     // TODO Test on bare repositories.
     pub fn path(&self) -> &Path {
         self.git_dir.as_path()
-    }
-
-    fn open_git2(&self) -> Result<git2::Repository, GitAiError> {
-        git2::Repository::open(&self.git_dir)
-            .map_err(|e| GitAiError::Generic(e.to_string()))
     }
 
     /// Returns the common git directory shared by linked worktrees.
@@ -1450,7 +1326,12 @@ impl Repository {
 
     /// Returns true when this repository is bare.
     pub fn is_bare_repository(&self) -> Result<bool, GitAiError> {
-        Ok(self.is_bare)
+        let mut args = self.global_args_for_exec();
+        args.push("rev-parse".to_string());
+        args.push("--is-bare-repository".to_string());
+        let output = exec_git(&args)?;
+        let value = String::from_utf8(output.stdout)?;
+        Ok(value.trim() == "true")
     }
 
     /// Get the canonical (absolute, resolved) path of the working directory
@@ -1757,19 +1638,25 @@ impl Repository {
     // Lookup a reference to one of the objects in a repository. Requires full ref name.
     #[allow(dead_code)]
     pub fn find_reference(&self, name: &str) -> Result<Reference<'_>, GitAiError> {
-        let g2repo = self.open_git2()
-            .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        g2repo.find_reference(name).map_err(|e| GitAiError::Generic(e.to_string()))?;
-        Ok(Reference { repo: self, ref_name: name.to_string() })
+        let mut args = self.global_args_for_exec();
+        args.push("show-ref".to_string());
+        args.push("--verify".to_string());
+        args.push("-s".to_string());
+        args.push(name.to_string());
+        exec_git(&args)?;
+        Ok(Reference {
+            repo: self,
+            ref_name: name.to_string(),
+        })
     }
     // Find a merge base between two commits
     pub fn merge_base(&self, one: String, two: String) -> Result<String, GitAiError> {
-        let g2repo = self.open_git2()
-            .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let oid1 = Oid::from_str(&one).map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let oid2 = Oid::from_str(&two).map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let base = g2repo.merge_base(oid1, oid2).map_err(|e| GitAiError::Generic(e.to_string()))?;
-        Ok(base.to_string())
+        let mut args = self.global_args_for_exec();
+        args.push("merge-base".to_string());
+        args.push(one.to_string());
+        args.push(two.to_string());
+        let output = exec_git(&args)?;
+        Ok(String::from_utf8(output.stdout)?.trim().to_string())
     }
 
     // Merge two trees, producing an index that reflects the result of the merge. The index may be written as-is to the working directory or checked out. If the index is to be converted to a tree, the caller should resolve any conflicts that arose as part of the merge.
@@ -2019,11 +1906,16 @@ impl Repository {
 
     // Find a single object, as specified by a revision string.
     pub fn revparse_single(&self, spec: &str) -> Result<Object<'_>, GitAiError> {
-        let g2repo = self.open_git2()
-            .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let obj = g2repo.revparse_single(spec)
-            .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        Ok(Object { repo: self, oid: obj.id().to_string() })
+        let mut args = self.global_args_for_exec();
+        args.push("rev-parse".to_string());
+        // args.push("-q".to_string());
+        args.push("--verify".to_string());
+        args.push(spec.to_string());
+        let output = exec_git(&args)?;
+        Ok(Object {
+            repo: self,
+            oid: String::from_utf8(output.stdout)?.trim().to_string(),
+        })
     }
 
     // Non-standard method of getting a 'default' remote
@@ -2108,14 +2000,24 @@ impl Repository {
     // Create an iterator for the repo's references (git2-style)
     #[allow(dead_code)]
     pub fn references<'a>(&'a self) -> Result<References<'a>, GitAiError> {
-        let g2repo = self.open_git2()
-            .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let refs: Vec<String> = g2repo
-            .references()
-            .map_err(|e| GitAiError::Generic(e.to_string()))?
-            .filter_map(|r| r.ok()?.name().map(|s| s.to_string()))
+        let mut args = self.global_args_for_exec();
+        args.push("for-each-ref".to_string());
+        args.push("--format=%(refname)".to_string());
+
+        let output = exec_git(&args)?;
+        let stdout = String::from_utf8(output.stdout)?;
+        let refs: Vec<String> = stdout
+            .lines()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
             .collect();
-        Ok(References { repo: self, refs, index: 0 })
+
+        Ok(References {
+            repo: self,
+            refs,
+            index: 0,
+        })
     }
 
     // Lookup a reference to one of the commits in a repository.
@@ -2158,30 +2060,19 @@ impl Repository {
         Ok(Tree { repo: self, oid })
     }
 
+    /// Get the content of a file at a specific commit
+    /// Uses `git show <commit>:<path>` for efficient single-call retrieval
     #[allow(dead_code)]
     pub fn get_file_content(
         &self,
         file_path: &str,
         commit_hash: &str,
     ) -> Result<Vec<u8>, GitAiError> {
-        let g2repo = self.open_git2()?;
-        let obj = g2repo.revparse_single(commit_hash)
-            .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let commit = obj.peel_to_commit()
-            .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let tree = commit.tree().map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let entry = tree.get_path(std::path::Path::new(file_path))
-            .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let entry_obj = entry.to_object(&g2repo).map_err(|e| GitAiError::Generic(e.to_string()))?;
-        match entry_obj.kind() {
-            Some(git2::ObjectType::Blob) => Ok(entry_obj.as_blob().unwrap().content().to_vec()),
-            _ => {
-                let mut args = self.global_args_for_exec();
-                args.push("show".to_string());
-                args.push(format!("{}:{}", commit_hash, file_path));
-                Ok(exec_git(&args)?.stdout)
-            }
-        }
+        let mut args = self.global_args_for_exec();
+        args.push("show".to_string());
+        args.push(format!("{}:{}", commit_hash, file_path));
+        let output = exec_git(&args)?;
+        Ok(output.stdout)
     }
 
     /// Get content of all staged files concurrently
@@ -2194,7 +2085,7 @@ impl Repository {
         use futures::future::join_all;
         use std::sync::Arc;
 
-        const MAX_CONCURRENT: usize = if cfg!(windows) { 4 } else { 30 };
+        const MAX_CONCURRENT: usize = 30;
 
         let repo_global_args = self.global_args_for_exec();
         let semaphore = Arc::new(smol::lock::Semaphore::new(MAX_CONCURRENT));
@@ -2532,16 +2423,63 @@ impl Repository {
 
 pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError> {
     let find_repository_start = Instant::now();
+    let exec_git_rev_parse_start = Instant::now();
+    let mut rev_parse_args = global_args.to_owned();
+    rev_parse_args.push("rev-parse".to_string());
+    // Use --git-dir instead of --absolute-git-dir for compatibility with Git < 2.13
+    // (--absolute-git-dir was added in Git 2.13; older versions output the literal
+    // string "absolute-git-dir" instead of the resolved path).
+    rev_parse_args.push("--is-bare-repository".to_string());
+    rev_parse_args.push("--git-dir".to_string());
+    rev_parse_args.push("--git-common-dir".to_string());
+
+    let rev_parse_output = exec_git(&rev_parse_args)?;
+    let rev_parse_stdout = String::from_utf8(rev_parse_output.stdout)?;
+    let mut lines = rev_parse_stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty());
+
+    let is_bare = match lines.next() {
+        Some("true") => true,
+        Some("false") => false,
+        Some(other) => {
+            return Err(GitAiError::Generic(format!(
+                "Unexpected --is-bare-repository output: {}",
+                other
+            )));
+        }
+        None => {
+            return Err(GitAiError::Generic(
+                "Missing --is-bare-repository output from git rev-parse".to_string(),
+            ));
+        }
+    };
+
+    let git_dir_str = lines.next().ok_or_else(|| {
+        GitAiError::Generic("Missing --git-dir output from git rev-parse".to_string())
+    })?;
+    let git_common_dir_str = lines.next().ok_or_else(|| {
+        GitAiError::Generic("Missing --git-common-dir output from git rev-parse".to_string())
+    })?;
+
+    tracing::debug!(
+        "[find_repository] exec_git_rev_parse {}ms",
+        exec_git_rev_parse_start.elapsed().as_millis()
+    );
+
     let command_base_dir = resolve_command_base_dir(global_args)?;
 
-    let g2repo = git2::Repository::discover(&command_base_dir)
-        .map_err(|e| GitAiError::Generic(format!("git2 discover failed: {}", e)))?;
-
-    let is_bare = g2repo.is_bare();
-
-    // libgit2 appends a trailing path separator; normalize via .components().collect()
-    let git_dir: PathBuf = g2repo.path().components().collect();
-    let git_common_dir: PathBuf = g2repo.commondir().components().collect();
+    let git_dir = if Path::new(git_dir_str).is_relative() {
+        command_base_dir.join(git_dir_str)
+    } else {
+        PathBuf::from(git_dir_str)
+    };
+    let git_common_dir = if Path::new(git_common_dir_str).is_relative() {
+        command_base_dir.join(git_common_dir_str)
+    } else {
+        PathBuf::from(git_common_dir_str)
+    };
 
     if !git_dir.is_dir() {
         return Err(GitAiError::Generic(format!(
@@ -2564,11 +2502,16 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
             ))
         })?
     } else {
-        g2repo
-            .workdir()
-            .ok_or_else(|| GitAiError::Generic("Non-bare repository has no workdir".to_string()))?
-            .components()
-            .collect()
+        let exec_git_rev_parse2_start = Instant::now();
+        let mut top_level_args = global_args.to_owned();
+        top_level_args.push("rev-parse".to_string());
+        top_level_args.push("--show-toplevel".to_string());
+        let output = exec_git(&top_level_args)?;
+        tracing::debug!(
+            "[find_repository] exec_git_rev_parse2 {}ms",
+            exec_git_rev_parse2_start.elapsed().as_millis()
+        );
+        PathBuf::from(String::from_utf8(output.stdout)?.trim())
     };
 
     if !workdir.is_dir() {
@@ -2595,9 +2538,9 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
         normalized_global_args[1] = command_root;
     }
 
-    // Canonicalize workdir for reliable path comparisons (especially on Windows,
-    // where canonical paths use the \\?\ UNC prefix, making path.starts_with()
-    // work correctly). Both regular and canonical versions are stored.
+    // Canonicalize workdir for reliable path comparisons (especially on Windows)
+    // On Windows, canonical paths use the \\?\ UNC prefix, which makes path.starts_with()
+    // comparisons work correctly. We store both regular and canonical versions.
     let canonical_workdir = workdir.canonicalize().map_err(|e| {
         GitAiError::Generic(format!(
             "Failed to canonicalize working directory {}: {}",
@@ -2632,7 +2575,6 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
         workdir,
         canonical_workdir,
         cached_author_identity: std::sync::OnceLock::new(),
-        is_bare,
     })
 }
 
@@ -2948,7 +2890,6 @@ pub fn from_bare_repository(git_dir: &Path) -> Result<Repository, GitAiError> {
         workdir,
         canonical_workdir,
         cached_author_identity: std::sync::OnceLock::new(),
-        is_bare: true,
     })
 }
 
@@ -3006,7 +2947,6 @@ fn repository_from_discovered_paths(
         workdir: workdir.to_path_buf(),
         canonical_workdir,
         cached_author_identity: std::sync::OnceLock::new(),
-        is_bare: false, // this helper is only called for non-bare repositories
     })
 }
 
@@ -3236,15 +3176,45 @@ pub fn exec_git_allow_nonzero_with_profile(
     args: &[String],
     profile: InternalGitProfile,
 ) -> Result<Output, GitAiError> {
-    let request = GitExecRequest {
-        args: args.to_vec(),
-        profile,
-        stdin_data: None,
-        env_overrides: Vec::new(),
-        timeout: Some(DEFAULT_EXEC_GIT_TIMEOUT),
-    };
-    let policy = default_git_exec_policy();
-    run_git_with_retry(&request, &policy)
+    let effective_args =
+        args_with_internal_git_profile(&args_with_disabled_hooks_if_needed(args), profile);
+    let mut cmd = Command::new(config::Config::get().git_cmd());
+    cmd.args(&effective_args);
+    cmd.env_remove("GIT_EXTERNAL_DIFF");
+    cmd.env_remove("GIT_DIFF_OPTS");
+
+    #[cfg(windows)]
+    {
+        if !is_interactive_terminal() {
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+    }
+    if is_debug_enabled() {
+        tracing::debug!("[exec_git] cmd = {:?}", cmd);
+
+        cmd.env("GIT_TRACE", "1");
+        cmd.env("GIT_TRACE2", "1");
+    }
+
+    let cmd_start = Instant::now();
+    let trace_id = uuid::Uuid::new_v4();
+    tracing::debug!("[exec_git] {} Starting git command execution", trace_id);
+    let result = cmd.output().map_err(GitAiError::IoError);
+    let elapsed = cmd_start.elapsed();
+    tracing::debug!(
+        "[exec_git] {} git command [{:?}] execution total {}ms",
+        trace_id,
+        effective_args,
+        elapsed.as_millis()
+    );
+    if elapsed > std::time::Duration::from_secs(3) {
+        eprintln!(
+            "[git-ai:slow] git {:?} took {}ms",
+            effective_args.first(),
+            elapsed.as_millis()
+        );
+    }
+    result
 }
 
 /// Execute a git command with a timeout. If the command takes longer than `timeout`,
@@ -3262,15 +3232,85 @@ pub fn exec_git_with_timeout_internal(
     timeout: std::time::Duration,
     profile: InternalGitProfile,
 ) -> Result<Output, GitAiError> {
-    let request = GitExecRequest {
-        args: args.to_vec(),
-        profile,
-        stdin_data: None,
-        env_overrides: Vec::new(),
-        timeout: Some(timeout),
-    };
-    let policy = default_git_exec_policy();
-    run_git_with_retry(&request, &policy)
+    use std::sync::mpsc;
+    use std::thread;
+
+    let (tx, rx) = mpsc::channel();
+    let effective_args: Vec<String> = args.iter().map(|s| s.clone()).collect::<Vec<_>>();
+
+    thread::spawn(move || {
+        // Run the git command in a spawned thread where we can interrupt it.
+        let result = exec_git_allow_nonzero_with_timeout_inner(&effective_args, profile);
+        let _ = tx.send(result);
+    });
+
+    match rx.recv_timeout(timeout) {
+        Ok(result) => result,
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            tracing::debug!(
+                "git command [{:?}] timed out after {}ms",
+                args.first(),
+                timeout.as_millis()
+            );
+            Err(GitAiError::GitCliError {
+                code: Some(1),
+                stderr: "Command timed out".to_string(),
+                args: args.to_vec(),
+            })
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(GitAiError::Generic(
+            "git command thread panicked".to_string(),
+        )),
+    }
+}
+
+/// Inner implementation: builds the Command and calls output() in a thread context.
+/// Uses a separate function to keep the thread::spawn closure simple.
+fn exec_git_allow_nonzero_with_timeout_inner(
+    args: &[String],
+    profile: InternalGitProfile,
+) -> Result<Output, GitAiError> {
+    let effective_args =
+        args_with_internal_git_profile(&args_with_disabled_hooks_if_needed(args), profile);
+    let mut cmd = Command::new(config::Config::get().git_cmd());
+    cmd.args(&effective_args);
+    cmd.env_remove("GIT_EXTERNAL_DIFF");
+    cmd.env_remove("GIT_DIFF_OPTS");
+
+    #[cfg(windows)]
+    {
+        if !is_interactive_terminal() {
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+    }
+    if is_debug_enabled() {
+        tracing::debug!("[exec_git timeout] cmd = {:?}", cmd);
+        cmd.env("GIT_TRACE", "1");
+        cmd.env("GIT_TRACE2", "1");
+    }
+
+    let cmd_start = Instant::now();
+    let trace_id = uuid::Uuid::new_v4();
+    tracing::debug!(
+        "[exec_git timeout] {} Starting git command execution",
+        trace_id
+    );
+    let result = cmd.output().map_err(GitAiError::IoError);
+    let elapsed = cmd_start.elapsed();
+    tracing::debug!(
+        "[exec_git timeout] {} git command [{:?}] execution total {}ms",
+        trace_id,
+        effective_args,
+        elapsed.as_millis()
+    );
+    if elapsed > std::time::Duration::from_secs(3) {
+        tracing::debug!(
+            "[git-ai:slow] git {:?} took {}ms",
+            effective_args.first(),
+            elapsed.as_millis()
+        );
+    }
+    result
 }
 
 /// Helper to execute a git command with an explicit internal profile.
@@ -3278,17 +3318,9 @@ pub fn exec_git_with_profile(
     args: &[String],
     profile: InternalGitProfile,
 ) -> Result<Output, GitAiError> {
-    let request = GitExecRequest {
-        args: args.to_vec(),
-        profile,
-        stdin_data: None,
-        env_overrides: Vec::new(),
-        timeout: Some(DEFAULT_EXEC_GIT_TIMEOUT),
-    };
-    let policy = default_git_exec_policy();
     let effective_args =
         args_with_internal_git_profile(&args_with_disabled_hooks_if_needed(args), profile);
-    let output = run_git_with_retry(&request, &policy)?;
+    let output = exec_git_allow_nonzero_with_profile(args, profile)?;
 
     if !output.status.success() {
         let code = output.status.code();
@@ -3314,17 +3346,63 @@ pub fn exec_git_stdin_with_profile(
     stdin_data: &[u8],
     profile: InternalGitProfile,
 ) -> Result<Output, GitAiError> {
-    let request = GitExecRequest {
-        args: args.to_vec(),
-        profile,
-        stdin_data: Some(stdin_data.to_vec()),
-        env_overrides: Vec::new(),
-        timeout: Some(DEFAULT_EXEC_GIT_TIMEOUT),
-    };
-    let policy = default_git_exec_policy();
+    // TODO Make sure to handle process signals, etc.
     let effective_args =
         args_with_internal_git_profile(&args_with_disabled_hooks_if_needed(args), profile);
-    let output = run_git_with_retry(&request, &policy)?;
+    let mut cmd = Command::new(config::Config::get().git_cmd());
+    cmd.args(&effective_args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    cmd.env_remove("GIT_EXTERNAL_DIFF");
+    cmd.env_remove("GIT_DIFF_OPTS");
+
+    #[cfg(windows)]
+    {
+        if !is_interactive_terminal() {
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+    }
+    if is_debug_enabled() {
+        tracing::debug!("[exec_git_stdin] cmd = {:?}", cmd);
+
+        cmd.env("GIT_TRACE", "1");
+        cmd.env("GIT_TRACE2", "1");
+    }
+    let cmd_start = Instant::now();
+    let trace_id = uuid::Uuid::new_v4();
+    tracing::debug!(
+        "[exec_git_stdin] {} Starting git command execution",
+        trace_id
+    );
+    let mut child = cmd.spawn().map_err(GitAiError::IoError)?;
+    tracing::debug!(
+        "[exec_git_stdin] {} git command [{:?}] execution total {}ms",
+        trace_id,
+        effective_args,
+        cmd_start.elapsed().as_millis()
+    );
+
+    // Write stdin in a separate thread to avoid deadlock: if we write all stdin
+    // before reading stdout, the child's stdout pipe buffer can fill up, causing
+    // the child to block on write, which prevents it from consuming more stdin,
+    // which blocks our write_all. Writing concurrently avoids this.
+    let stdin_handle = child.stdin.take().map(|mut stdin| {
+        let data = stdin_data.to_vec();
+        std::thread::spawn(move || {
+            use std::io::Write;
+            stdin.write_all(&data)
+        })
+    });
+
+    let output = child.wait_with_output().map_err(GitAiError::IoError)?;
+
+    if let Some(handle) = stdin_handle
+        && let Err(e) = handle.join().expect("stdin writer thread panicked")
+        && e.kind() != std::io::ErrorKind::BrokenPipe
+    {
+        return Err(GitAiError::IoError(e));
+    }
 
     if !output.status.success() {
         let code = output.status.code();
@@ -3357,17 +3435,66 @@ pub fn exec_git_stdin_with_env_with_profile(
     stdin_data: &[u8],
     profile: InternalGitProfile,
 ) -> Result<Output, GitAiError> {
-    let request = GitExecRequest {
-        args: args.to_vec(),
-        profile,
-        stdin_data: Some(stdin_data.to_vec()),
-        env_overrides: env.to_vec(),
-        timeout: Some(DEFAULT_EXEC_GIT_TIMEOUT),
-    };
-    let policy = default_git_exec_policy();
+    // TODO Make sure to handle process signals, etc.
     let effective_args =
         args_with_internal_git_profile(&args_with_disabled_hooks_if_needed(args), profile);
-    let output = run_git_with_retry(&request, &policy)?;
+    let mut cmd = Command::new(config::Config::get().git_cmd());
+    cmd.args(&effective_args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    // Apply env overrides
+    for (k, v) in env.iter() {
+        cmd.env(k, v);
+    }
+    cmd.env_remove("GIT_EXTERNAL_DIFF");
+    cmd.env_remove("GIT_DIFF_OPTS");
+
+    #[cfg(windows)]
+    {
+        if !is_interactive_terminal() {
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+    }
+    if is_debug_enabled() {
+        tracing::debug!("[exec_git_stdin_with_env] cmd = {:?}", cmd);
+
+        cmd.env("GIT_TRACE", "1");
+        cmd.env("GIT_TRACE2", "1");
+    }
+
+    let cmd_start = Instant::now();
+    let trace_id = uuid::Uuid::new_v4();
+    tracing::debug!(
+        "[exec_git_stdin_with_env] {} Starting git command execution",
+        trace_id
+    );
+    let mut child = cmd.spawn().map_err(GitAiError::IoError)?;
+    tracing::debug!(
+        "[exec_git_stdin_with_env] {} git command [{:?}] execution total {}ms",
+        trace_id,
+        effective_args,
+        cmd_start.elapsed().as_millis()
+    );
+
+    // Write stdin in a separate thread to avoid deadlock (see exec_git_stdin_with_profile).
+    let stdin_handle = child.stdin.take().map(|mut stdin| {
+        let data = stdin_data.to_vec();
+        std::thread::spawn(move || {
+            use std::io::Write;
+            stdin.write_all(&data)
+        })
+    });
+
+    let output = child.wait_with_output().map_err(GitAiError::IoError)?;
+
+    if let Some(handle) = stdin_handle
+        && let Err(e) = handle.join().expect("stdin writer thread panicked")
+        && e.kind() != std::io::ErrorKind::BrokenPipe
+    {
+        return Err(GitAiError::IoError(e));
+    }
 
     if !output.status.success() {
         let code = output.status.code();
@@ -4027,43 +4154,6 @@ mod tests {
         assert!(rewritten.iter().any(|arg| arg == "--no-textconv"));
         assert!(rewritten.iter().any(|arg| arg == "--no-color"));
         assert!(rewritten.iter().any(|arg| arg == "--no-relative"));
-    }
-
-    #[test]
-    fn test_retryable_git_cli_error_detects_index_lock() {
-        assert!(is_retryable_git_cli_error(
-            Some(128),
-            "fatal: Unable to create '/repo/.git/index.lock': File exists."
-        ));
-    }
-
-    #[test]
-    fn test_retryable_git_cli_error_rejects_bad_revision() {
-        assert!(!is_retryable_git_cli_error(
-            Some(128),
-            "fatal: bad revision 'abc'"
-        ));
-    }
-
-    #[test]
-    fn test_is_timeout_error_matches_timeout_sentinel() {
-        let err = GitAiError::GitCliError {
-            code: Some(1),
-            stderr: EXEC_GIT_TIMEOUT_STDERR.to_string(),
-            args: vec!["status".to_string()],
-        };
-
-        assert!(is_timeout_error(&err));
-    }
-
-    #[test]
-    fn test_default_git_exec_policy_is_single_attempt_without_retry() {
-        let policy = default_git_exec_policy();
-
-        assert_eq!(policy.max_attempts, 1);
-        assert!(policy.backoff_delays.is_empty());
-        assert!(!policy.retry_on_timeout);
-        assert!(!policy.retry_on_transient_error);
     }
 
     #[test]

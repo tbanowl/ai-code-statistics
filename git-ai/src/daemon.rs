@@ -84,8 +84,35 @@ pub use control_api::{
 
 const PID_META_FILE: &str = "daemon.pid.json";
 const TRACE_INGEST_SEQ_FIELD: &str = "git_ai_ingest_seq";
-const DAEMON_CONTROL_CONNECT_TIMEOUT: Duration = Duration::from_millis(2500);
-const DAEMON_CONTROL_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Control socket connect timeout. On slow VMs this increases to 5s.
+fn daemon_control_connect_timeout() -> Duration {
+    if let Ok(ms) = std::env::var("GIT_AI_DAEMON_CONNECT_TIMEOUT_MS")
+        .and_then(|v| v.parse::<u64>())
+    {
+        Duration::from_millis(ms)
+    } else if std::env::var_os("GIT_AI_SLOW_VM").is_some() {
+        Duration::from_secs(5)
+    } else {
+        Duration::from_millis(2500)
+    }
+}
+
+/// Control request (non-checkpoint) response timeout.
+/// On slow VMs this increases to 30s because blocking threads may be busy.
+/// Can be overridden via GIT_AI_DAEMON_CONTROL_TIMEOUT_MS.
+fn daemon_control_response_timeout() -> Duration {
+    if let Ok(ms) = std::env::var("GIT_AI_DAEMON_CONTROL_TIMEOUT_MS")
+        .and_then(|v| v.parse::<u64>())
+    {
+        Duration::from_millis(ms)
+    } else if std::env::var_os("GIT_AI_SLOW_VM").is_some() {
+        Duration::from_secs(30)
+    } else {
+        Duration::from_secs(10)
+    }
+}
+
 const DAEMON_CHECKPOINT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(300);
 const DAEMON_SOCKET_PROBE_TIMEOUT: Duration = Duration::from_millis(2000);
 #[cfg(windows)]
@@ -7341,6 +7368,13 @@ impl ActorDaemonCoordinator {
             || std::env::var_os("GITAI_TEST_DB_PATH").is_some();
         if is_test {
             Duration::from_secs(20)
+        } else if let Ok(ms) = std::env::var("GIT_AI_WRAPPER_STATE_TIMEOUT_MS")
+            .and_then(|v| v.parse::<u64>())
+        {
+            Duration::from_millis(ms)
+        } else if std::env::var_os("GIT_AI_SLOW_VM").is_some() {
+            // Slow VMs need more time for git repo reads that produce wrapper state
+            Duration::from_secs(10)
         } else {
             Duration::from_millis(750)
         }
@@ -8032,13 +8066,13 @@ fn checkpoint_control_response_timeout(
         // CI/test we allow the longer budget so replay-heavy daemon tests don't
         // tear down captured state mid-request. Product mode keeps the short
         // control timeout for fire-and-forget checkpoint requests to preserve
-        // responsiveness.
+        // responsiveness. On slow VMs this increases to 30s.
         ControlRequest::CheckpointRun { .. } if use_ci_or_test_budget => {
             DAEMON_CHECKPOINT_RESPONSE_TIMEOUT
         }
-        ControlRequest::CheckpointRun { .. } => DAEMON_CONTROL_RESPONSE_TIMEOUT,
+        ControlRequest::CheckpointRun { .. } => daemon_control_response_timeout(),
         ControlRequest::SnapshotWatermarks { .. } => Duration::from_millis(500),
-        _ => DAEMON_CONTROL_RESPONSE_TIMEOUT,
+        _ => daemon_control_response_timeout(),
     }
 }
 
@@ -8274,7 +8308,7 @@ pub fn send_control_request(
     send_control_request_with_timeouts(
         socket_path,
         request,
-        DAEMON_CONTROL_CONNECT_TIMEOUT,
+        daemon_control_connect_timeout(),
         control_request_response_timeout(request),
     )
 }
@@ -8377,7 +8411,7 @@ mod tests {
     fn queued_checkpoint_requests_use_short_timeout_in_product_env() {
         assert_eq!(
             checkpoint_control_response_timeout(&queued_checkpoint_request(), false),
-            DAEMON_CONTROL_RESPONSE_TIMEOUT
+            daemon_control_response_timeout()
         );
     }
 

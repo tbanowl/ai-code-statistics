@@ -213,6 +213,7 @@ impl LockFile {
 impl Drop for LockFile {
     fn drop(&mut self) {
         unsafe { libc::flock(self.fd, libc::LOCK_UN) };
+        unsafe { libc::close(self.fd) };
     }
 }
 
@@ -236,6 +237,7 @@ fn try_lock_exclusive(path: &std::path::Path) -> Option<LockFile> {
 
 #[cfg(windows)]
 unsafe extern "system" {
+    fn CloseHandle(hObject: isize) -> i32;
     fn UnlockFile(
         hFile: isize,
         dwFileOffsetLow: u32,
@@ -255,6 +257,11 @@ impl Drop for LockFile {
     fn drop(&mut self) {
         // SAFETY: we own this handle and no other code uses it.
         unsafe { UnlockFile(self.handle, 0, 0, u32::MAX, u32::MAX) };
+        // Release the underlying HANDLE so future lock attempts do not observe
+        // a stale share violation on Windows.
+        unsafe {
+            let _ = CloseHandle(self.handle);
+        }
     }
 }
 
@@ -340,31 +347,6 @@ pub const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
 /// Windows-specific flag to allow a child process to break away from the current job object
 #[cfg(windows)]
 pub const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x01000000;
-
-#[cfg(windows)]
-pub fn kill_process_tree_windows(pid: u32) -> Result<(), String> {
-    let output = Command::new("taskkill")
-        .args(["/F", "/T", "/PID", &pid.to_string()])
-        .output()
-        .map_err(|e| format!("failed to run taskkill: {}", e))?;
-
-    if output.status.success() {
-        return Ok(());
-    }
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stderr_trimmed = stderr.trim();
-    if stderr_trimmed.contains("not found")
-        || stderr_trimmed.contains("There is no running instance")
-    {
-        return Ok(());
-    }
-
-    Err(format!(
-        "taskkill /F /T /PID {} failed: {}",
-        pid, stderr_trimmed
-    ))
-}
 /// Unescape a git-quoted path that may contain octal escape sequences.
 ///
 /// Git quotes filenames containing non-ASCII characters (and some special characters)

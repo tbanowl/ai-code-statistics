@@ -89,10 +89,22 @@ pub fn post_commit_with_final_state(
 
     // Refresh prompts/transcripts under the same checkpoints lock used by append_checkpoint so
     // concurrent checkpoint appends cannot be lost between a read and rewrite of the JSONL file.
+    // After refreshing prompts, compact the checkpoints file to prune old char-level attributions.
+    // This was previously on the hot path of every checkpoint; deferring it to post-commit
+    // reduces checkpoint latency significantly on slow disks.
     let parent_working_log = working_log.mutate_all_checkpoints(|checkpoints| {
         update_prompts_to_latest(checkpoints)?;
         Ok(())
     })?;
+
+    // Compact checkpoints after prompt refresh. Compaction prunes char-level attributions
+    // from all but the newest checkpoint per file, reducing file size.
+    // This is deferred to post-commit (not done on every checkpoint) to avoid O(n) I/O
+    // on every checkpoint write. On slow disks, this reduces checkpoint time from seconds
+    // to milliseconds.
+    if let Err(e) = working_log.compact_checkpoints() {
+        tracing::debug!("checkpoint compaction failed (non-fatal): {}", e);
+    }
 
     // Batch upsert all prompts to database after refreshing (non-fatal if it fails)
     if let Err(e) = batch_upsert_prompts_to_db(&parent_working_log, &working_log, &commit_sha) {

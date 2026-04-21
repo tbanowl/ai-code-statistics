@@ -388,9 +388,6 @@ impl PersistedWorkingLog {
 
     /* append checkpoint */
     pub fn append_checkpoint(&self, checkpoint: &Checkpoint) -> Result<(), GitAiError> {
-        // Read existing checkpoints
-        let mut checkpoints = self.read_all_checkpoints().unwrap_or_default();
-
         // Create a copy, potentially without transcript to reduce storage size.
         // Transcripts are refetched in update_prompts_to_latest() before post-commit
         // using tool-specific sources (transcript_path for Claude, cursor_db_path for Cursor, etc.)
@@ -441,15 +438,44 @@ impl PersistedWorkingLog {
             storage_checkpoint.transcript = None;
         }
 
-        // Add the new checkpoint
-        checkpoints.push(storage_checkpoint);
+        // Append-only write: no longer reads the entire file before writing.
+        // On slow disks, this changes O(n) blocking I/O to O(1).
+        // Char-level attribution pruning runs asynchronously via compact_checkpoints()
+        // which is called during post-commit or as a periodic background task.
+        let checkpoints_file = self.dir.join("checkpoints.jsonl");
+        let json_line = serde_json::to_string(&storage_checkpoint)?;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&checkpoints_file)?;
+        use std::io::Write;
+        writeln!(file, "{}", json_line)?;
+        Ok(())
+    }
+
+    /// Compact the checkpoints file by:
+    /// 1. Reading all checkpoints (already done during post-commit via mutate_all_checkpoints)
+    /// 2. Pruning old char-level attributions (only newest checkpoint per file keeps them)
+    /// 3. Writing compacted content back (atomic write)
+    ///
+    /// This is the expensive O(n) operation that was previously on the hot path of every
+    /// checkpoint. It is now deferred to post-commit when we already pay the read cost.
+    pub fn compact_checkpoints(&self) -> Result<(), GitAiError> {
+        let checkpoints_file = self.dir.join("checkpoints.jsonl");
+        if !checkpoints_file.exists() {
+            return Ok(());
+        }
+
+        let checkpoints = self.read_all_checkpoints()?;
+        if checkpoints.is_empty() {
+            return Ok(());
+        }
 
         // Prune char-level attributions from older checkpoints for the same files
         // Only the most recent checkpoint per file needs char-level precision
-        self.prune_old_char_attributions(&mut checkpoints);
-
-        // Write all checkpoints back
-        self.write_all_checkpoints(&checkpoints)
+        let mut compacted = checkpoints;
+        self.prune_old_char_attributions(&mut compacted);
+        self.write_all_checkpoints(&compacted)
     }
 
     pub fn read_all_checkpoints(&self) -> Result<Vec<Checkpoint>, GitAiError> {
@@ -557,12 +583,15 @@ impl PersistedWorkingLog {
         }
     }
 
-    /// Write all checkpoints to the JSONL file, replacing any existing content
+    /// Write all checkpoints to the JSONL file, replacing any existing content.
+    /// Uses atomic write: write to a .tmp file first, then rename over the target.
+    /// This prevents data loss if the process is killed or crashes mid-write.
     /// Note: Unlike append_checkpoint(), this preserves transcripts because it's used
     /// by post-commit after transcripts have been refetched and need to be preserved
     /// for from_just_working_log() to read them.
     pub fn write_all_checkpoints(&self, checkpoints: &[Checkpoint]) -> Result<(), GitAiError> {
         let checkpoints_file = self.dir.join("checkpoints.jsonl");
+        let tmp_file = self.dir.join("checkpoints.jsonl.tmp");
 
         // Serialize all checkpoints to JSONL
         let mut lines = Vec::new();
@@ -571,13 +600,20 @@ impl PersistedWorkingLog {
             lines.push(json_line);
         }
 
-        // Write all lines to file
+        // Write to temporary file first (atomic write step 1)
         let content = lines.join("\n");
         if !content.is_empty() {
-            fs::write(&checkpoints_file, format!("{}\n", content))?;
+            fs::write(&tmp_file, format!("{}\n", content))?;
         } else {
-            fs::write(&checkpoints_file, "")?;
+            fs::write(&tmp_file, "")?;
         }
+
+        // Rename tmp over target (atomic write step 2)
+        // On both Unix and Windows, rename is atomic for replacing files
+        // when the target already exists (it replaces atomically on Unix,
+        // and on Windows the previous content remains accessible until the
+        // rename completes).
+        fs::rename(&tmp_file, &checkpoints_file)?;
 
         Ok(())
     }
