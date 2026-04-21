@@ -1795,7 +1795,9 @@ fn test_commit_summary_for_single_line_message() {
 
     let mut file = test_repo.filename("single_summary.txt");
     file.set_contents(crate::lines!["content".human()]);
-    let commit = test_repo.stage_all_and_commit("single line subject").unwrap();
+    let commit = test_repo
+        .stage_all_and_commit("single line subject")
+        .unwrap();
 
     let repo = find_repository(&[
         "-C".to_string(),
@@ -1816,10 +1818,20 @@ fn test_commit_summary_and_body_for_multiline_message() {
     file.stage();
 
     test_repo
-        .git(&["commit", "-m", "Title line", "-m", "Body line 1\n\nBody line 2"])
+        .git(&[
+            "commit",
+            "-m",
+            "Title line",
+            "-m",
+            "Body line 1\n\nBody line 2",
+        ])
         .unwrap();
 
-    let oid = test_repo.git(&["rev-parse", "HEAD"]).unwrap().trim().to_string();
+    let oid = test_repo
+        .git(&["rev-parse", "HEAD"])
+        .unwrap()
+        .trim()
+        .to_string();
 
     let repo = find_repository(&[
         "-C".to_string(),
@@ -1843,7 +1855,9 @@ fn test_commit_body_is_empty_when_commit_has_no_body() {
 
     let mut file = test_repo.filename("no_body.txt");
     file.set_contents(crate::lines!["content".human()]);
-    let oid = test_repo.stage_all_and_commit("single line subject").unwrap();
+    let oid = test_repo
+        .stage_all_and_commit("single line subject")
+        .unwrap();
 
     let repo = find_repository(&[
         "-C".to_string(),
@@ -1903,7 +1917,11 @@ fn test_commit_author_and_committer_can_differ() {
         )
         .unwrap();
 
-    let oid = test_repo.git(&["rev-parse", "HEAD"]).unwrap().trim().to_string();
+    let oid = test_repo
+        .git(&["rev-parse", "HEAD"])
+        .unwrap()
+        .trim()
+        .to_string();
 
     let repo = find_repository(&[
         "-C".to_string(),
@@ -1944,7 +1962,11 @@ fn test_commit_time_uses_committer_time() {
         )
         .unwrap();
 
-    let oid = test_repo.git(&["rev-parse", "HEAD"]).unwrap().trim().to_string();
+    let oid = test_repo
+        .git(&["rev-parse", "HEAD"])
+        .unwrap()
+        .trim()
+        .to_string();
 
     let repo = find_repository(&[
         "-C".to_string(),
@@ -2043,7 +2065,11 @@ fn test_merge_commit_parent_count_and_order_are_stable() {
         .git(&["merge", "--no-ff", "feature", "-m", "merge feature"])
         .unwrap();
 
-    let merge_oid = test_repo.git(&["rev-parse", "HEAD"]).unwrap().trim().to_string();
+    let merge_oid = test_repo
+        .git(&["rev-parse", "HEAD"])
+        .unwrap()
+        .trim()
+        .to_string();
 
     let repo = find_repository(&[
         "-C".to_string(),
@@ -2105,7 +2131,11 @@ fn test_commit_metadata_supports_non_ascii_message_and_author() {
         )
         .unwrap();
 
-    let oid = test_repo.git(&["rev-parse", "HEAD"]).unwrap().trim().to_string();
+    let oid = test_repo
+        .git(&["rev-parse", "HEAD"])
+        .unwrap()
+        .trim()
+        .to_string();
     let repo = find_repository(&[
         "-C".to_string(),
         test_repo.path().to_str().unwrap().to_string(),
@@ -2166,7 +2196,11 @@ fn test_revparse_single_resolves_branch_name() {
     file.set_contents(crate::lines!["content".human()]);
     let oid = test_repo.stage_all_and_commit("Initial commit").unwrap();
 
-    let branch_name = test_repo.git(&["branch", "--show-current"]).unwrap().trim().to_string();
+    let branch_name = test_repo
+        .git(&["branch", "--show-current"])
+        .unwrap()
+        .trim()
+        .to_string();
 
     let repo = find_repository(&[
         "-C".to_string(),
@@ -2237,7 +2271,9 @@ fn test_reference_peel_to_commit_from_annotated_tag() {
     file.set_contents(crate::lines!["content".human()]);
     let commit_info = test_repo.stage_all_and_commit("Initial commit").unwrap();
 
-    test_repo.git(&["tag", "-a", "v1", "-m", "annotated tag"]).unwrap();
+    test_repo
+        .git(&["tag", "-a", "v1", "-m", "annotated tag"])
+        .unwrap();
 
     let repo = find_repository(&[
         "-C".to_string(),
@@ -2281,7 +2317,9 @@ fn test_reference_peel_to_blob_from_blob_spec() {
     file.set_contents(crate::lines!["content".human()]);
     test_repo.stage_all_and_commit("Initial commit").unwrap();
 
-    test_repo.git(&["tag", "blob-tag", "HEAD:blob_spec.txt"]).unwrap();
+    test_repo
+        .git(&["tag", "blob-tag", "HEAD:blob_spec.txt"])
+        .unwrap();
 
     let repo = find_repository(&[
         "-C".to_string(),
@@ -2309,7 +2347,9 @@ fn test_reference_peel_to_commit_errors_for_non_commitish_reference() {
     file.set_contents(crate::lines!["content".human()]);
     test_repo.stage_all_and_commit("Initial commit").unwrap();
 
-    test_repo.git(&["tag", "blob-tag", "HEAD:non_commitish.txt"]).unwrap();
+    test_repo
+        .git(&["tag", "blob-tag", "HEAD:non_commitish.txt"])
+        .unwrap();
 
     let repo = find_repository(&[
         "-C".to_string(),
@@ -2555,12 +2595,13 @@ fn test_merge_base_errors_when_commits_are_invalid() {
     ])
     .unwrap();
 
-    assert!(repo
-        .merge_base(
+    assert!(
+        repo.merge_base(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
         )
-        .is_err());
+        .is_err()
+    );
 }
 
 #[test]
@@ -2574,7 +2615,11 @@ fn test_commit_range_length_for_linear_history() {
     file.set_contents(crate::lines!["line1".human(), "line2".human()]);
     test_repo.stage_all_and_commit("Second").unwrap();
 
-    file.set_contents(crate::lines!["line1".human(), "line2".human(), "line3".human()]);
+    file.set_contents(crate::lines![
+        "line1".human(),
+        "line2".human(),
+        "line3".human()
+    ]);
     let third = test_repo.stage_all_and_commit("Third").unwrap();
 
     let repo = find_repository(&[
@@ -2884,8 +2929,14 @@ fn test_parent_on_refname_selects_parent_reachable_from_target_branch() {
     main_file.set_contents(crate::lines!["main".human()]);
     let main_tip = test_repo.stage_all_and_commit("main").unwrap();
 
-    test_repo.git(&["merge", "--no-ff", "feature", "-m", "merge"]).unwrap();
-    let merge_oid = test_repo.git(&["rev-parse", "HEAD"]).unwrap().trim().to_string();
+    test_repo
+        .git(&["merge", "--no-ff", "feature", "-m", "merge"])
+        .unwrap();
+    let merge_oid = test_repo
+        .git(&["rev-parse", "HEAD"])
+        .unwrap()
+        .trim()
+        .to_string();
 
     let repo = find_repository(&[
         "-C".to_string(),
@@ -2924,8 +2975,14 @@ fn test_parent_on_refname_accepts_short_branch_name() {
     main_file.set_contents(crate::lines!["main".human()]);
     let main_tip = test_repo.stage_all_and_commit("main").unwrap();
 
-    test_repo.git(&["merge", "--no-ff", "feature", "-m", "merge"]).unwrap();
-    let merge_oid = test_repo.git(&["rev-parse", "HEAD"]).unwrap().trim().to_string();
+    test_repo
+        .git(&["merge", "--no-ff", "feature", "-m", "merge"])
+        .unwrap();
+    let merge_oid = test_repo
+        .git(&["rev-parse", "HEAD"])
+        .unwrap()
+        .trim()
+        .to_string();
 
     let repo = find_repository(&[
         "-C".to_string(),
@@ -2966,8 +3023,14 @@ fn test_parent_on_refname_accepts_fully_qualified_refname() {
     main_file.set_contents(crate::lines!["main".human()]);
     let main_tip = test_repo.stage_all_and_commit("main").unwrap();
 
-    test_repo.git(&["merge", "--no-ff", "feature", "-m", "merge"]).unwrap();
-    let merge_oid = test_repo.git(&["rev-parse", "HEAD"]).unwrap().trim().to_string();
+    test_repo
+        .git(&["merge", "--no-ff", "feature", "-m", "merge"])
+        .unwrap();
+    let merge_oid = test_repo
+        .git(&["rev-parse", "HEAD"])
+        .unwrap()
+        .trim()
+        .to_string();
 
     let repo = find_repository(&[
         "-C".to_string(),
@@ -2993,7 +3056,9 @@ fn test_parent_on_refname_errors_when_no_parent_is_reachable_from_ref() {
     file.set_contents(crate::lines!["feature".human()]);
     let head = test_repo.stage_all_and_commit("feature").unwrap();
 
-    test_repo.git(&["checkout", "--orphan", "other-root"]).unwrap();
+    test_repo
+        .git(&["checkout", "--orphan", "other-root"])
+        .unwrap();
     fs::write(test_repo.path().join("other.txt"), "other root\n").unwrap();
     test_repo.git(&["add", "other.txt"]).unwrap();
     test_repo.git(&["commit", "-m", "other root"]).unwrap();
@@ -3055,15 +3120,18 @@ fn test_object_type_errors_for_missing_oid() {
     ])
     .unwrap();
 
-    assert!(repo
-        .find_commit("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string())
-        .is_err());
-    assert!(repo
-        .find_blob("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string())
-        .is_err());
-    assert!(repo
-        .find_tree("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string())
-        .is_err());
+    assert!(
+        repo.find_commit("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string())
+            .is_err()
+    );
+    assert!(
+        repo.find_blob("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string())
+            .is_err()
+    );
+    assert!(
+        repo.find_tree("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string())
+            .is_err()
+    );
 }
 
 #[test]
@@ -3259,7 +3327,11 @@ fn test_get_file_content_reads_file_from_commit_root() {
     file.set_contents(crate::lines!["root content".human()]);
     test_repo.stage_all_and_commit("add root file").unwrap();
 
-    let head = test_repo.git(&["rev-parse", "HEAD"]).unwrap().trim().to_string();
+    let head = test_repo
+        .git(&["rev-parse", "HEAD"])
+        .unwrap()
+        .trim()
+        .to_string();
 
     let repo = find_repository(&[
         "-C".to_string(),
@@ -3285,7 +3357,11 @@ fn test_get_file_content_reads_file_from_nested_path() {
     test_repo.git(&["add", "nested/dir/file.txt"]).unwrap();
     test_repo.git(&["commit", "-m", "add nested file"]).unwrap();
 
-    let head = test_repo.git(&["rev-parse", "HEAD"]).unwrap().trim().to_string();
+    let head = test_repo
+        .git(&["rev-parse", "HEAD"])
+        .unwrap()
+        .trim()
+        .to_string();
 
     let repo = find_repository(&[
         "-C".to_string(),
@@ -3305,7 +3381,11 @@ fn test_get_file_content_errors_for_missing_path() {
     file.set_contents(crate::lines!["content".human()]);
     test_repo.stage_all_and_commit("Initial commit").unwrap();
 
-    let head = test_repo.git(&["rev-parse", "HEAD"]).unwrap().trim().to_string();
+    let head = test_repo
+        .git(&["rev-parse", "HEAD"])
+        .unwrap()
+        .trim()
+        .to_string();
 
     let repo = find_repository(&[
         "-C".to_string(),
@@ -3326,7 +3406,11 @@ fn test_get_file_content_errors_when_path_is_directory_like() {
     test_repo.git(&["add", "dir/sub/file.txt"]).unwrap();
     test_repo.git(&["commit", "-m", "add nested file"]).unwrap();
 
-    let head = test_repo.git(&["rev-parse", "HEAD"]).unwrap().trim().to_string();
+    let head = test_repo
+        .git(&["rev-parse", "HEAD"])
+        .unwrap()
+        .trim()
+        .to_string();
 
     let repo = find_repository(&[
         "-C".to_string(),
@@ -3347,7 +3431,11 @@ fn test_tree_get_path_returns_expected_entry_for_root_file() {
     file.set_contents(crate::lines!["content".human()]);
     test_repo.stage_all_and_commit("add root entry").unwrap();
 
-    let head = test_repo.git(&["rev-parse", "HEAD"]).unwrap().trim().to_string();
+    let head = test_repo
+        .git(&["rev-parse", "HEAD"])
+        .unwrap()
+        .trim()
+        .to_string();
     let expected_blob_oid = test_repo
         .git(&["rev-parse", "HEAD:root_entry.txt"])
         .unwrap()
@@ -3377,7 +3465,11 @@ fn test_tree_get_path_returns_expected_entry_for_nested_file() {
     test_repo.git(&["add", "a/b/file.txt"]).unwrap();
     test_repo.git(&["commit", "-m", "add nested file"]).unwrap();
 
-    let head = test_repo.git(&["rev-parse", "HEAD"]).unwrap().trim().to_string();
+    let head = test_repo
+        .git(&["rev-parse", "HEAD"])
+        .unwrap()
+        .trim()
+        .to_string();
     let expected_blob_oid = test_repo
         .git(&["rev-parse", "HEAD:a/b/file.txt"])
         .unwrap()
@@ -3426,9 +3518,15 @@ fn test_get_file_content_supports_non_ascii_paths() {
     fs::write(test_repo.path().join(rel_path), "hello unicode\n").unwrap();
 
     test_repo.git(&["add", rel_path]).unwrap();
-    test_repo.git(&["commit", "-m", "add unicode path"]).unwrap();
+    test_repo
+        .git(&["commit", "-m", "add unicode path"])
+        .unwrap();
 
-    let head = test_repo.git(&["rev-parse", "HEAD"]).unwrap().trim().to_string();
+    let head = test_repo
+        .git(&["rev-parse", "HEAD"])
+        .unwrap()
+        .trim()
+        .to_string();
 
     let repo = find_repository(&[
         "-C".to_string(),
@@ -3451,7 +3549,11 @@ fn test_tree_get_path_supports_paths_with_spaces() {
     test_repo.git(&["add", rel_path]).unwrap();
     test_repo.git(&["commit", "-m", "add spaced path"]).unwrap();
 
-    let head = test_repo.git(&["rev-parse", "HEAD"]).unwrap().trim().to_string();
+    let head = test_repo
+        .git(&["rev-parse", "HEAD"])
+        .unwrap()
+        .trim()
+        .to_string();
     let expected_blob_oid = test_repo
         .git(&["rev-parse", &format!("HEAD:{}", rel_path)])
         .unwrap()
@@ -3548,8 +3650,14 @@ fn test_merge_commit_parent_order_matches_current_repository_contract() {
     main_file.set_contents(crate::lines!["main".human()]);
     let main_tip = test_repo.stage_all_and_commit("main").unwrap();
 
-    test_repo.git(&["merge", "--no-ff", "feature", "-m", "merge"]).unwrap();
-    let merge_oid = test_repo.git(&["rev-parse", "HEAD"]).unwrap().trim().to_string();
+    test_repo
+        .git(&["merge", "--no-ff", "feature", "-m", "merge"])
+        .unwrap();
+    let merge_oid = test_repo
+        .git(&["rev-parse", "HEAD"])
+        .unwrap()
+        .trim()
+        .to_string();
 
     let repo = find_repository(&[
         "-C".to_string(),
@@ -3571,7 +3679,9 @@ fn test_annotated_tag_peeling_matches_current_repository_contract() {
     file.set_contents(crate::lines!["content".human()]);
     let commit = test_repo.stage_all_and_commit("Initial commit").unwrap();
 
-    test_repo.git(&["tag", "-a", "v1", "-m", "annotated"]).unwrap();
+    test_repo
+        .git(&["tag", "-a", "v1", "-m", "annotated"])
+        .unwrap();
 
     let repo = find_repository(&[
         "-C".to_string(),
@@ -3594,10 +3704,20 @@ fn test_summary_and_body_parsing_matches_current_repository_contract() {
     file.stage();
 
     test_repo
-        .git(&["commit", "-m", "Subject", "-m", "Body line 1\n\nBody line 2"])
+        .git(&[
+            "commit",
+            "-m",
+            "Subject",
+            "-m",
+            "Body line 1\n\nBody line 2",
+        ])
         .unwrap();
 
-    let oid = test_repo.git(&["rev-parse", "HEAD"]).unwrap().trim().to_string();
+    let oid = test_repo
+        .git(&["rev-parse", "HEAD"])
+        .unwrap()
+        .trim()
+        .to_string();
 
     let repo = find_repository(&[
         "-C".to_string(),
@@ -3628,7 +3748,11 @@ fn test_tree_path_lookup_matches_current_repository_contract_for_nested_paths() 
     test_repo.git(&["add", "nested/deep/file.txt"]).unwrap();
     test_repo.git(&["commit", "-m", "add nested path"]).unwrap();
 
-    let head = test_repo.git(&["rev-parse", "HEAD"]).unwrap().trim().to_string();
+    let head = test_repo
+        .git(&["rev-parse", "HEAD"])
+        .unwrap()
+        .trim()
+        .to_string();
     let expected_blob_oid = test_repo
         .git(&["rev-parse", "HEAD:nested/deep/file.txt"])
         .unwrap()
