@@ -221,6 +221,7 @@ fn try_lock_exclusive(path: &std::path::Path) -> Option<LockFile> {
     use std::os::unix::io::AsRawFd;
     let file = std::fs::OpenOptions::new()
         .create(true)
+        .truncate(true)
         .write(true)
         .open(path)
         .ok()?;

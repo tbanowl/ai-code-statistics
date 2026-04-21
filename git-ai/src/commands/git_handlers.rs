@@ -344,12 +344,21 @@ pub fn handle_git(args: &[String]) {
 }
 
 fn is_command_skip_hooks(parsed_args: &ParsedGitInvocation) -> bool {
-    return match parsed_args.command.as_deref() {
-        Some("commit") | Some("pull") | Some("push") | Some("reset") | Some("merge")
-        | Some("rebase") | Some("cherry-pick") | Some("stash") | Some("checkout")
-        | Some("switch") | Some("update-ref") | Some("clone") => false,
-        _ => true,
-    };
+    !matches!(
+        parsed_args.command.as_deref(),
+        Some("commit")
+            | Some("pull")
+            | Some("push")
+            | Some("reset")
+            | Some("merge")
+            | Some("rebase")
+            | Some("cherry-pick")
+            | Some("stash")
+            | Some("checkout")
+            | Some("switch")
+            | Some("update-ref")
+            | Some("clone")
+    )
 }
 
 /// Handle alias invocations

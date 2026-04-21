@@ -1207,10 +1207,10 @@ impl<'a> Commit<'a> {
         for parent in self.parents() {
             let parent_oid =
                 Oid::from_str(&parent.id()).map_err(|e| GitAiError::Generic(e.to_string()))?;
-            if let Ok(base) = g2repo.merge_base(parent_oid, tip) {
-                if base == parent_oid {
-                    return Ok(parent);
-                }
+            if let Ok(base) = g2repo.merge_base(parent_oid, tip)
+                && base == parent_oid
+            {
+                return Ok(parent);
             }
         }
 
@@ -1357,9 +1357,9 @@ impl<'a> Reference<'a> {
         let resolved = r
             .resolve()
             .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        Ok(resolved.target().map(|o| o.to_string()).ok_or_else(|| {
+        resolved.target().map(|o| o.to_string()).ok_or_else(|| {
             GitAiError::Generic(format!("reference {} has no target", self.ref_name))
-        })?)
+        })
     }
 
     #[allow(dead_code)]
@@ -3632,14 +3632,14 @@ pub fn exec_git_stdin_with_env_with_profile(
     Ok(output)
 }
 
-/// Helper to execute a git command and return output regardless of exit status.
-/// Callers that need success-only behavior should use `exec_git*`.
+// Helper to execute a git command and return output regardless of exit status.
+// Callers that need success-only behavior should use `exec_git*`.
 // pub fn exec_git_allow_nonzero(args: &[String]) -> Result<Output, GitAiError> {
 //     exec_git_allow_nonzero_with_profile(args, InternalGitProfile::General)
 // }
 
-// /// Helper to execute a git command with an explicit internal profile and return output
-// /// regardless of exit status.
+// Helper to execute a git command with an explicit internal profile and return output
+// regardless of exit status.
 // pub fn exec_git_allow_nonzero_with_profile(
 //     args: &[String],
 //     profile: InternalGitProfile,
