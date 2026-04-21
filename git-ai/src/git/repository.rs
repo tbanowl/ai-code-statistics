@@ -2590,6 +2590,9 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
         normalized_global_args[1] = command_root;
     }
 
+    // Canonicalize workdir for reliable path comparisons (especially on Windows,
+    // where canonical paths use the \\?\ UNC prefix, making path.starts_with()
+    // work correctly). Both regular and canonical versions are stored.
     let canonical_workdir = workdir.canonicalize().map_err(|e| {
         GitAiError::Generic(format!(
             "Failed to canonicalize working directory {}: {}",
@@ -2998,7 +3001,7 @@ fn repository_from_discovered_paths(
         workdir: workdir.to_path_buf(),
         canonical_workdir,
         cached_author_identity: std::sync::OnceLock::new(),
-        is_bare: false,
+        is_bare: false, // this helper is only called for non-bare repositories
     })
 }
 
