@@ -1,161 +1,310 @@
----
+# 生产代码 git2 迁移对照表
 
-I detect **research / planning** intent — 你要的是一份可执行的迁移清单，对照 `repository.rs` 里的 CLI 调用和可替代的 `git2` API。我的做法：直接给你按优先级排好的迁移对照表，并标出收益、难度、风险。
-下面这份表聚焦 **`src/git/repository.rs`**。
+本文档覆盖整个 `src/` 生产代码中的 Git CLI 调用，标注每个调用能否用 `git2` (libgit2 Rust 绑定) 直接替代、预估性能收益、迁移难度。
 
----
+## 列定义
 
-# `repository.rs` 迁移对照表
+| 列名 | 含义 |
+|---|---|
+| **文件** | 源文件相对路径 |
+| **函数** | 发起 CLI 调用的函数名 |
+| **执行的命令** | 实际执行的 git 子命令（关键参数） |
+| **git2可直接实现** | `是` = 有直接对应的 git2 API；`部分` = 能做但有语义差异或需额外工作；`否` = git2 不适合替代 |
+| **git2 替换** | 推荐的 git2 API 或方案 |
+| **用途** | 该调用的业务目的 |
+| **Win10 VM 性能对比** | 在 Windows 10 VM 环境下的性能预估（见下方假设） |
+| **难度** | 迁移到 git2 的工程复杂度 |
 
-## P0：优先迁移，收益最高
+## 性能假设
 
-| 位置/函数 | 当前 Git CLI | 推荐 `git2` API | 难度 | 收益 | 备注 |
-|---|---|---|---|---|---|
-| `revparse_single()` `2193-2203` | `rev-parse --verify <spec>` | `Repository::revparse_single()` | 低 | 高 | 最直接替换点，很多上层都会复用 |
-| `Object::peel_to_commit()` `579-585` | `rev-parse --verify <oid>^{commit}` | `Repository::revparse_single()` + `Object::peel_to_commit()` | 低 | 高 | 典型 peel 操作，git2 很适配 |
-| `Commit::tree()` `934-940` | `rev-parse --verify <oid>^{tree}` | `Commit::tree()` / `tree_id()` | 低 | 高 | 不该再起子进程 |
-| `Commit::parent()` `947-954` | `rev-parse --verify <oid>^N` | `Commit::parent(n)` | 低 | 高 | 每 commit 常用 |
-| `Commit::parents()` `963-976` | `show -s --format=%P` | `Commit::parents()` / `parent_ids()` | 低 | 高 | 当前是“取 parent 列表还起进程” |
-| `Commit::summary()` `994-1002` | `show -s --format=%s` | `Commit::summary()` / `message()` | 低 | 高 | 遍历 commit 时热点明显 |
-| `Commit::body()` `1008-1016` | `show -s --format=%b` | `Commit::body()` / `message()` | 低 | 高 | 同上 |
-| `Commit::author()` `1021-1039` | `show -s --format=%an%n%ae%n%aI` | `Commit::author()` | 低 | 高 | 很标准 |
-| `Commit::committer()` `1045-1063` | `show -s --format=%cn%n%ce%n%cI` | `Commit::committer()` | 低 | 高 | 很标准 |
-| `Repository::merge_base()` `1938-1944` | `merge-base A B` | `Repository::merge_base()` | 低 | 高 | 图查询，适合迁移 |
-| `CommitRange::length()` `759-768` | `rev-list --count A..B` | `Repository::revwalk()` + count | 中 | 高 | 范围大时收益明显 |
-| `CommitRange::into_iter()` `809-823` | `rev-list A..B` | `Repository::revwalk()` | 中 | 高 | 这是 commit 范围遍历核心热点 |
-| `CommitRange::is_valid()` `708-749` | 多次 `merge-base --is-ancestor` | `Repository::graph_descendant_of()` / `merge_base()` | 中 | 高 | 现在同一逻辑内反复起进程 |
-| `parent_on_refname()` `1130-1145` | 循环里 `merge-base --is-ancestor` | `graph_descendant_of()` | 中 | 高 | 典型 inner-loop 热点 |
-
----
-
-## P1：建议迁移，收益中高
-
-| 位置/函数 | 当前 Git CLI | 推荐 `git2` API | 难度 | 收益 | 备注 |
-|---|---|---|---|---|---|
-| `Reference::shorthand()` `1300-1306` | `rev-parse --abbrev-ref <ref>` | `Reference::shorthand()` | 低 | 中 | 标准 ref API |
-| `Reference::target()` `1309-1314` | `rev-parse <ref>` | `Reference::target()` | 低 | 中 | 简单替换 |
-| `Reference::peel_to_blob()` `1321-1330` | `rev-parse --verify <ref>^{blob}` | `find_reference`/`revparse_single` + peel | 低 | 中 | 与 P0 同类 |
-| `Reference::peel_to_commit()` `1335-1345` | `rev-parse --verify <ref>^{commit}` | 同上 | 低 | 中 | 与 P0 同类 |
-| `head()` `1570-1589` | `symbolic-ref HEAD` | `Repository::head()` | 低 | 中 | detached HEAD 逻辑需保留 |
-| `find_reference()` `1925-1935` | `show-ref --verify -s` | `Repository::find_reference()` | 低 | 中 | 干净直接 |
-| `references()` `2287-2305` | `for-each-ref --format=%(refname)` | `Repository::references()` | 低 | 中 | 列 ref 很适合库调用 |
-| `new_infer_refname()` `650-667` | `for-each-ref --points-at` | `Repository::references()` + target 过滤 | 中 | 中 | 需要自己做 `points-at` 过滤 |
-| `remote_head()` `1913-1920` | `symbolic-ref refs/remotes/.../HEAD --short` | `find_reference()` + symbolic target | 中 | 中 | 语义稍微多一点 |
-| `upstream_remote()` `2235-2247` | `branch --show-current` + config | `head()` + `branch_upstream_remote()` 或 config 读 | 中 | 中 | 可迁，但收益一般 |
+> **Windows 10 VM 环境下，每次原生 `git` CLI 调用（`Command::new("git")`）的固定开销通常 >500 ms。**
+>
+> 这个数字来自进程创建 + DLL 加载 + git 初始化在虚拟化环境中的累积延迟。在裸机 Linux/macOS 上同一调用可能只需 20-50 ms，但在 Windows VM 中会显著放大。
+>
+> 因此：
+> - 任何**高频调用**（循环内反复起进程、遍历 commit 时逐个读取元数据）在 VM 上收益巨大
+> - **低频单次调用**（如启动时 discover 仓库）收益有限
+> - `git2` 通过进程内对象库访问，将固定开销从 ">500 ms/次" 降到 "<1 ms/次"
+> - 下表性能对比列用 `>500ms → <1ms` 表示"从 CLI 变为 git2 的收益"
 
 ---
 
-## P1：对象/树/blob 读取，适合迁移
+## 一、`src/git/repository.rs` — 对象/提交/ref 只读查询
 
-| 位置/函数 | 当前 Git CLI | 推荐 `git2` API | 难度 | 收益 | 备注 |
-|---|---|---|---|---|---|
-| `object_type()` `1558-1564` | `cat-file -t <oid>` | `find_object()` + `ObjectType` | 低 | 中 | 纯对象库查询 |
-| `Blob::content()` `1275-1281` | `cat-file blob <oid>` | `Repository::find_blob()` + `Blob::content()` | 低 | 中 | 很适合 |
-| `find_commit()` `2309-2321` | `cat-file -t` 后校验 | `Repository::find_commit()` | 低 | 中 | 更自然 |
-| `find_blob()` `2325-2333` | `cat-file -t` 后校验 | `Repository::find_blob()` | 低 | 中 | 更自然 |
-| `find_tree()` `2337-2345` | `cat-file -t` 后校验 | `Repository::find_tree()` | 低 | 中 | 更自然 |
-| `get_file_content()` `2351-2360` | `show <commit>:<path>` | `find_commit` + `tree` + `get_path` + blob read | 中 | 中 | 需要改成对象遍历 |
-| `Tree::get_path()` `1199-1259` | `ls-tree -z -r <tree> -- <path>` | `Tree::get_path()` | 中 | 中 | git2 有 API，但路径/错误语义要重新对齐 |
+这是 CLI 调用最密集的文件，也是 git2 迁移收益最大的模块。
 
----
+### P0：强烈建议迁移（高频 + 只读 + git2 直接对应）
 
-## P1/P2：索引和 staged 读取，性能潜力大，但不一定只靠 `git2`
+| 文件 | 函数 | 执行的命令 | git2可直接实现 | git2 替换 | 用途 | Win10 VM 性能对比 | 难度 |
+|---|---|---|---|---|---|---|---|
+| `repository.rs` | `revparse_single()` | `rev-parse --verify <spec>` | 是 | `Repository::revparse_single()` | 将 revspec 字符串解析为对象 | >500ms → <1ms | 低 |
+| `repository.rs` | `Object::peel_to_commit()` | `rev-parse --verify <oid>^{commit}` | 是 | `revparse_single()` + `peel_to_commit()` | 把对象 peel 成 commit | >500ms → <1ms | 低 |
+| `repository.rs` | `Commit::tree()` | `rev-parse --verify <oid>^{tree}` | 是 | `Commit::tree()` / `tree_id()` | 取 commit 的 tree OID | >500ms → <1ms | 低 |
+| `repository.rs` | `Commit::parent()` | `rev-parse <oid>^N` | 是 | `Commit::parent(n)` | 取第 N 个 parent | >500ms → <1ms | 低 |
+| `repository.rs` | `Commit::parents()` | `show -s --format=%P` | 是 | `Commit::parents()` / `parent_ids()` | 取所有 parent OID | >500ms → <1ms | 低 |
+| `repository.rs` | `Commit::summary()` | `show -s --format=%s` | 是 | `Commit::summary()` | commit 消息首行 | >500ms → <1ms | 低 |
+| `repository.rs` | `Commit::body()` | `show -s --format=%b` | 是 | `Commit::body()` | commit 消息正文 | >500ms → <1ms | 低 |
+| `repository.rs` | `Commit::author()` | `show -s --format=%an%n%ae%n%aI` | 是 | `Commit::author()` | commit 作者信息 | >500ms → <1ms | 低 |
+| `repository.rs` | `Commit::committer()` | `show -s --format=%cn%n%ce%n%cI` | 是 | `Commit::committer()` | commit 提交者信息 | >500ms → <1ms | 低 |
+| `repository.rs` | `Repository::merge_base()` | `merge-base A B` | 是 | `Repository::merge_base()` | 两个 commit 的 merge base | >500ms → <1ms | 低 |
+| `repository.rs` | `CommitRange::length()` | `rev-list --count A..B` | 是 | `Repository::revwalk()` + count | 范围内 commit 数量 | >500ms → <1ms | 中 |
+| `repository.rs` | `CommitRange::into_iter()` | `rev-list A..B` | 是 | `Repository::revwalk()` | 遍历范围内的 commit | >500ms → <1ms | 中 |
+| `repository.rs` | `CommitRange::is_valid()` | 多次 `merge-base --is-ancestor` | 是 | `graph_descendant_of()` / `merge_base()` | 校验 commit range 有效性 | N×>500ms → <1ms | 中 |
+| `repository.rs` | `parent_on_refname()` | 循环内 `merge-base --is-ancestor` | 是 | `graph_descendant_of()` | 找到在某 ref 上可达的 parent | N×>500ms → <1ms | 中 |
 
-| 位置/函数 | 当前 Git CLI | 推荐方案 | 难度 | 收益 | 备注 |
-|---|---|---|---|---|---|
-| `get_all_staged_files_content()` `2366-2408` | 并发 `git show :<path>` | `Repository::index()` + blob OID -> blob content | 中 | 很高 | 这里在慢 VM 里很可能是大热点 |
-| `get_all_staged_file_blob_oids()` `2411-2428` | 已经是 `gix_index` | 保持现状 | 低 | 已优化 | 这块已经走对方向了，不必改成 git2 |
+### P1：建议迁移（收益中高）
 
-> 这一块我会特别提醒：**如果目标只是性能，不一定要统一成 git2**。  
-> staged/index 读取这类场景，`gix`/直接 index 读取常常比 `git2` 更划算。
+| 文件 | 函数 | 执行的命令 | git2可直接实现 | git2 替换 | 用途 | Win10 VM 性能对比 | 难度 |
+|---|---|---|---|---|---|---|---|
+| `repository.rs` | `Reference::shorthand()` | `rev-parse --abbrev-ref <ref>` | 是 | `Reference::shorthand()` | ref 的短名 | >500ms → <1ms | 低 |
+| `repository.rs` | `Reference::target()` | `rev-parse <ref>` | 是 | `Reference::target()` | ref 指向的 OID | >500ms → <1ms | 低 |
+| `repository.rs` | `Reference::peel_to_blob()` | `rev-parse --verify <ref>^{blob}` | 是 | `find_reference` + peel | ref peel 到 blob | >500ms → <1ms | 低 |
+| `repository.rs` | `Reference::peel_to_commit()` | `rev-parse --verify <ref>^{commit}` | 是 | `find_reference` + peel | ref peel 到 commit | >500ms → <1ms | 低 |
+| `repository.rs` | `head()` | `symbolic-ref HEAD` | 是 | `Repository::head()` | 获取 HEAD 指向的 ref 名 | >500ms → <1ms | 低 |
+| `repository.rs` | `find_reference()` | `show-ref --verify -s` | 是 | `Repository::find_reference()` | 查找指定 ref | >500ms → <1ms | 低 |
+| `repository.rs` | `references()` | `for-each-ref --format=%(refname)` | 是 | `Repository::references()` | 枚举所有 ref | >500ms → <1ms | 低 |
+| `repository.rs` | `new_infer_refname()` | `for-each-ref --points-at` | 部分 | `Repository::references()` + target 过滤 | 推断 refname | >500ms → <1ms | 中 |
+| `repository.rs` | `remote_head()` | `symbolic-ref refs/remotes/.../HEAD` | 部分 | `find_reference()` + symbolic target | 远程 HEAD | >500ms → <1ms | 中 |
+| `repository.rs` | `upstream_remote()` | `branch --show-current` + config | 部分 | `head()` + `branch_upstream_remote()` | 上游 remote 名 | >500ms → <1ms | 中 |
+| `repository.rs` | `object_type()` | `cat-file -t <oid>` | 是 | `find_object()` + `ObjectType` | 查对象类型 | >500ms → <1ms | 低 |
+| `repository.rs` | `Blob::content()` | `cat-file blob <oid>` | 是 | `find_blob()` + `Blob::content()` | 读 blob 内容 | >500ms → <1ms | 低 |
+| `repository.rs` | `find_commit()` | `cat-file -t` 后校验 | 是 | `Repository::find_commit()` | 查找 commit 对象 | >500ms → <1ms | 低 |
+| `repository.rs` | `find_blob()` | `cat-file -t` 后校验 | 是 | `Repository::find_blob()` | 查找 blob 对象 | >500ms → <1ms | 低 |
+| `repository.rs` | `find_tree()` | `cat-file -t` 后校验 | 是 | `Repository::find_tree()` | 查找 tree 对象 | >500ms → <1ms | 低 |
+| `repository.rs` | `get_file_content()` | `show <commit>:<path>` | 是 | `find_commit` → `tree` → `get_path` → blob | 读指定 commit 的文件 | >500ms → <1ms | 中 |
+| `repository.rs` | `Tree::get_path()` | `ls-tree -z -r <tree> -- <path>` | 是 | `Tree::get_path()` | 从 tree 中找路径 | >500ms → <1ms | 中 |
+| `repository.rs` | `get_all_staged_files_content()` | 并发 `git show :<path>` | 部分 | `Repository::index()` → blob OID → blob content | 批量读 staged 文件 | N×>500ms → <1ms | 中 |
 
----
+### P2：可迁移但收益一般
 
-## P2：可迁移，但收益一般 / 语义稍重
+| 文件 | 函数 | 执行的命令 | git2可直接实现 | git2 替换 | 用途 | Win10 VM 性能对比 | 难度 |
+|---|---|---|---|---|---|---|---|
+| `repository.rs` | `remotes()` | `remote` | 是 | `Repository::remotes()` | 列 remote 名 | >500ms → <1ms | 低 |
+| `repository.rs` | `remotes_with_urls()` | `remote -v` | 部分 | `remotes()` + `find_remote()` + URL | 列 remote 及 URL | >500ms → <1ms | 中 |
+| `repository.rs` | `resolve_author_spec()` | `rev-list --all --author=` + `show` | 部分 | `revwalk()` + 手动过滤 author | 按 author 名查找 commit | >500ms → <1ms | 中高 |
+| `repository.rs` | `is_bare_repository()` | `rev-parse --is-bare-repository` | 是 | `Repository::is_bare()` | 判断是否 bare 仓库 | >500ms → <1ms | 低 |
+| `repository.rs` | `find_repository()` | `rev-parse --git-dir --git-common-dir --show-toplevel` | 部分 | `Repository::discover()` / `open_ext()` | 发现/打开仓库 | >500ms → <1ms | 中 |
 
-| 位置/函数 | 当前 Git CLI | 推荐 `git2` API | 难度 | 收益 | 备注 |
-|---|---|---|---|---|---|
-| `remotes()` `1692-1699` | `remote` | `Repository::remotes()` | 低 | 低中 | 不常调用就没太大收益 |
-| `remotes_with_urls()` `1702-1725` | `remote -v` | `Repository::remotes()` + `find_remote()` | 中 | 低中 | 要自己组装 fetch/push URL 逻辑 |
-| `resolve_author_spec()` `2249-2282` | `rev-list --all --author=...` + `show` | `revwalk()` + 手动过滤 author | 中高 | 中 | CLI 一句顶很多逻辑，迁移不如前面值 |
-| `is_bare_repository()` `1613-1620` | `rev-parse --is-bare-repository` | `Repository::is_bare()` | 低 | 低 | 可顺手迁移 |
-| `find_repository()` `2709-2864` | `rev-parse --git-dir --git-common-dir --show-toplevel` | `Repository::discover()` / `open_ext()` | 中 | 中 | 这是初始化路径，次数少但可清理掉若干 subprocess |
+### P3：能做但不建议第一批
 
----
+| 文件 | 函数 | 执行的命令 | git2可直接实现 | git2 替换 | 用途 | Win10 VM 性能对比 | 难度 |
+|---|---|---|---|---|---|---|---|
+| `repository.rs` | `blob()` | `hash-object -w --stdin` | 是 | `Repository::blob()` | 写入 blob 对象 | >500ms → <1ms | 中 |
+| `repository.rs` | `reference()` | `update-ref --stdin --create-reflog` | 部分 | `Repository::reference()` | 创建/更新 ref | >500ms → <1ms | 中高 |
+| `repository.rs` | `commit()` | `commit-tree` + `update-ref` | 部分 | `Repository::commit()` + refs 更新 | 创建 commit | >500ms → <1ms | 高 |
+| `repository.rs` | `fetch_branch()` | `fetch remote branch` | 部分 | `Remote::fetch()` | 拉取远程分支 | 收益不确定 | 高 |
 
-## P3：能迁，但我不建议作为第一批
+### 建议保留 CLI
 
-| 位置/函数 | 当前 Git CLI | 推荐 `git2` API | 难度 | 收益 | 为什么不优先 |
-|---|---|---|---|---|---|
-| `blob()` `1877-1883` | `hash-object -w --stdin` | `Repository::blob()` | 中 | 中 | 可做，但不是主要热点 |
-| `reference()` `1888-1910` | `update-ref --stdin --create-reflog` | `Repository::reference()` | 中高 | 中 | reflog/force/create 语义要仔细对齐 |
-| `commit()` `2077-2189` | `commit-tree` + `update-ref` | `Repository::commit()` + refs 更新 | 高 | 中 | 这里不是单纯 API 替换，牵涉 CAS 语义 |
-| `fetch_branch()` `2699-2705` | `fetch remote branch` | `Remote::fetch()` | 高 | 低/不确定 | 网络/transport 场景不一定比 CLI 更好 |
-
----
-
-## 暂时建议保留 CLI 的
-
-| 位置/函数 | 当前 Git CLI | 为什么先别动 |
-|---|---|---|
-| `list_commit_files()` `2433-2490` | `diff-tree --name-only -r -z` | 当前强依赖 CLI diff 输出语义和 pathspec 处理 |
-| `diff_added_lines()` `2499-2545` | `diff -U0 --find-renames=1%` | 你不仅要 diff，还要解析 patch/hunk 语义 |
-| `diff_added_lines_with_deleted_count()` `2551-2568` | 同上 | 迁移会变成重写算法 |
-| `diff_changed_files()` `2572-2596` | `diff --name-only -z` | 输出格式和 rename/pathspec 语义已成依赖 |
-| `diff_workdir_added_lines()` `2604-2645` | `diff -U0` | 同上 |
-| `diff_workdir_added_lines_with_insertions()` `2654-2696` | `diff -U0 --no-renames` | 同上 |
-| `merge_trees_favor_ours()` `1949-1964` | `merge-tree --write-tree -X ours` | `git2` 有 merge API，但这里不是一键等价 |
-
----
-
-# 推荐落地顺序
-
-## 第一阶段：最值得做
-按这个顺序改，通常收益最大：
-
-1. `revparse_single` / peel / ref resolve  
-2. `Commit::{summary, body, author, committer, tree, parent, parents}`  
-3. `merge_base` / `CommitRange::{length, into_iter, is_valid}` / `parent_on_refname`  
-4. `object_type` / `find_commit` / `find_blob` / `find_tree` / `Blob::content`
-
-## 第二阶段：如果还要继续
-5. `head` / `find_reference` / `references` / `new_infer_refname`  
-6. `get_file_content` / `Tree::get_path`  
-7. `get_all_staged_files_content`（但优先考虑沿用/扩展 `gix` 思路）
-
-## 最后才碰
-8. `commit-tree` / `update-ref` / `reference` / `commit`  
-9. `diff*` / `merge-tree` / `fetch`
+| 文件 | 函数 | 执行的命令 | git2可直接实现 | git2 替换 | 用途 | Win10 VM 性能对比 | 难度 |
+|---|---|---|---|---|---|---|---|
+| `repository.rs` | `list_commit_files()` | `diff-tree --name-only -r -z` | 否 | — | 列 commit 变更文件 | 不适用 | — |
+| `repository.rs` | `diff_added_lines()` | `diff -U0 --find-renames=1%` | 否 | — | 取 diff 新增行 | 不适用 | — |
+| `repository.rs` | `diff_added_lines_with_deleted_count()` | `diff -U0` | 否 | — | 取 diff 新增行及删除计数 | 不适用 | — |
+| `repository.rs` | `diff_changed_files()` | `diff --name-only -z` | 否 | — | 列 diff 变更文件 | 不适用 | — |
+| `repository.rs` | `diff_workdir_added_lines()` | `diff -U0` | 否 | — | 工作目录 diff 新增行 | 不适用 | — |
+| `repository.rs` | `diff_workdir_added_lines_with_insertions()` | `diff -U0 --no-renames` | 否 | — | 工作目录 diff 新增行+插入数 | 不适用 | — |
+| `repository.rs` | `merge_trees_favor_ours()` | `merge-tree --write-tree -X ours` | 部分 | — | 合并 tree (ours 策略) | 不适用 | — |
 
 ---
 
-# 额外提醒
+## 二、`src/git/refs.rs` — Notes 读写与 ref 操作
 
-## 1. 不要把“能用 git2”误解成“就该迁”
-你这文件里最有价值的目标不是“全面去 CLI”，而是：
+notes 系统是该文件的核心。git2 对 notes 的支持有限，大部分 notes 操作需要保留 CLI。
 
-- 去掉 **高频、轻量、只读** 的 git 子进程
-- 保留 **复杂语义 / 输出格式依赖 / 网络操作** 的 CLI
-
-## 2. `git2` 不是唯一答案
-你这仓库已经在 index 层用了 `gix_index`。  
-如果你的核心痛点是：
-- staged files
-- index scan
-- status/index 相关
-
-那继续往 `gix` 方向走，可能比统一迁成 `git2` 更快。
+| 文件 | 函数 | 执行的命令 | git2可直接实现 | git2 替换 | 用途 | Win10 VM 性能对比 | 难度 |
+|---|---|---|---|---|---|---|---|
+| `refs.rs` | `batch_read_blobs_with_oids()` | `cat-file --batch` (stdin 批量) | 是 | `Repository::find_blob()` 批量 | 批量读 blob 内容 | 1×>500ms → N×<1ms | 中 |
+| `refs.rs` | `note_blob_oids_for_commits()` | `cat-file --batch-check` (stdin 批量) | 部分 | git2 notes API 有限，需手动查 tree | 批量查 commit 的 note blob OID | 1×>500ms → N×<1ms | 高 |
+| `refs.rs` | `notes_add_batch()` | `rev-parse --verify refs/notes/ai` + `fast-import` | 否 | git2 无 fast-import 等价 | 批量添加 notes | 不适用 | — |
+| `refs.rs` | `notes_add_blob_batch()` | `rev-parse --verify refs/notes/ai` + `fast-import` | 否 | 同上 | 批量关联已有 blob 为 notes | 不适用 | — |
+| `refs.rs` | `show_authorship_note()` | `notes --ref=ai show <sha>` | 部分 | 需查 notes tree 再读 blob | 读取单个 commit 的 note | >500ms → <1ms | 中 |
+| `refs.rs` | `ref_exists()` | `show-ref --verify --quiet <ref>` | 是 | `Repository::find_reference()` | 检查 ref 是否存在 | >500ms → <1ms | 低 |
+| `refs.rs` | `merge_notes_from_ref()` | `notes --ref=ai merge -s ours` | 否 | git2 无 notes merge | 合并 notes ref | 不适用 | — |
+| `refs.rs` | `fallback_merge_notes()` | `fast-import --quiet --done` | 否 | git2 无 fast-import | fallback 合并 notes | 不适用 | — |
+| `refs.rs` | `list_all_notes()` | `notes --ref=ai list` | 部分 | 需遍历 notes tree | 列出所有 notes | >500ms → <1ms | 高 |
+| `refs.rs` | `rev_parse()` | `rev-parse <rev>` | 是 | `Repository::revparse_single()` | 解析 ref 到 SHA | >500ms → <1ms | 低 |
+| `refs.rs` | `copy_ref()` | `update-ref <dest> <source>` | 是 | `Repository::reference()` | 复制 ref | >500ms → <1ms | 低 |
+| `refs.rs` | `grep_ai_notes()` | `grep -nI <pattern> refs/notes/ai` | 否 | git2 无 grep notes | 搜索 notes 内容 | 不适用 | — |
 
 ---
 
-如果你愿意，我下一条可以继续给你一份：
+## 三、`src/git/authorship_traversal.rs` — Authorship note 批量读取
 
-## **“第一阶段具体改造清单”**
-格式会是：
+| 文件 | 函数 | 执行的命令 | git2可直接实现 | git2 替换 | 用途 | Win10 VM 性能对比 | 难度 |
+|---|---|---|---|---|---|---|---|
+| `authorship_traversal.rs` | `batch_read_blobs_with_oids()` | `cat-file --batch` (stdin) | 是 | `Repository::find_blob()` 批量 | 批量读 note blob 内容 | 1×>500ms → N×<1ms | 中 |
 
-- 函数名
-- 替换成的 `git2` 调用
-- 需要保留的当前语义
-- 迁移时最容易踩的坑
+> `authorship_traversal.rs` 里的 `get_notes_list()` 仅在 `#[cfg(test)]` 中使用，不属于生产代码。
 
-只覆盖 **P0 + P1 第一阶段**，方便你直接开工。
+---
+
+## 四、`src/git/sync_authorship.rs` — Notes 同步（fetch/push）
+
+| 文件 | 函数 | 执行的命令 | git2可直接实现 | git2 替换 | 用途 | Win10 VM 性能对比 | 难度 |
+|---|---|---|---|---|---|---|---|
+| `sync_authorship.rs` | `fetch_missing_notes_for_commits()` | `notes --ref=refs/notes/ai list` | 部分 | 同 refs.rs notes 枚举 | 检查哪些 commit 缺少 note | >500ms → <1ms | 高 |
+| `sync_authorship.rs` | `fetch_authorship_notes()` | `fetch --no-tags ... <remote> <refspec>` | 部分 | `Remote::fetch()` | 从远端拉取 notes | 网络 IO 主导，git2 未必更快 | 高 |
+| `sync_authorship.rs` | `push_authorship_notes()` | `push --quiet ... <remote> <refspec>` | 部分 | `Remote::push()` | 推送 notes 到远端 | 网络 IO 主导 | 高 |
+| `sync_authorship.rs` | `get_local_notes_map()` | `notes --ref=ai list` | 部分 | 遍历 notes tree | 枚举本地所有 notes | >500ms → <1ms | 高 |
+| `sync_authorship.rs` | `get_current_branch()` | `rev-parse --abbrev-ref HEAD` | 是 | `Repository::head()` + `shorthand()` | 获取当前分支名 | >500ms → <1ms | 低 |
+
+---
+
+## 五、`src/git/status.rs` — 工作目录状态
+
+| 文件 | 函数 | 执行的命令 | git2可直接实现 | git2 替换 | 用途 | Win10 VM 性能对比 | 难度 |
+|---|---|---|---|---|---|---|---|
+| `status.rs` | `get_staged_filenames()` | `diff --cached --name-only -z --no-renames` | 部分 | `Repository::diff_index_to_workdir()` 或 index 遍历 | 获取已 staged 的文件列表 | >500ms → <1ms | 中 |
+| `status.rs` | `get_staged_and_unstaged_filenames()` | `status --porcelain=v2 -z` | 部分 | git2 status API | 获取所有变更文件 | >500ms → <1ms | 中高 |
+| `status.rs` | `get_status_with_branch()` | `status --porcelain=v2 -z --branch` | 部分 | git2 status API + branch | 同上 + 分支信息 | >500ms → <1ms | 中高 |
+
+> status 模块强依赖 `--porcelain=v2` 的输出格式。迁移到 git2 status API 后，需要自行组装等价的状态结构。该模块已在 index 层使用了 `gix_index`，可优先考虑沿用/扩展 `gix` 而非迁到 `git2`。
+
+---
+
+## 六、`src/git/diff_tree_to_tree.rs` — Tree diff
+
+| 文件 | 函数 | 执行的命令 | git2可直接实现 | git2 替换 | 用途 | Win10 VM 性能对比 | 难度 |
+|---|---|---|---|---|---|---|---|
+| `diff_tree_to_tree.rs` | `diff_tree_to_tree()` | `rev-parse --empty-tree` | 是 | `git2` 内置 empty tree hash | 获取空 tree OID | >500ms → 硬编码常量 | 低 |
+| `diff_tree_to_tree.rs` | `diff_tree_to_tree()` | `diff --raw -z --no-abbrev <old> <new>` | 部分 | git2 Diff API + tree walk | 对比两个 tree | >500ms → <1ms | 高 |
+
+> `diff --raw` 的输出格式被自定义 parser 依赖。迁移需要重写 parser 以适配 git2 diff delta 结构。
+
+---
+
+## 七、`src/authorship/rebase_authorship.rs` — Rebase 后 authorship 重写
+
+| 文件 | 函数 | 执行的命令 | git2可直接实现 | git2 替换 | 用途 | Win10 VM 性能对比 | 难度 |
+|---|---|---|---|---|---|---|---|
+| `rebase_authorship.rs` | `get_commits_between()` | `merge-base --is-ancestor` | 是 | `graph_descendant_of()` | 校验 ancestor 关系 | >500ms → <1ms | 低 |
+| `rebase_authorship.rs` | `get_commits_between()` | `rev-list --topo-order --ancestry-path` | 是 | `Repository::revwalk()` + 过滤 | 枚举范围内的 commit | >500ms → <1ms | 中 |
+
+> `rebase_authorship.rs` 中的 `find_commit()` 调用经过 `repository.rs` 间接调用 CLI，迁移 `repository.rs` 后自动收益。
+
+---
+
+## 八、`src/commands/blame.rs` — AI Blame
+
+| 文件 | 函数 | 执行的命令 | git2可直接实现 | git2 替换 | 用途 | Win10 VM 性能对比 | 难度 |
+|---|---|---|---|---|---|---|---|
+| `blame.rs` | `resolve_blame_abbrev_shas_batched()` | `rev-parse --short=N <sha>...` (批量) | 是 | `Oid::to_string()` 取前 N 位 | 批量缩写 SHA | >500ms → <1ms | 低 |
+| `blame.rs` | `blame_hunks_for_ranges()` | `blame --line-porcelain [-w] [-M] [-C...] [-L ...]` | 部分 | `Repository::blame()` + `BlameOptions` | 完整 blame 输出 | >500ms → <1ms | 高 |
+
+> blame 是整个项目中对 git CLI 依赖最重的单点调用之一。git2 有 `Repository::blame()` API，但 `--line-porcelain` 的完整输出格式、`-C`/`-M` 检测、`--ignore-rev`/`--ignore-revs-file`、`--since` 过滤等参数组合需要仔细逐一校验。`resolve_blame_abbrev_shas_batched()` 则是独立的小优化点，SHA 缩写可以纯字符串截断。
+
+---
+
+## 九、`src/commands/search.rs` — Prompt 搜索
+
+| 文件 | 函数 | 执行的命令 | git2可直接实现 | git2 替换 | 用途 | Win10 VM 性能对比 | 难度 |
+|---|---|---|---|---|---|---|---|
+| `search.rs` | `search_by_commit_range()` | `rev-list start..end` | 是 | `Repository::revwalk()` | 枚举范围内的 commit | >500ms → <1ms | 低 |
+
+> `search_by_file()` 内部走的是 blame 系统，其 CLI 调用已计入 blame.rs。
+
+---
+
+## 十、`src/commands/log.rs` — git ai log
+
+| 文件 | 函数 | 执行的命令 | git2可直接实现 | git2 替换 | 用途 | Win10 VM 性能对比 | 难度 |
+|---|---|---|---|---|---|---|---|
+| `log.rs` | `handle_log()` | `git log --notes=ai [args...]` | 否 | — | 透传 `git log` 给用户 | 不可替代（需要 pager/颜色/全部参数） | — |
+
+> `handle_log()` 是一个纯代理：把用户参数原样传给 `git log --notes=ai`。这不需要迁移。它依赖 pager、颜色输出、用户自定义 format 等全部 git log 特性，git2 无法替代。
+
+---
+
+## 十一、`src/commands/git_handlers.rs` — Git 代理主入口
+
+| 文件 | 函数 | 执行的命令 | git2可直接实现 | git2 替换 | 用途 | Win10 VM 性能对比 | 难度 |
+|---|---|---|---|---|---|---|---|
+| `git_handlers.rs` | `handle_git()` / `run_git_with_hooks()` | `git -c core.hooksPath=... <subcmd>` | 否 | — | git 代理，注入 hooks 路径后执行真实 git | 不可替代（整个项目的核心分发机制） | — |
+
+> git 代理层是 git-ai 的架构根基。它拦截 `git` 调用、注入 `core.hooksPath`、转发给真实 git、再执行 post-hook。这必须保留 CLI。
+
+---
+
+## 十二、`src/commands/install_hooks.rs` — 安装 hooks
+
+| 文件 | 函数 | 执行的命令 | git2可直接实现 | git2 替换 | 用途 | Win10 VM 性能对比 | 难度 |
+|---|---|---|---|---|---|---|---|
+| `install_hooks.rs` | `set_global_git_config_value()` | `git config --global <key> <val>` | 部分 | `git2::Config` | 设置全局 git 配置 | >500ms → <1ms | 低 |
+
+> 仅在安装/升级时调用，不是热路径，收益有限。
+
+---
+
+## 十三、`src/commands/continue_session.rs` — 会话继续
+
+该文件中的 `Command::new` 调用是启动 AI agent 进程（非 git），不涉及 git2 迁移。
+
+---
+
+## 十四、`src/authorship/ignore.rs` — .gitignore 检查
+
+| 文件 | 函数 | 执行的命令 | git2可直接实现 | git2 替换 | 用途 | Win10 VM 性能对比 | 难度 |
+|---|---|---|---|---|---|---|---|
+| `ignore.rs` | (test-only) | `Command::new(git_cmd)` | — | — | 仅测试代码使用 | 不适用 | — |
+
+> `ignore.rs` 的生产代码路径不直接调用 git CLI，而是通过 git2 (已有 `test-support` feature) 进行 ignore 检查。CLI 调用仅在测试中。
+
+---
+
+## 推荐落地顺序
+
+### 第一批：最值（高频 + 只读 + git2 完美对应）
+
+1. `repository.rs` 中所有 `rev-parse --verify` / peel / ref resolve
+2. `repository.rs` 中 `Commit::summary/body/author/committer/tree/parent/parents`
+3. `repository.rs` 中 `merge_base` / `CommitRange::{length, into_iter, is_valid}` / `parent_on_refname`
+4. `rebase_authorship.rs` 中 `get_commits_between()` 的 `merge-base --is-ancestor` 和 `rev-list`
+5. `search.rs` 中 `search_by_commit_range()` 的 `rev-list`
+6. `blame.rs` 中 `resolve_blame_abbrev_shas_batched()` 的 `rev-parse --short`
+7. `refs.rs` 中 `ref_exists()` 和 `rev_parse()` 和 `copy_ref()`
+8. `sync_authorship.rs` 中 `get_current_branch()`
+
+### 第二批：看时间
+
+9. `repository.rs` 中 `head/find_reference/references/object_type/find_*/Blob::content`
+10. `repository.rs` 中 `get_file_content/Tree::get_path`
+11. `authorship_traversal.rs` 中 `batch_read_blobs_with_oids()` 改用 git2 blob 读取
+12. `refs.rs` 中 `batch_read_blobs_with_oids()` 同上
+13. `status.rs` — 可优先考虑 `gix` 而非 `git2`
+14. `diff_tree_to_tree.rs` 中 `rev-parse --empty-tree` 改为硬编码常量
+
+### 最后再碰
+
+15. `repository.rs` 中 `commit-tree/update-ref/reference/commit`
+16. `refs.rs` 中 notes 写入相关 (`fast-import`, `notes merge`)
+17. `blame.rs` 中 `blame --line-porcelain`
+18. `diff_tree_to_tree.rs` 中 `diff --raw` 的 parser 重写
+19. `sync_authorship.rs` 中 `fetch/push` (网络操作)
+
+### 永远不碰
+
+20. `log.rs` — `git log` 代理（需完整 CLI 体验）
+21. `git_handlers.rs` — git 代理核心（架构根基）
+22. `repository.rs` 中 `diff_*` 系列函数（patch 语义强依赖）
+23. `refs.rs` 中 `grep_ai_notes()`（git2 无 grep）
+24. `sync_authorship.rs` 中 `fast-import` 写入（git2 无等价）
+
+---
+
+## 额外提醒
+
+### 不要把"能用 git2"误解成"就该迁"
+
+最有价值的目标不是"全面去 CLI"，而是：
+
+- 去掉**高频、轻量、只读**的 git 子进程
+- 保留**复杂语义 / 输出格式依赖 / 网络操作**的 CLI
+
+### `git2` 不是唯一答案
+
+仓库已经在 index 层用了 `gix_index`。如果核心痛点是 staged files、index scan、status 相关，继续往 `gix` 方向走可能比统一迁成 `git2` 更快。
+
+### notes 系统是迁移难点
+
+`refs.rs` 和 `sync_authorship.rs` 中大量使用 `git notes`、`git fast-import`、`git grep`。git2 对 notes 的支持非常有限（能读 notes tree，但没有 `notes add/merge/list` 等高层 API）。notes 写入和合并操作建议长期保留 CLI。
