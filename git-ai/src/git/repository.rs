@@ -1315,6 +1315,8 @@ pub struct Repository {
     canonical_workdir: PathBuf,
     /// Cached git author identity resolved via `git var GIT_COMMITTER_IDENT`.
     cached_author_identity: std::sync::OnceLock<GitAuthorIdentity>,
+    /// Whether this repository is bare (cached from git2 discovery).
+    is_bare: bool,
 }
 
 impl Repository {
@@ -1443,12 +1445,7 @@ impl Repository {
 
     /// Returns true when this repository is bare.
     pub fn is_bare_repository(&self) -> Result<bool, GitAiError> {
-        let mut args = self.global_args_for_exec();
-        args.push("rev-parse".to_string());
-        args.push("--is-bare-repository".to_string());
-        let output = exec_git(&args)?;
-        let value = String::from_utf8(output.stdout)?;
-        Ok(value.trim() == "true")
+        Ok(self.is_bare)
     }
 
     /// Get the canonical (absolute, resolved) path of the working directory
@@ -2530,63 +2527,16 @@ impl Repository {
 
 pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError> {
     let find_repository_start = Instant::now();
-    let exec_git_rev_parse_start = Instant::now();
-    let mut rev_parse_args = global_args.to_owned();
-    rev_parse_args.push("rev-parse".to_string());
-    // Use --git-dir instead of --absolute-git-dir for compatibility with Git < 2.13
-    // (--absolute-git-dir was added in Git 2.13; older versions output the literal
-    // string "absolute-git-dir" instead of the resolved path).
-    rev_parse_args.push("--is-bare-repository".to_string());
-    rev_parse_args.push("--git-dir".to_string());
-    rev_parse_args.push("--git-common-dir".to_string());
-
-    let rev_parse_output = exec_git(&rev_parse_args)?;
-    let rev_parse_stdout = String::from_utf8(rev_parse_output.stdout)?;
-    let mut lines = rev_parse_stdout
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty());
-
-    let is_bare = match lines.next() {
-        Some("true") => true,
-        Some("false") => false,
-        Some(other) => {
-            return Err(GitAiError::Generic(format!(
-                "Unexpected --is-bare-repository output: {}",
-                other
-            )));
-        }
-        None => {
-            return Err(GitAiError::Generic(
-                "Missing --is-bare-repository output from git rev-parse".to_string(),
-            ));
-        }
-    };
-
-    let git_dir_str = lines.next().ok_or_else(|| {
-        GitAiError::Generic("Missing --git-dir output from git rev-parse".to_string())
-    })?;
-    let git_common_dir_str = lines.next().ok_or_else(|| {
-        GitAiError::Generic("Missing --git-common-dir output from git rev-parse".to_string())
-    })?;
-
-    tracing::debug!(
-        "[find_repository] exec_git_rev_parse {}ms",
-        exec_git_rev_parse_start.elapsed().as_millis()
-    );
-
     let command_base_dir = resolve_command_base_dir(global_args)?;
 
-    let git_dir = if Path::new(git_dir_str).is_relative() {
-        command_base_dir.join(git_dir_str)
-    } else {
-        PathBuf::from(git_dir_str)
-    };
-    let git_common_dir = if Path::new(git_common_dir_str).is_relative() {
-        command_base_dir.join(git_common_dir_str)
-    } else {
-        PathBuf::from(git_common_dir_str)
-    };
+    let g2repo = git2::Repository::discover(&command_base_dir)
+        .map_err(|e| GitAiError::Generic(format!("git2 discover failed: {}", e)))?;
+
+    let is_bare = g2repo.is_bare();
+
+    // libgit2 appends a trailing path separator; normalize via .components().collect()
+    let git_dir: PathBuf = g2repo.path().components().collect();
+    let git_common_dir: PathBuf = g2repo.commondir().components().collect();
 
     if !git_dir.is_dir() {
         return Err(GitAiError::Generic(format!(
@@ -2609,16 +2559,11 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
             ))
         })?
     } else {
-        let exec_git_rev_parse2_start = Instant::now();
-        let mut top_level_args = global_args.to_owned();
-        top_level_args.push("rev-parse".to_string());
-        top_level_args.push("--show-toplevel".to_string());
-        let output = exec_git(&top_level_args)?;
-        tracing::debug!(
-            "[find_repository] exec_git_rev_parse2 {}ms",
-            exec_git_rev_parse2_start.elapsed().as_millis()
-        );
-        PathBuf::from(String::from_utf8(output.stdout)?.trim())
+        g2repo
+            .workdir()
+            .ok_or_else(|| GitAiError::Generic("Non-bare repository has no workdir".to_string()))?
+            .components()
+            .collect()
     };
 
     if !workdir.is_dir() {
@@ -2645,9 +2590,6 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
         normalized_global_args[1] = command_root;
     }
 
-    // Canonicalize workdir for reliable path comparisons (especially on Windows)
-    // On Windows, canonical paths use the \\?\ UNC prefix, which makes path.starts_with()
-    // comparisons work correctly. We store both regular and canonical versions.
     let canonical_workdir = workdir.canonicalize().map_err(|e| {
         GitAiError::Generic(format!(
             "Failed to canonicalize working directory {}: {}",
@@ -2682,6 +2624,7 @@ pub fn find_repository(global_args: &[String]) -> Result<Repository, GitAiError>
         workdir,
         canonical_workdir,
         cached_author_identity: std::sync::OnceLock::new(),
+        is_bare,
     })
 }
 
@@ -2997,6 +2940,7 @@ pub fn from_bare_repository(git_dir: &Path) -> Result<Repository, GitAiError> {
         workdir,
         canonical_workdir,
         cached_author_identity: std::sync::OnceLock::new(),
+        is_bare: true,
     })
 }
 
@@ -3054,6 +2998,7 @@ fn repository_from_discovered_paths(
         workdir: workdir.to_path_buf(),
         canonical_workdir,
         cached_author_identity: std::sync::OnceLock::new(),
+        is_bare: false,
     })
 }
 
