@@ -205,6 +205,8 @@ pub fn handle_flush_logs(args: &[String]) {
             }
         }
 
+        crate::commands::flush_metrics_db::drain_metrics_db_backlog();
+
         std::process::exit(0);
     }
 
@@ -289,6 +291,8 @@ pub fn handle_flush_logs(args: &[String]) {
             let _ = fs::remove_file(&file_path);
         }
     }
+
+    crate::commands::flush_metrics_db::drain_metrics_db_backlog();
 
     // Exit 0 - processing completed successfully even if no events were sent
     // (e.g., debug builds skip non-metrics events, which is expected behavior)
