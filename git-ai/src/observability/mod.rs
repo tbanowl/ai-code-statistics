@@ -186,6 +186,41 @@ fn submit_telemetry_envelope(envelopes: Vec<crate::daemon::TelemetryEnvelope>) {
     }
 }
 
+#[cfg(any(test, not(feature = "test-support")))]
+fn build_metrics_log_envelopes(events: &[MetricEvent], timestamp: &str) -> Vec<MetricsEnvelope> {
+    events
+        .chunks(MAX_METRICS_PER_ENVELOPE)
+        .map(|chunk| MetricsEnvelope {
+            event_type: "metrics".to_string(),
+            timestamp: timestamp.to_string(),
+            version: crate::metrics::METRICS_API_VERSION,
+            events: chunk.to_vec(),
+        })
+        .collect()
+}
+
+#[cfg(not(feature = "test-support"))]
+fn route_metrics_events(events: Vec<MetricEvent>, async_mode: bool) {
+    if events.is_empty() {
+        return;
+    }
+
+    if async_mode {
+        for chunk in events.chunks(MAX_METRICS_PER_ENVELOPE) {
+            let envelope = crate::daemon::TelemetryEnvelope::Metrics {
+                events: chunk.to_vec(),
+            };
+            submit_telemetry_envelope(vec![envelope]);
+        }
+        return;
+    }
+
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    for envelope in build_metrics_log_envelopes(&events, &timestamp) {
+        append_envelope(LogEnvelope::Metrics(envelope));
+    }
+}
+
 /// Log an error to Sentry (via daemon telemetry worker)
 pub fn log_error(error: &dyn std::error::Error, context: Option<serde_json::Value>) {
     if config::Config::get().feature_flags().async_mode {
@@ -338,25 +373,31 @@ pub fn log_metrics(
 
     #[cfg(not(any(test, feature = "test-support")))]
     {
-        if events.is_empty() {
-            return;
-        }
-
-        // Split into chunks of MAX_METRICS_PER_ENVELOPE
-        for chunk in events.chunks(MAX_METRICS_PER_ENVELOPE) {
-            let envelope = crate::daemon::TelemetryEnvelope::Metrics {
-                events: chunk.to_vec(),
-            };
-            submit_telemetry_envelope(vec![envelope]);
-        }
+        route_metrics_events(events, config::Config::get().feature_flags().async_mode);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use std::collections::HashMap;
     use std::time::Duration;
+
+    fn sample_metric_event(sequence: u32) -> MetricEvent {
+        let mut values = HashMap::new();
+        values.insert("0".to_string(), json!(sequence));
+
+        let mut attrs = HashMap::new();
+        attrs.insert("0".to_string(), json!("1.3.1"));
+
+        MetricEvent {
+            timestamp: sequence,
+            event_id: 1,
+            values,
+            attrs,
+        }
+    }
 
     // Test error logging
     #[test]
@@ -418,6 +459,31 @@ mod tests {
     #[test]
     fn test_log_metrics_empty() {
         log_metrics(vec![]);
+    }
+
+    #[test]
+    fn test_build_metrics_log_envelopes_sets_metrics_metadata() {
+        let envelopes =
+            build_metrics_log_envelopes(&[sample_metric_event(1)], "2026-04-21T00:00:00Z");
+
+        assert_eq!(envelopes.len(), 1);
+        assert_eq!(envelopes[0].event_type, "metrics");
+        assert_eq!(envelopes[0].timestamp, "2026-04-21T00:00:00Z");
+        assert_eq!(envelopes[0].version, crate::metrics::METRICS_API_VERSION);
+        assert_eq!(envelopes[0].events.len(), 1);
+    }
+
+    #[test]
+    fn test_build_metrics_log_envelopes_chunks_large_batches() {
+        let events: Vec<_> = (0..(MAX_METRICS_PER_ENVELOPE as u32 + 1))
+            .map(sample_metric_event)
+            .collect();
+
+        let envelopes = build_metrics_log_envelopes(&events, "2026-04-21T00:00:00Z");
+
+        assert_eq!(envelopes.len(), 2);
+        assert_eq!(envelopes[0].events.len(), MAX_METRICS_PER_ENVELOPE);
+        assert_eq!(envelopes[1].events.len(), 1);
     }
 
     // Test constants
