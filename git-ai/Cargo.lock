@@ -1126,6 +1126,7 @@ dependencies = [
  "native-tls",
  "once_cell",
  "openssl",
+ "parking_lot",
  "paste",
  "rand 0.10.1",
  "ratatui",

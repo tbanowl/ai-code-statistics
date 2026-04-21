@@ -30,7 +30,71 @@ use std::time::{Duration, Instant};
 #[cfg(windows)]
 use crate::utils::CREATE_NO_WINDOW;
 #[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
+
+#[cfg(windows)]
+mod win_spawn {
+    use parking_lot::{Mutex, MutexGuard};
+    use std::os::windows::io::AsRawHandle;
+    use std::sync::OnceLock;
+
+    pub const HANDLE_FLAG_INHERIT: u32 = 0x0000_0001;
+    const ERROR_INVALID_HANDLE: i32 = 6;
+    const ERROR_OPERATION_ABORTED: i32 = 995;
+    const ERROR_NOT_FOUND: i32 = 1168;
+
+    type Bool = i32;
+    type Dword = u32;
+    type Handle = *mut core::ffi::c_void;
+
+    // SAFETY: These are direct Win32 FFI declarations matching the system ABI.
+    // Callers must pass valid kernel handle values; the functions themselves
+    // perform their own kernel-side validation.
+    unsafe extern "system" {
+        fn SetHandleInformation(h: Handle, mask: Dword, flags: Dword) -> Bool;
+        fn CancelIoEx(h: Handle, overlapped: *const core::ffi::c_void) -> Bool;
+    }
+
+    static SPAWN_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+
+    pub fn spawn_lock() -> MutexGuard<'static, ()> {
+        SPAWN_MUTEX.get_or_init(|| Mutex::new(())).lock()
+    }
+
+    /// Best-effort Windows hardening: clear HANDLE_FLAG_INHERIT on child pipe
+    /// handles so later `CreateProcessW` calls cannot accidentally inherit them.
+    pub fn scrub_inherit<H: AsRawHandle>(h: &H, label: &'static str) {
+        let raw = h.as_raw_handle() as Handle;
+        // SAFETY: `raw` is an OS handle owned by the caller's stdio wrapper.
+        // We only clear a flag bit; ownership and lifetime stay with Rust.
+        let ok = unsafe { SetHandleInformation(raw, HANDLE_FLAG_INHERIT, 0) };
+        if ok == 0 {
+            let err = std::io::Error::last_os_error();
+            tracing::debug!(
+                "[win_spawn] SetHandleInformation({}, INHERIT=0) failed: {err}",
+                label
+            );
+        }
+    }
+
+    pub fn cancel_io(raw: std::os::windows::io::RawHandle, label: &'static str) {
+        // SAFETY: `CancelIoEx` validates the handle in kernel space. Passing a
+        // stale value is handled as an error return, not UB.
+        let ok = unsafe { CancelIoEx(raw as Handle, core::ptr::null()) };
+        if ok == 0 {
+            let err = std::io::Error::last_os_error();
+            let code = err.raw_os_error().unwrap_or(0);
+            if code != ERROR_NOT_FOUND
+                && code != ERROR_INVALID_HANDLE
+                && code != ERROR_OPERATION_ABORTED
+            {
+                tracing::debug!("[win_spawn] CancelIoEx({}) failed: {err}", label);
+            }
+        }
+    }
+}
 
 // Keep a thread-local depth for low-overhead checks on the active thread and a process-global
 // depth so internal git spawned from background threads inherits suppression state.
@@ -421,11 +485,32 @@ fn run_git_once(request: &GitExecRequest) -> Result<Output, GitAiError> {
     let trace_id = uuid::Uuid::new_v4();
     tracing::debug!("[exec_git] {} Starting git command execution", trace_id);
 
+    #[cfg(windows)]
+    let mut child = {
+        let _spawn_guard = win_spawn::spawn_lock();
+        let child = cmd.spawn().map_err(GitAiError::IoError)?;
+        if let Some(stdout) = child.stdout.as_ref() {
+            win_spawn::scrub_inherit(stdout, "stdout");
+        }
+        if let Some(stderr) = child.stderr.as_ref() {
+            win_spawn::scrub_inherit(stderr, "stderr");
+        }
+        if let Some(stdin) = child.stdin.as_ref() {
+            win_spawn::scrub_inherit(stdin, "stdin");
+        }
+        child
+    };
+    #[cfg(not(windows))]
     let mut child = cmd.spawn().map_err(GitAiError::IoError)?;
+
     let stdin_handle = request
         .stdin_data
         .as_deref()
         .and_then(|stdin_data| write_stdin_in_background(&mut child, stdin_data));
+    #[cfg(windows)]
+    let stdout_raw = child.stdout.as_ref().map(|stdout| stdout.as_raw_handle());
+    #[cfg(windows)]
+    let stderr_raw = child.stderr.as_ref().map(|stderr| stderr.as_raw_handle());
     let stdout_handle = read_pipe_in_background(child.stdout.take());
     let stderr_handle = read_pipe_in_background(child.stderr.take());
 
@@ -447,6 +532,14 @@ fn run_git_once(request: &GitExecRequest) -> Result<Output, GitAiError> {
                 #[cfg(not(windows))]
                 let _ = child.kill();
                 let _ = child.wait();
+                #[cfg(windows)]
+                if let Some(stdout_raw) = stdout_raw {
+                    win_spawn::cancel_io(stdout_raw, "stdout");
+                }
+                #[cfg(windows)]
+                if let Some(stderr_raw) = stderr_raw {
+                    win_spawn::cancel_io(stderr_raw, "stderr");
+                }
                 let _ = finalize_stdin_writer(stdin_handle);
                 let _ = finalize_pipe_reader(stdout_handle);
                 let _ = finalize_pipe_reader(stderr_handle);
@@ -588,12 +681,24 @@ impl<'a> Object<'a> {
     }
 
     pub fn peel_to_commit(&self) -> Result<Commit<'a>, GitAiError> {
-        let g2repo = self.repo.open_git2()
+        let g2repo = self
+            .repo
+            .open_git2()
             .map_err(|e| GitAiError::Generic(e.to_string()))?;
         let oid = Oid::from_str(&self.oid).map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let obj = g2repo.find_object(oid, None).map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let commit_oid = obj.peel_to_commit().map_err(|e| GitAiError::Generic(e.to_string()))?.id().to_string();
-        Ok(Commit { repo: self.repo, oid: commit_oid, authorship_log: std::cell::OnceCell::new() })
+        let obj = g2repo
+            .find_object(oid, None)
+            .map_err(|e| GitAiError::Generic(e.to_string()))?;
+        let commit_oid = obj
+            .peel_to_commit()
+            .map_err(|e| GitAiError::Generic(e.to_string()))?
+            .id()
+            .to_string();
+        Ok(Commit {
+            repo: self.repo,
+            oid: commit_oid,
+            authorship_log: std::cell::OnceCell::new(),
+        })
     }
 }
 
@@ -706,7 +811,9 @@ impl<'a> CommitRange<'a> {
             self.repo.find_commit(self.start_oid.clone())?;
         }
 
-        let g2repo = self.repo.open_git2()
+        let g2repo = self
+            .repo
+            .open_git2()
             .map_err(|e| GitAiError::Generic(e.to_string()))?;
         let refname_oid = g2repo
             .find_reference(&self.refname)
@@ -716,11 +823,16 @@ impl<'a> CommitRange<'a> {
 
         let is_ancestor = |commit_str: &str, tip: git2::Oid| -> Result<(), GitAiError> {
             let oid = Oid::from_str(commit_str).map_err(|e| GitAiError::Generic(e.to_string()))?;
-            let base = g2repo.merge_base(oid, tip).map_err(|e| GitAiError::Generic(e.to_string()))?;
+            let base = g2repo
+                .merge_base(oid, tip)
+                .map_err(|e| GitAiError::Generic(e.to_string()))?;
             if base == oid {
                 Ok(())
             } else {
-                Err(GitAiError::Generic(format!("Commit {} is not reachable from refname {}", commit_str, self.refname)))
+                Err(GitAiError::Generic(format!(
+                    "Commit {} is not reachable from refname {}",
+                    commit_str, self.refname
+                )))
             }
         };
 
@@ -730,11 +842,18 @@ impl<'a> CommitRange<'a> {
         is_ancestor(&self.end_oid, refname_oid)?;
 
         if self.start_oid != EMPTY_TREE_HASH {
-            let start = Oid::from_str(&self.start_oid).map_err(|e| GitAiError::Generic(e.to_string()))?;
-            let end = Oid::from_str(&self.end_oid).map_err(|e| GitAiError::Generic(e.to_string()))?;
-            let base = g2repo.merge_base(start, end).map_err(|e| GitAiError::Generic(e.to_string()))?;
+            let start =
+                Oid::from_str(&self.start_oid).map_err(|e| GitAiError::Generic(e.to_string()))?;
+            let end =
+                Oid::from_str(&self.end_oid).map_err(|e| GitAiError::Generic(e.to_string()))?;
+            let base = g2repo
+                .merge_base(start, end)
+                .map_err(|e| GitAiError::Generic(e.to_string()))?;
             if base != start {
-                return Err(GitAiError::Generic(format!("Commit {} is not an ancestor of {}", self.start_oid, self.end_oid)));
+                return Err(GitAiError::Generic(format!(
+                    "Commit {} is not an ancestor of {}",
+                    self.start_oid, self.end_oid
+                )));
             }
         }
 
@@ -750,16 +869,26 @@ impl<'a> CommitRange<'a> {
         if self.start_oid == self.end_oid {
             return 0;
         }
-        let Ok(g2repo) = self.repo.open_git2() else { return 0 };
-        let Ok(end) = Oid::from_str(&self.end_oid) else { return 0 };
+        let Ok(g2repo) = self.repo.open_git2() else {
+            return 0;
+        };
+        let Ok(end) = Oid::from_str(&self.end_oid) else {
+            return 0;
+        };
         let mut walk = match g2repo.revwalk() {
             Ok(w) => w,
             Err(_) => return 0,
         };
-        if walk.push(end).is_err() { return 0; }
+        if walk.push(end).is_err() {
+            return 0;
+        }
         if self.start_oid != EMPTY_TREE_HASH {
-            let Ok(start) = Oid::from_str(&self.start_oid) else { return 0 };
-            if walk.hide(start).is_err() { return 0; }
+            let Ok(start) = Oid::from_str(&self.start_oid) else {
+                return 0;
+            };
+            if walk.hide(start).is_err() {
+                return 0;
+            }
         }
         walk.count()
     }
@@ -782,10 +911,18 @@ impl<'a> IntoIterator for CommitRange<'a> {
     fn into_iter(self) -> Self::IntoIter {
         const EMPTY_TREE_HASH: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
         if self.start_oid.is_empty() && self.end_oid.is_empty() {
-            return CommitRangeIterator { repo: self.repo, commit_oids: Vec::new(), index: 0 };
+            return CommitRangeIterator {
+                repo: self.repo,
+                commit_oids: Vec::new(),
+                index: 0,
+            };
         }
         if self.start_oid == self.end_oid {
-            return CommitRangeIterator { repo: self.repo, commit_oids: vec![self.end_oid], index: 0 };
+            return CommitRangeIterator {
+                repo: self.repo,
+                commit_oids: vec![self.end_oid],
+                index: 0,
+            };
         }
         let commit_oids = (|| -> Option<Vec<String>> {
             let g2repo = self.repo.open_git2().ok()?;
@@ -799,7 +936,11 @@ impl<'a> IntoIterator for CommitRange<'a> {
             Some(walk.filter_map(|r| r.ok().map(|o| o.to_string())).collect())
         })()
         .unwrap_or_default();
-        CommitRangeIterator { repo: self.repo, commit_oids, index: 0 }
+        CommitRangeIterator {
+            repo: self.repo,
+            commit_oids,
+            index: 0,
+        }
     }
 }
 
@@ -904,7 +1045,9 @@ impl<'a> Commit<'a> {
     }
 
     fn with_git2<T, F: FnOnce(&git2::Commit) -> T>(&self, f: F) -> Result<T, GitAiError> {
-        let g2repo = self.repo.open_git2()
+        let g2repo = self
+            .repo
+            .open_git2()
             .map_err(|e| GitAiError::Generic(e.to_string()))?;
         let oid = Oid::from_str(&self.oid).map_err(|e| GitAiError::Generic(e.to_string()))?;
         let commit = g2repo
@@ -915,23 +1058,41 @@ impl<'a> Commit<'a> {
 
     pub fn tree(&self) -> Result<Tree<'a>, GitAiError> {
         let tree_oid = self.with_git2(|c| c.tree_id().to_string())?;
-        Ok(Tree { repo: self.repo, oid: tree_oid })
+        Ok(Tree {
+            repo: self.repo,
+            oid: tree_oid,
+        })
     }
 
     pub fn parent(&self, i: usize) -> Result<Commit<'a>, GitAiError> {
-        let g2repo = self.repo.open_git2()
+        let g2repo = self
+            .repo
+            .open_git2()
             .map_err(|e| GitAiError::Generic(e.to_string()))?;
         let oid = Oid::from_str(&self.oid).map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let commit = g2repo.find_commit(oid).map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let parent_oid = commit.parent_id(i).map_err(|e| GitAiError::Generic(e.to_string()))?.to_string();
-        Ok(Commit { repo: self.repo, oid: parent_oid, authorship_log: std::cell::OnceCell::new() })
+        let commit = g2repo
+            .find_commit(oid)
+            .map_err(|e| GitAiError::Generic(e.to_string()))?;
+        let parent_oid = commit
+            .parent_id(i)
+            .map_err(|e| GitAiError::Generic(e.to_string()))?
+            .to_string();
+        Ok(Commit {
+            repo: self.repo,
+            oid: parent_oid,
+            authorship_log: std::cell::OnceCell::new(),
+        })
     }
 
     pub fn parents(&self) -> Parents<'a> {
         let parent_oids = self
             .with_git2(|c| c.parent_ids().map(|id| id.to_string()).collect::<Vec<_>>())
             .unwrap_or_default();
-        Parents { repo: self.repo, parent_oids, index: 0 }
+        Parents {
+            repo: self.repo,
+            parent_oids,
+            index: 0,
+        }
     }
 
     #[allow(dead_code)]
@@ -965,19 +1126,27 @@ impl<'a> Commit<'a> {
 
     #[allow(dead_code)]
     pub fn author(&self) -> Result<Signature<'a>, GitAiError> {
-        let g2repo = self.repo.open_git2()
+        let g2repo = self
+            .repo
+            .open_git2()
             .map_err(|e| GitAiError::Generic(e.to_string()))?;
         let oid = Oid::from_str(&self.oid).map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let commit = g2repo.find_commit(oid).map_err(|e| GitAiError::Generic(e.to_string()))?;
+        let commit = g2repo
+            .find_commit(oid)
+            .map_err(|e| GitAiError::Generic(e.to_string()))?;
         Ok(Self::sig_from_git2(self.repo, &commit.author()))
     }
 
     #[allow(dead_code)]
     pub fn committer(&self) -> Result<Signature<'a>, GitAiError> {
-        let g2repo = self.repo.open_git2()
+        let g2repo = self
+            .repo
+            .open_git2()
             .map_err(|e| GitAiError::Generic(e.to_string()))?;
         let oid = Oid::from_str(&self.oid).map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let commit = g2repo.find_commit(oid).map_err(|e| GitAiError::Generic(e.to_string()))?;
+        let commit = g2repo
+            .find_commit(oid)
+            .map_err(|e| GitAiError::Generic(e.to_string()))?;
         Ok(Self::sig_from_git2(self.repo, &commit.committer()))
     }
 
@@ -985,7 +1154,10 @@ impl<'a> Commit<'a> {
     pub fn time(&self) -> Result<Time, GitAiError> {
         self.with_git2(|c| {
             let t = c.committer().when();
-            Time { seconds: t.seconds(), offset_minutes: t.offset_minutes() }
+            Time {
+                seconds: t.seconds(),
+                offset_minutes: t.offset_minutes(),
+            }
         })
     }
 
@@ -1012,7 +1184,9 @@ impl<'a> Commit<'a> {
     /// # Returns
     /// The first parent commit that is reachable from the specified refname
     pub fn parent_on_refname(&self, refname: &str) -> Result<Commit<'a>, GitAiError> {
-        let g2repo = self.repo.open_git2()
+        let g2repo = self
+            .repo
+            .open_git2()
             .map_err(|e| GitAiError::Generic(e.to_string()))?;
         let fq_refname = g2repo
             .find_reference(refname)
@@ -1025,13 +1199,14 @@ impl<'a> Commit<'a> {
                 g2repo.find_reference(&full)
             })
             .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let tip = fq_refname.resolve()
+        let tip = fq_refname
+            .resolve()
             .and_then(|r| r.target().ok_or_else(|| git2::Error::from_str("no target")))
             .map_err(|e| GitAiError::Generic(e.to_string()))?;
 
         for parent in self.parents() {
-            let parent_oid = Oid::from_str(&parent.id())
-                .map_err(|e| GitAiError::Generic(e.to_string()))?;
+            let parent_oid =
+                Oid::from_str(&parent.id()).map_err(|e| GitAiError::Generic(e.to_string()))?;
             if let Ok(base) = g2repo.merge_base(parent_oid, tip) {
                 if base == parent_oid {
                     return Ok(parent);
@@ -1090,18 +1265,26 @@ impl<'a> Tree<'a> {
     }
 
     pub fn get_path(&self, path: &Path) -> Result<TreeEntry<'a>, GitAiError> {
-        let g2repo = self.repo.open_git2()
+        let g2repo = self
+            .repo
+            .open_git2()
             .map_err(|e| GitAiError::Generic(e.to_string()))?;
         let oid = Oid::from_str(&self.oid).map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let tree = g2repo.find_tree(oid).map_err(|e| GitAiError::Generic(e.to_string()))?;
+        let tree = g2repo
+            .find_tree(oid)
+            .map_err(|e| GitAiError::Generic(e.to_string()))?;
         let entry = tree.get_path(path).map_err(|_| {
-            GitAiError::Generic(format!("Path not found in tree: {}", path.to_string_lossy()))
+            GitAiError::Generic(format!(
+                "Path not found in tree: {}",
+                path.to_string_lossy()
+            ))
         })?;
         let object_type = match entry.kind() {
             Some(git2::ObjectType::Blob) => "blob",
             Some(git2::ObjectType::Tree) => "tree",
             _ => "unknown",
-        }.to_string();
+        }
+        .to_string();
         Ok(TreeEntry {
             repo: self.repo,
             oid: entry.id().to_string(),
@@ -1125,10 +1308,14 @@ impl<'a> Blob<'a> {
 
     // Get the content of this blob.
     pub fn content(&self) -> Result<Vec<u8>, GitAiError> {
-        let g2repo = self.repo.open_git2()
+        let g2repo = self
+            .repo
+            .open_git2()
             .map_err(|e| GitAiError::Generic(e.to_string()))?;
         let oid = Oid::from_str(&self.oid).map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let blob = g2repo.find_blob(oid).map_err(|e| GitAiError::Generic(e.to_string()))?;
+        let blob = g2repo
+            .find_blob(oid)
+            .map_err(|e| GitAiError::Generic(e.to_string()))?;
         Ok(blob.content().to_vec())
     }
 }
@@ -1149,41 +1336,71 @@ impl<'a> Reference<'a> {
     }
 
     pub fn shorthand(&self) -> Result<String, GitAiError> {
-        let g2repo = self.repo.open_git2()
+        let g2repo = self
+            .repo
+            .open_git2()
             .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let r = g2repo.find_reference(&self.ref_name)
+        let r = g2repo
+            .find_reference(&self.ref_name)
             .map_err(|e| GitAiError::Generic(e.to_string()))?;
         Ok(r.shorthand().unwrap_or(&self.ref_name).to_string())
     }
 
     pub fn target(&self) -> Result<String, GitAiError> {
-        let g2repo = self.repo.open_git2()
+        let g2repo = self
+            .repo
+            .open_git2()
             .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let r = g2repo.find_reference(&self.ref_name)
+        let r = g2repo
+            .find_reference(&self.ref_name)
             .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let resolved = r.resolve().map_err(|e| GitAiError::Generic(e.to_string()))?;
-        Ok(resolved.target().map(|o| o.to_string())
-            .ok_or_else(|| GitAiError::Generic(format!("reference {} has no target", self.ref_name)))?)
+        let resolved = r
+            .resolve()
+            .map_err(|e| GitAiError::Generic(e.to_string()))?;
+        Ok(resolved.target().map(|o| o.to_string()).ok_or_else(|| {
+            GitAiError::Generic(format!("reference {} has no target", self.ref_name))
+        })?)
     }
 
     #[allow(dead_code)]
     pub fn peel_to_blob(&self) -> Result<Blob<'a>, GitAiError> {
-        let g2repo = self.repo.open_git2()
+        let g2repo = self
+            .repo
+            .open_git2()
             .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let r = g2repo.find_reference(&self.ref_name)
+        let r = g2repo
+            .find_reference(&self.ref_name)
             .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let blob_oid = r.peel_to_blob().map_err(|e| GitAiError::Generic(e.to_string()))?.id().to_string();
-        Ok(Blob { repo: self.repo, oid: blob_oid })
+        let blob_oid = r
+            .peel_to_blob()
+            .map_err(|e| GitAiError::Generic(e.to_string()))?
+            .id()
+            .to_string();
+        Ok(Blob {
+            repo: self.repo,
+            oid: blob_oid,
+        })
     }
 
     #[allow(dead_code)]
     pub fn peel_to_commit(&self) -> Result<Commit<'a>, GitAiError> {
-        let g2repo = self.repo.open_git2()
+        let g2repo = self
+            .repo
+            .open_git2()
             .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let r = g2repo.find_reference(&self.ref_name)
+        let r = g2repo
+            .find_reference(&self.ref_name)
             .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let commit_oid = r.peel_to_commit().map_err(|e| GitAiError::Generic(e.to_string()))?.id().to_string();
-        Ok(Commit { repo: self.repo, oid: commit_oid, authorship_log: std::cell::OnceCell::new() })
+        let commit_oid = r
+            .peel_to_commit()
+            .map_err(|e| GitAiError::Generic(e.to_string()))?
+            .id()
+            .to_string();
+        Ok(Commit {
+            repo: self.repo,
+            oid: commit_oid,
+            authorship_log: std::cell::OnceCell::new(),
+        })
     }
 }
 
@@ -1398,30 +1615,38 @@ impl Repository {
 
     // Internal util to get the git object type for a given OID
     fn object_type(&self, oid: &str) -> Result<String, GitAiError> {
-        let g2repo = self.open_git2()
+        let g2repo = self
+            .open_git2()
             .map_err(|e| GitAiError::Generic(e.to_string()))?;
         let id = Oid::from_str(oid).map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let obj = g2repo.find_object(id, None).map_err(|e| GitAiError::Generic(e.to_string()))?;
+        let obj = g2repo
+            .find_object(id, None)
+            .map_err(|e| GitAiError::Generic(e.to_string()))?;
         Ok(match obj.kind() {
             Some(git2::ObjectType::Commit) => "commit",
             Some(git2::ObjectType::Tree) => "tree",
             Some(git2::ObjectType::Blob) => "blob",
             Some(git2::ObjectType::Tag) => "tag",
             _ => "unknown",
-        }.to_string())
+        }
+        .to_string())
     }
 
     // Retrieve and resolve the reference pointed at by HEAD.
     // If HEAD is a symbolic ref, return the refname (e.g., "refs/heads/main").
     // Otherwise, return "HEAD".
     pub fn head<'a>(&'a self) -> Result<Reference<'a>, GitAiError> {
-        let g2repo = self.open_git2()
+        let g2repo = self
+            .open_git2()
             .map_err(|e| GitAiError::Generic(e.to_string()))?;
         let ref_name = match g2repo.head() {
             Ok(head) if head.is_branch() => head.name().unwrap_or("HEAD").to_string(),
             _ => "HEAD".to_string(),
         };
-        Ok(Reference { repo: self, ref_name })
+        Ok(Reference {
+            repo: self,
+            ref_name,
+        })
     }
 
     // Returns the path to the .git folder for normal repositories or the repository itself for bare repositories.
@@ -1431,8 +1656,7 @@ impl Repository {
     }
 
     fn open_git2(&self) -> Result<git2::Repository, GitAiError> {
-        git2::Repository::open(&self.git_dir)
-            .map_err(|e| GitAiError::Generic(e.to_string()))
+        git2::Repository::open(&self.git_dir).map_err(|e| GitAiError::Generic(e.to_string()))
     }
 
     /// Returns the common git directory shared by linked worktrees.
@@ -1757,18 +1981,27 @@ impl Repository {
     // Lookup a reference to one of the objects in a repository. Requires full ref name.
     #[allow(dead_code)]
     pub fn find_reference(&self, name: &str) -> Result<Reference<'_>, GitAiError> {
-        let g2repo = self.open_git2()
+        let g2repo = self
+            .open_git2()
             .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        g2repo.find_reference(name).map_err(|e| GitAiError::Generic(e.to_string()))?;
-        Ok(Reference { repo: self, ref_name: name.to_string() })
+        g2repo
+            .find_reference(name)
+            .map_err(|e| GitAiError::Generic(e.to_string()))?;
+        Ok(Reference {
+            repo: self,
+            ref_name: name.to_string(),
+        })
     }
     // Find a merge base between two commits
     pub fn merge_base(&self, one: String, two: String) -> Result<String, GitAiError> {
-        let g2repo = self.open_git2()
+        let g2repo = self
+            .open_git2()
             .map_err(|e| GitAiError::Generic(e.to_string()))?;
         let oid1 = Oid::from_str(&one).map_err(|e| GitAiError::Generic(e.to_string()))?;
         let oid2 = Oid::from_str(&two).map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let base = g2repo.merge_base(oid1, oid2).map_err(|e| GitAiError::Generic(e.to_string()))?;
+        let base = g2repo
+            .merge_base(oid1, oid2)
+            .map_err(|e| GitAiError::Generic(e.to_string()))?;
         Ok(base.to_string())
     }
 
@@ -2019,11 +2252,16 @@ impl Repository {
 
     // Find a single object, as specified by a revision string.
     pub fn revparse_single(&self, spec: &str) -> Result<Object<'_>, GitAiError> {
-        let g2repo = self.open_git2()
+        let g2repo = self
+            .open_git2()
             .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let obj = g2repo.revparse_single(spec)
+        let obj = g2repo
+            .revparse_single(spec)
             .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        Ok(Object { repo: self, oid: obj.id().to_string() })
+        Ok(Object {
+            repo: self,
+            oid: obj.id().to_string(),
+        })
     }
 
     // Non-standard method of getting a 'default' remote
@@ -2108,14 +2346,19 @@ impl Repository {
     // Create an iterator for the repo's references (git2-style)
     #[allow(dead_code)]
     pub fn references<'a>(&'a self) -> Result<References<'a>, GitAiError> {
-        let g2repo = self.open_git2()
+        let g2repo = self
+            .open_git2()
             .map_err(|e| GitAiError::Generic(e.to_string()))?;
         let refs: Vec<String> = g2repo
             .references()
             .map_err(|e| GitAiError::Generic(e.to_string()))?
             .filter_map(|r| r.ok()?.name().map(|s| s.to_string()))
             .collect();
-        Ok(References { repo: self, refs, index: 0 })
+        Ok(References {
+            repo: self,
+            refs,
+            index: 0,
+        })
     }
 
     // Lookup a reference to one of the commits in a repository.
@@ -2165,14 +2408,21 @@ impl Repository {
         commit_hash: &str,
     ) -> Result<Vec<u8>, GitAiError> {
         let g2repo = self.open_git2()?;
-        let obj = g2repo.revparse_single(commit_hash)
+        let obj = g2repo
+            .revparse_single(commit_hash)
             .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let commit = obj.peel_to_commit()
+        let commit = obj
+            .peel_to_commit()
             .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let tree = commit.tree().map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let entry = tree.get_path(std::path::Path::new(file_path))
+        let tree = commit
+            .tree()
             .map_err(|e| GitAiError::Generic(e.to_string()))?;
-        let entry_obj = entry.to_object(&g2repo).map_err(|e| GitAiError::Generic(e.to_string()))?;
+        let entry = tree
+            .get_path(std::path::Path::new(file_path))
+            .map_err(|e| GitAiError::Generic(e.to_string()))?;
+        let entry_obj = entry
+            .to_object(&g2repo)
+            .map_err(|e| GitAiError::Generic(e.to_string()))?;
         match entry_obj.kind() {
             Some(git2::ObjectType::Blob) => Ok(entry_obj.as_blob().unwrap().content().to_vec()),
             _ => {
@@ -3792,6 +4042,11 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
+    #[cfg(windows)]
+    use std::os::windows::io::AsRawHandle;
+    #[cfg(windows)]
+    use std::time::{Duration, Instant};
+
     fn run_git(cwd: &Path, args: &[&str]) {
         crate::git::test_utils::init_test_git_config();
         let output = Command::new(crate::config::Config::get().git_cmd())
@@ -3822,6 +4077,93 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    #[cfg(windows)]
+    fn get_handle_flags<H: AsRawHandle>(handle: &H) -> u32 {
+        type Bool = i32;
+        type Dword = u32;
+        type Handle = *mut core::ffi::c_void;
+
+        unsafe extern "system" {
+            fn GetHandleInformation(h: Handle, flags: *mut Dword) -> Bool;
+        }
+
+        let raw = handle.as_raw_handle() as Handle;
+        let mut flags = 0;
+        let ok = unsafe { GetHandleInformation(raw, &mut flags) };
+        assert_ne!(ok, 0, "GetHandleInformation should succeed");
+        flags
+    }
+
+    #[cfg(windows)]
+    fn run_command_once_with_timeout(
+        command: &str,
+        args: &[&str],
+        timeout: Duration,
+    ) -> Result<Output, GitAiError> {
+        let mut cmd = Command::new(command);
+        cmd.args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        if !is_interactive_terminal() {
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        let started = Instant::now();
+        let mut child = {
+            let _spawn_guard = win_spawn::spawn_lock();
+            let child = cmd.spawn().map_err(GitAiError::IoError)?;
+            if let Some(stdout) = child.stdout.as_ref() {
+                win_spawn::scrub_inherit(stdout, "stdout");
+            }
+            if let Some(stderr) = child.stderr.as_ref() {
+                win_spawn::scrub_inherit(stderr, "stderr");
+            }
+            child
+        };
+
+        let stdout_raw = child.stdout.as_ref().map(|stdout| stdout.as_raw_handle());
+        let stderr_raw = child.stderr.as_ref().map(|stderr| stderr.as_raw_handle());
+        let stdout_handle = read_pipe_in_background(child.stdout.take());
+        let stderr_handle = read_pipe_in_background(child.stderr.take());
+
+        loop {
+            if let Some(status) = child.try_wait().map_err(GitAiError::IoError)? {
+                let stdout = finalize_pipe_reader(stdout_handle)?;
+                let stderr = finalize_pipe_reader(stderr_handle)?;
+                return Ok(Output {
+                    status,
+                    stdout,
+                    stderr,
+                });
+            }
+
+            if started.elapsed() >= timeout {
+                let _ = kill_process_tree_windows(child.id());
+                let _ = child.wait();
+                if let Some(stdout_raw) = stdout_raw {
+                    win_spawn::cancel_io(stdout_raw, "stdout");
+                }
+                if let Some(stderr_raw) = stderr_raw {
+                    win_spawn::cancel_io(stderr_raw, "stderr");
+                }
+                let _ = finalize_pipe_reader(stdout_handle);
+                let _ = finalize_pipe_reader(stderr_handle);
+
+                return Err(GitAiError::GitCliError {
+                    code: Some(1),
+                    stderr: EXEC_GIT_TIMEOUT_STDERR.to_string(),
+                    args: std::iter::once(command.to_string())
+                        .chain(args.iter().map(|arg| (*arg).to_string()))
+                        .collect(),
+                });
+            }
+
+            std::thread::sleep(EXEC_GIT_POLL_INTERVAL);
+        }
     }
 
     #[test]
@@ -3884,6 +4226,77 @@ mod tests {
 
         assert_eq!(forwarded[0], "-c");
         assert!(forwarded[1].starts_with("core.hooksPath="));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn scrub_inherit_clears_handle_flag_inherit() {
+        type Bool = i32;
+        type Dword = u32;
+        type Handle = *mut core::ffi::c_void;
+
+        unsafe extern "system" {
+            fn SetHandleInformation(h: Handle, mask: Dword, flags: Dword) -> Bool;
+        }
+
+        let temp = tempfile::NamedTempFile::new().expect("tempfile");
+        let file = temp.reopen().expect("reopen tempfile");
+
+        let raw = file.as_raw_handle() as Handle;
+        let ok = unsafe {
+            SetHandleInformation(
+                raw,
+                win_spawn::HANDLE_FLAG_INHERIT,
+                win_spawn::HANDLE_FLAG_INHERIT,
+            )
+        };
+        assert_ne!(ok, 0, "SetHandleInformation should set inherit flag");
+        assert_ne!(get_handle_flags(&file) & win_spawn::HANDLE_FLAG_INHERIT, 0);
+
+        win_spawn::scrub_inherit(&file, "test-file");
+
+        assert_eq!(get_handle_flags(&file) & win_spawn::HANDLE_FLAG_INHERIT, 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn exec_git_rev_parse_git_dir_smoke_test() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let repo_dir = temp.path().join("repo");
+        fs::create_dir_all(&repo_dir).expect("create repo dir");
+        run_git(&repo_dir, &["init"]);
+
+        let args = vec![
+            "-C".to_string(),
+            repo_dir.to_string_lossy().to_string(),
+            "rev-parse".to_string(),
+            "--git-dir".to_string(),
+        ];
+        let output = exec_git(&args).expect("exec_git rev-parse should succeed");
+
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), ".git");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn timeout_cleanup_returns_promptly_for_windows_child_processes() {
+        let started = Instant::now();
+        let err = run_command_once_with_timeout(
+            "cmd",
+            &[
+                "/C",
+                "echo stdout-before-timeout & echo stderr-before-timeout 1>&2 & ping 127.0.0.1 -n 6 >nul",
+            ],
+            Duration::from_millis(150),
+        )
+        .expect_err("command should time out");
+
+        assert!(is_timeout_error(&err), "expected timeout error, got: {err}");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "timeout cleanup should not hang, elapsed: {:?}",
+            started.elapsed()
+        );
     }
 
     #[test]
