@@ -101,6 +101,8 @@ mod sync_authorship_types;
 mod tls_native_certs;
 mod utf8_filenames;
 mod virtual_attribution_merge;
+#[cfg(windows)]
+mod windows_spawn_hardening;
 mod windsurf;
 mod worktrees;
 mod wrapper_performance_targets;
