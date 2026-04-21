@@ -174,10 +174,10 @@ fn append_envelope(envelope: LogEnvelope) {
     }
 }
 
-/// Submit telemetry envelopes via the best available path:
+/// Submit telemetry envelopes via the best available daemon path:
 /// 1. External daemon control socket (wrapper processes)
 /// 2. In-process daemon telemetry worker (daemon process itself)
-/// 3. Silently drop if neither is available
+/// 3. No-op if daemon is not running (callers must handle non-daemon fallback)
 fn submit_telemetry_envelope(envelopes: Vec<crate::daemon::TelemetryEnvelope>) {
     if crate::daemon::telemetry_handle::daemon_telemetry_available() {
         crate::daemon::telemetry_handle::submit_telemetry(envelopes);
