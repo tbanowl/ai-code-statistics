@@ -386,6 +386,7 @@ fn get_config_value(key: &str) -> Result<(), String> {
                 }
             }
             "prompt_storage" => Value::String(runtime_config.prompt_storage().to_string()),
+            "notes_store" => Value::String(runtime_config.notes_store().to_string()),
             "include_prompts_in_repositories" => {
                 if let Some(ref repos) = file_config.include_prompts_in_repositories {
                     serde_json::to_value(repos).unwrap()
@@ -535,6 +536,12 @@ fn set_config_value(key: &str, value: &str, add_mode: bool) -> Result<(), String
                 file_config.prompt_storage = Some(value.to_string());
                 crate::config::save_file_config(&file_config)?;
                 eprintln!("[prompt_storage]: {}", value);
+            }
+            "notes_store" => {
+                validate_notes_store_value(value)?;
+                file_config.notes_store = Some(value.to_string());
+                crate::config::save_file_config(&file_config)?;
+                eprintln!("[notes_store]: {}", value);
             }
             "include_prompts_in_repositories" => {
                 let resolved = resolve_repository_value(value)?;
@@ -758,6 +765,13 @@ fn unset_config_value(key: &str) -> Result<(), String> {
                 crate::config::save_file_config(&file_config)?;
                 if let Some(v) = old_value {
                     eprintln!("- [prompt_storage]: {}", v);
+                }
+            }
+            "notes_store" => {
+                let old_value = file_config.notes_store.take();
+                crate::config::save_file_config(&file_config)?;
+                if let Some(v) = old_value {
+                    eprintln!("- [notes_store]: {}", v);
                 }
             }
             "include_prompts_in_repositories" => {
@@ -1071,6 +1085,16 @@ fn validate_prompt_storage_value(value: &str) -> Result<(), String> {
     if value != "default" && value != "notes" && value != "local" {
         return Err(format!(
             "Invalid prompt_storage value '{}'. Expected 'default', 'notes', or 'local'",
+            value
+        ));
+    }
+    Ok(())
+}
+
+fn validate_notes_store_value(value: &str) -> Result<(), String> {
+    if value != "git" && value != "rest" {
+        return Err(format!(
+            "Invalid notes_store value '{}'. Expected 'git' or 'rest'",
             value
         ));
     }
