@@ -13,6 +13,8 @@ use crate::git::sync_authorship::{fetch_authorship_notes, push_authorship_notes}
 use crate::utils::is_debug_enabled;
 #[cfg(windows)]
 use crate::utils::is_interactive_terminal;
+#[cfg(windows)]
+use crate::utils::kill_process_tree_windows;
 use unicode_normalization::UnicodeNormalization;
 
 use git2::Oid;
@@ -440,6 +442,9 @@ fn run_git_once(request: &GitExecRequest) -> Result<Output, GitAiError> {
                     timeout.as_millis()
                 );
 
+                #[cfg(windows)]
+                let _ = kill_process_tree_windows(child.id());
+                #[cfg(not(windows))]
                 let _ = child.kill();
                 let _ = child.wait();
                 let _ = finalize_stdin_writer(stdin_handle);

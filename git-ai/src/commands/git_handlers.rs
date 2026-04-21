@@ -26,6 +26,8 @@ use crate::observability::wrapper_performance_targets::log_performance_target_if
 use crate::utils::CREATE_NO_WINDOW;
 #[cfg(windows)]
 use crate::utils::is_interactive_terminal;
+#[cfg(windows)]
+use crate::utils::kill_process_tree_windows;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 #[cfg(unix)]
@@ -1218,31 +1220,6 @@ fn spawn_git_child_windows(
             std::process::exit(1);
         }
     }
-}
-
-#[cfg(windows)]
-fn kill_process_tree_windows(pid: u32) -> Result<(), String> {
-    let output = Command::new("taskkill")
-        .args(["/F", "/T", "/PID", &pid.to_string()])
-        .output()
-        .map_err(|e| format!("failed to run taskkill: {}", e))?;
-
-    if output.status.success() {
-        return Ok(());
-    }
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stderr_trimmed = stderr.trim();
-    if stderr_trimmed.contains("not found")
-        || stderr_trimmed.contains("There is no running instance")
-    {
-        return Ok(());
-    }
-
-    Err(format!(
-        "taskkill /F /T /PID {} failed: {}",
-        pid, stderr_trimmed
-    ))
 }
 
 #[cfg(windows)]
