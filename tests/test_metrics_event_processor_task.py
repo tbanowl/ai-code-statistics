@@ -1,8 +1,7 @@
 """测试 MetricsEventProcessorTask"""
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import Mock, patch
+
 from core.scheduler.tasks.metrics_event_processor_task import MetricsEventProcessorTask
-from core.config import load_config
 
 
 def test_task_no_pending_records():
@@ -19,14 +18,11 @@ def test_task_no_pending_records():
         }
     }
 
-    # Mock 数据库
-    with patch('core.database.SchedulerDatabase') as mock_scheduler_db, \
-         patch('core.database.MetricsDatabase') as mock_metrics_db:
-        mock_scheduler_instance = mock_scheduler_db.return_value
-        mock_scheduler_instance.has_running_task.return_value = None
-        mock_scheduler_instance.get_running_task_execution.return_value = None
-        mock_scheduler_instance.update_task_execution_status.return_value = None
-
+    # Patch the symbols imported directly by metrics_event_processor_task.py.
+    with patch('core.scheduler.tasks.base.SchedulerDatabase'), \
+         patch('core.scheduler.tasks.metrics_event_processor_task.MetricsDatabase') as mock_metrics_db, \
+         patch('core.scheduler.tasks.metrics_event_processor_task.MetricsService'), \
+         patch('core.scheduler.tasks.metrics_event_processor_task.StatsDatabase'):
         mock_metrics_instance = mock_metrics_db.return_value
         mock_metrics_instance.get_pending_raw_records.return_value = []
         mock_metrics_instance.reset_stuck_extracting_records.return_value = 0
@@ -39,11 +35,14 @@ def test_task_no_pending_records():
         assert result['success'] is True
         assert result['processed'] == 0
         assert result['batches'] == 0
-        mock_scheduler_instance.has_running_task.assert_called_once_with("metrics_event_processor", 10)
+        mock_metrics_instance.get_pending_raw_records.assert_called_once_with(
+            limit=100,
+            last_id=None,
+        )
 
 
-def test_task_skipped_when_running():
-    """测试有运行中任务时跳过执行"""
+def test_task_processes_pending_record_successfully():
+    """测试有待处理 raw 记录时执行解析并标记成功"""
     config = {
         'scheduler': {
             'jobs': {
@@ -55,16 +54,66 @@ def test_task_skipped_when_running():
         }
     }
 
-    with patch('core.database.SchedulerDatabase') as mock_scheduler_db:
-        mock_scheduler_instance = mock_scheduler_db.return_value
-        mock_scheduler_instance.has_running_task.return_value = {
-            'id': 'exec1',
-            'status': 'running'
+    raw_payload = {
+        "events": [
+            {
+                "e": 2,
+                "a": {
+                    "1": "https://example.com/repo.git",
+                    "2": "Alice <alice@example.com>",
+                },
+            }
+        ]
+    }
+    pending_record = {
+        "id": "raw-1",
+        "payload_json": __import__("json").dumps(raw_payload),
+        "event_count": 1,
+    }
+
+    with patch('core.scheduler.tasks.base.SchedulerDatabase'), \
+         patch('core.scheduler.tasks.metrics_event_processor_task.MetricsDatabase') as mock_metrics_db, \
+         patch('core.scheduler.tasks.metrics_event_processor_task.MetricsService') as mock_service_cls, \
+         patch('core.scheduler.tasks.metrics_event_processor_task.StatsDatabase') as mock_stats_db:
+        mock_metrics_instance = mock_metrics_db.return_value
+        mock_metrics_instance.get_pending_raw_records.side_effect = [
+            [pending_record],
+            [],
+        ]
+        mock_metrics_instance.mark_raw_extracting.return_value = True
+
+        mock_service = mock_service_cls.return_value
+        mock_service.process_raw_event.return_value = {
+            "success": True,
+            "events_processed": 1,
+            "error_count": 0,
         }
+
+        stats_db = mock_stats_db.return_value
+        stats_db.get_or_create_repository.return_value = "repo-1"
+        stats_db.get_or_create_contributor.return_value = "contributor-1"
 
         task = MetricsEventProcessorTask(config)
         result = task.execute()
 
         assert result['success'] is True
-        assert result['skipped'] is True
-        assert result['skip_reason'] == 'running_task'
+        assert result['processed'] == 1
+        assert result['successful'] == 1
+        assert result['failed'] == 0
+        assert result['total_events'] == 1
+        assert result['error_events'] == 0
+        assert result['batches'] == 1
+
+        mock_metrics_instance.mark_raw_extracting.assert_called_once_with("raw-1")
+        mock_service.process_raw_event.assert_called_once_with(
+            "raw-1",
+            pending_record["payload_json"],
+        )
+        mock_metrics_instance.mark_raw_extracted.assert_called_once_with(
+            "raw-1",
+            success=True,
+        )
+        stats_db.ensure_repo_contributor_link.assert_called_once_with(
+            "repo-1",
+            "contributor-1",
+        )

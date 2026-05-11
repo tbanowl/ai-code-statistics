@@ -1,4 +1,5 @@
 """测试 MetricsDatabase 方法"""
+import importlib
 import os
 import tempfile
 import time
@@ -6,9 +7,6 @@ import time
 import pytest
 
 import core.config.loader as loader
-from core.database.metrics_db import MetricsDatabase
-from core.database.models import MetricsEventsRaw
-from core.database.base import session_scope
 
 
 @pytest.fixture
@@ -34,21 +32,35 @@ def metrics_db(temp_db_path):
         "git": {"type": "github"},
         "database": {"url": f"sqlite:///{temp_db_path}", "echo": False},
     }
-    db = MetricsDatabase()
-    db.init_db()
-    return db
+    import core.database.base as db_base
+    import core.database.metrics_db as metrics_db_module
+    import core.database.models as db_models
+
+    # core.database.base creates global_engine at import time; reload after
+    # overriding config so this test uses the temporary SQLite database.
+    importlib.reload(db_base)
+    importlib.reload(db_models)
+    importlib.reload(metrics_db_module)
+
+    db = metrics_db_module.MetricsDatabase()
+    db_base.Base.metadata.create_all(db.engine)
+
+    yield db, db_base, db_models
+
+    loader.config_data = {}
+    db.engine.dispose()
 
 
 def test_reset_stuck_extracting_records(metrics_db):
     """测试恢复被卡住的原始记录"""
-    db = metrics_db
+    db, db_base, db_models = metrics_db
 
     # 创建测试数据：三条记录，状态分别为 0, 2, 2
-    with session_scope(db.engine) as session:
+    with db_base.session_scope(db.engine) as session:
         records = [
-            MetricsEventsRaw(id="test1", version=1, event_count=1, payload_json="{}", extract=0, received_at=1234567890000),
-            MetricsEventsRaw(id="test2", version=1, event_count=1, payload_json="{}", extract=2, received_at=1234567890000),
-            MetricsEventsRaw(id="test3", version=1, event_count=1, payload_json="{}", extract=2, received_at=1234567890000),
+            db_models.MetricsEventsRaw(id="test1", version=1, event_count=1, payload_json="{}", extract=0, received_at=1234567890000),
+            db_models.MetricsEventsRaw(id="test2", version=1, event_count=1, payload_json="{}", extract=2, received_at=1234567890000),
+            db_models.MetricsEventsRaw(id="test3", version=1, event_count=1, payload_json="{}", extract=2, received_at=1234567890000),
         ]
         session.add_all(records)
 
@@ -57,8 +69,8 @@ def test_reset_stuck_extracting_records(metrics_db):
 
     # 验证结果
     assert reset_count == 2
-    with session_scope(db.engine) as session:
-        records = session.query(MetricsEventsRaw).order_by(MetricsEventsRaw.id).all()
+    with db_base.session_scope(db.engine) as session:
+        records = session.query(db_models.MetricsEventsRaw).order_by(db_models.MetricsEventsRaw.id).all()
         assert records[0].extract == 0  # 未改变
         assert records[1].extract == 0  # 已恢复
         assert records[2].extract == 0  # 已恢复
@@ -66,13 +78,13 @@ def test_reset_stuck_extracting_records(metrics_db):
 
 def test_get_pending_raw_records_with_cursor(metrics_db):
     """测试带游标的批次查询"""
-    db = metrics_db
+    db, db_base, db_models = metrics_db
 
     # 创建 5 条待处理记录
-    with session_scope(db.engine) as session:
+    with db_base.session_scope(db.engine) as session:
         ids = [f"test_cursor_{i}" for i in range(5)]
         records = [
-            MetricsEventsRaw(id=ids[i], version=1, event_count=1, payload_json="{}", extract=0, received_at=1234567890000 + i)
+            db_models.MetricsEventsRaw(id=ids[i], version=1, event_count=1, payload_json="{}", extract=0, received_at=1234567890000 + i)
             for i in range(5)
         ]
         session.add_all(records)
