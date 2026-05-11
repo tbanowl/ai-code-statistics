@@ -79,6 +79,16 @@ swagger:
     name: MIT
 git_ai:
   api_key: git-ai123456789
+# OTEL 接收配置
+otel:
+  receiver:
+    enabled: true
+    logs:
+      enabled: true
+      accept_json: true
+      accept_protobuf: false
+      max_log_records_per_request: 1000
+      require_org_user: true
 # 日志配置
 logging:
   # 日志目录（相对于项目根目录）

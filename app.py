@@ -14,6 +14,7 @@ from api.routes.scheduler import scheduler_bp
 from api.routes.git_ai import git_ai_bp
 from api.routes.git_ai_worker import metrics_bp, cas_bp, oauth_bp, releases_bp
 from api.routes.authorship_notes import git_notes_rest_bp, authorship_notes_rest_bp
+from api.routes.otel_receiver import otel_receiver_bp
 from api.routes.system import system_bp
 from core.config.swagger import swagger_setup
 
@@ -61,6 +62,9 @@ app.register_blueprint(releases_bp)
 app.register_blueprint(git_notes_rest_bp)
 app.register_blueprint(authorship_notes_rest_bp)
 app.register_blueprint(system_bp)
+
+# 注册 OTLP Logs Receiver 蓝图
+app.register_blueprint(otel_receiver_bp)
 
 # 初始化 Swagger（如果配置启用）
 swagger_setup(app, config, main_logger)
