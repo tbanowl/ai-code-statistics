@@ -4,20 +4,23 @@ from core.database.models import (
     MetricsEventsCommitted,
     MetricsEventsInstallHooks,
     MetricsEventsRaw,
+    OtelInvocationCount,
 )
 
 
 def test_metrics_raw_defaults_and_fields():
     row = MetricsEventsRaw(
-        batch_id="batch-1",
+        version=1,
         event_count=2,
         payload_json="{}",
         received_at=1710000000000,
     )
     data = row.to_dict()
-    assert data["batch_id"] == "batch-1"
-    assert data["version"] in (None, 1)
+    assert data["version"] == 1
     assert data["event_count"] == 2
+    assert data["payload_json"] == "{}"
+    assert data["extract"] in (None, 0)
+    assert data["received_at"] == 1710000000000
 
 
 def test_metrics_committed_supports_json_fields():
@@ -59,3 +62,31 @@ def test_metrics_agent_usage_and_install_hooks_defaults():
     )
     assert usage.event_id in (None, 2)
     assert hook.event_id in (None, 3)
+
+
+def test_otel_invocation_count_fields():
+    columns = {c.name for c in OtelInvocationCount.__table__.columns}
+    expected_columns = {
+        "id",
+        "source",
+        "category",
+        "plugin_name",
+        "skill_name",
+        "invocation_trigger",
+        "org_user",
+        "service_name",
+        "service_version",
+        "count",
+        "time_unix_nano",
+        "received_at",
+        "created_at",
+    }
+    assert expected_columns.issubset(columns), (
+        f"Missing columns: {expected_columns - columns}"
+    )
+
+
+def test_otel_invocation_count_indexes():
+    indexes = {i.name for i in getattr(OtelInvocationCount.__table__, "indexes", set())}
+    assert "idx_otel_invocation_received_at" in indexes
+    assert "idx_otel_invocation_org_plugin_skill" in indexes

@@ -214,6 +214,40 @@ class MetricsEventErrors(ModelBase):
     __table_args__ = (Index("idx_raw_event_index", "raw_id", "event_index"),)
 
 
+class OtelInvocationCount(ModelBase):
+    """Claude Code OTLP Logs Skill 调用计数表。"""
+
+    __tablename__ = "otel_invocation_counts"
+
+    id: Mapped[str] = mapped_column(String(20), primary_key=True, default=gen_xid)
+    source: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="claude_code"
+    )
+    category: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="skill"
+    )
+    plugin_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    skill_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    invocation_trigger: Mapped[str] = mapped_column(String(50), nullable=True)
+    org_user: Mapped[str] = mapped_column(String(200), nullable=False)
+    service_name: Mapped[str] = mapped_column(String(200), nullable=True)
+    service_version: Mapped[str] = mapped_column(String(100), nullable=True)
+    count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    time_unix_nano: Mapped[str] = mapped_column(String(30), nullable=True)
+    received_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
+
+    __table_args__ = (
+        Index("idx_otel_invocation_received_at", "received_at"),
+        Index(
+            "idx_otel_invocation_org_plugin_skill",
+            "org_user",
+            "plugin_name",
+            "skill_name",
+        ),
+    )
+
+
 # ============================================================================
 # CAS 对象表
 # ============================================================================

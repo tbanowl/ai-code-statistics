@@ -126,6 +126,25 @@ CREATE TABLE IF NOT EXISTS metrics_event_errors (
     INDEX idx_raw_event_index (raw_id, event_index)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='事件解析错误记录表';
 
+-- Claude Code OTLP Logs Skill 调用计数表
+CREATE TABLE IF NOT EXISTS otel_invocation_counts (
+    id VARCHAR(20) PRIMARY KEY COMMENT '主键，使用 XID',
+    source VARCHAR(50) NOT NULL DEFAULT 'claude_code' COMMENT '来源',
+    category VARCHAR(50) NOT NULL DEFAULT 'skill' COMMENT '分类',
+    plugin_name VARCHAR(200) NOT NULL COMMENT '插件名称',
+    skill_name VARCHAR(200) NOT NULL COMMENT '技能名称',
+    invocation_trigger VARCHAR(50) COMMENT '调用触发方式',
+    org_user VARCHAR(200) NOT NULL COMMENT '组织/用户标识',
+    service_name VARCHAR(200) COMMENT '服务名称',
+    service_version VARCHAR(100) COMMENT '服务版本',
+    count INT NOT NULL DEFAULT 1 COMMENT '调用次数',
+    time_unix_nano VARCHAR(30) COMMENT 'Unix 纳秒时间戳',
+    received_at BIGINT NOT NULL COMMENT '接收时间戳（毫秒）',
+    created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
+    INDEX idx_otel_invocation_received_at (received_at),
+    INDEX idx_otel_invocation_org_plugin_skill (org_user, plugin_name, skill_name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='Claude Code OTLP Logs Skill 调用计数表';
+
 -- CAS 对象表
 CREATE TABLE IF NOT EXISTS cas_objects (
     id VARCHAR(20) PRIMARY KEY COMMENT '主键，使用 XID',
