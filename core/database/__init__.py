@@ -11,6 +11,7 @@ from .stats_db import StatsDatabase
 from .scheduler_db import SchedulerDatabase
 from .blame_stats_db import BlameStatsDatabase
 from .authorship_notes_db import AuthorshipNotesDatabase
+from .otel_logs_db import OtelLogsDatabase
 
 __all__ = [
     "Base",
@@ -21,6 +22,7 @@ __all__ = [
     "SchedulerDatabase",
     "BlameStatsDatabase",
     "AuthorshipNotesDatabase",
+    "OtelLogsDatabase",
 ]
 
 # 模型在需要时按需导入，避免循环依赖
