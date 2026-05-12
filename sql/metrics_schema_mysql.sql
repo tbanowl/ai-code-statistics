@@ -144,6 +144,7 @@ CREATE TABLE IF NOT EXISTS otel_invocation_counts (
     created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
     INDEX idx_otel_invocation_received_at (received_at),
     INDEX idx_otel_invocation_org_plugin_skill (org_user, plugin_name, skill_name)
+    INDEX idx_otel_log_date_plugin_skill_user (otel_log_date, plugin_name, skill_name, org_user)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='Claude Code OTLP Logs Skill 调用计数表';
 
 -- CAS 对象表
