@@ -63,6 +63,7 @@ def test_save_invocation_counts_persists_records(otel_db):
             count=1,
             time_unix_nano="1770000000000000000",
             received_at=1770000000000,
+            otel_log_date="20260304",
         )
     ]
 

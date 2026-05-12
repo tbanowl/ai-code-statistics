@@ -140,6 +140,7 @@ CREATE TABLE IF NOT EXISTS otel_invocation_counts (
     count INT NOT NULL DEFAULT 1 COMMENT '调用次数',
     time_unix_nano VARCHAR(30) COMMENT 'Unix 纳秒时间戳',
     received_at BIGINT NOT NULL COMMENT '接收时间戳（毫秒）',
+    otel_log_date CHAR(8) NOT NULL COMMENT '日志日期（YYYYMMDD）',
     created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
     INDEX idx_otel_invocation_received_at (received_at),
     INDEX idx_otel_invocation_org_plugin_skill (org_user, plugin_name, skill_name)

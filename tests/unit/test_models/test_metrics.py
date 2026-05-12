@@ -79,6 +79,7 @@ def test_otel_invocation_count_fields():
         "count",
         "time_unix_nano",
         "received_at",
+        "otel_log_date",
         "created_at",
     }
     assert expected_columns.issubset(columns), (

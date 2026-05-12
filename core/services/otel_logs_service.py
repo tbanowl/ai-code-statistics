@@ -108,6 +108,21 @@ class OtelLogsService:
         if self.require_org_user and not org_user:
             return "missing required resource attribute org.user"
 
+        from datetime import datetime, timezone
+
+        time_unix_nano = self._clean_string(
+            log_record.get("timeUnixNano"),
+            max_length=MAX_TIME_UNIX_NANO_LENGTH,
+        )
+        if time_unix_nano:
+            log_date = datetime.fromtimestamp(
+                int(time_unix_nano) / 1_000_000_000, tz=timezone.utc
+            ).strftime("%Y%m%d")
+        else:
+            log_date = datetime.fromtimestamp(
+                received_at / 1000, tz=timezone.utc
+            ).strftime("%Y%m%d")
+
         return OtelInvocationCount(
             source="claude_code",
             category="skill",
@@ -118,11 +133,9 @@ class OtelLogsService:
             service_name=self._clean_string(resource_attrs.get("service.name")),
             service_version=self._clean_string(resource_attrs.get("service.version")),
             count=1,
-            time_unix_nano=self._clean_string(
-                log_record.get("timeUnixNano"),
-                max_length=MAX_TIME_UNIX_NANO_LENGTH,
-            ),
+            time_unix_nano=time_unix_nano,
             received_at=received_at,
+            otel_log_date=log_date,
         )
 
     @staticmethod

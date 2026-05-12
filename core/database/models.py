@@ -235,6 +235,7 @@ class OtelInvocationCount(ModelBase):
     count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     time_unix_nano: Mapped[str] = mapped_column(String(30), nullable=True)
     received_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    otel_log_date: Mapped[str] = mapped_column(String(8), nullable=False)
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
 
     __table_args__ = (
