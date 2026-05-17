@@ -366,6 +366,29 @@ CREATE TABLE IF NOT EXISTS task_executions (
     INDEX idx_task_executions_job (job_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='任务执行记录表';
 
+-- Codeup 合并 authorship 重算任务表
+CREATE TABLE IF NOT EXISTS codeup_merge_authorship_tasks (
+    id VARCHAR(20) PRIMARY KEY COMMENT '主键，使用 XID',
+    repo_url TEXT NOT NULL COMMENT '仓库远程 URL',
+    project_id VARCHAR(100) COMMENT 'Codeup 项目 ID',
+    merge_request_id VARCHAR(100) NOT NULL COMMENT 'Merge Request ID',
+    source_branch VARCHAR(255) NOT NULL COMMENT '源分支',
+    target_branch VARCHAR(255) NOT NULL COMMENT '目标分支',
+    merge_commit_sha VARCHAR(40) NOT NULL COMMENT '合并提交 SHA',
+    source_commit_shas TEXT NOT NULL COMMENT '源提交 SHA 列表 JSON',
+    payload TEXT NOT NULL COMMENT '原始 webhook payload JSON',
+    status VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT '任务状态',
+    attempts INT NOT NULL DEFAULT 0 COMMENT '尝试次数',
+    last_error TEXT COMMENT '最后错误信息',
+    result_summary TEXT COMMENT '处理结果摘要 JSON',
+    created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
+    updated_at BIGINT NOT NULL COMMENT '更新时间戳（毫秒）',
+    UNIQUE KEY uk_codeup_merge_authorship_task (repo_url(400), merge_request_id, merge_commit_sha),
+    INDEX idx_codeup_merge_authorship_status_attempts (status, attempts),
+    INDEX idx_codeup_merge_authorship_repo_url (repo_url(400)),
+    INDEX idx_codeup_merge_authorship_commit (merge_commit_sha)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='Codeup 合并 authorship 重算任务表';
+
 -- 系统管理表
 CREATE TABLE IF NOT EXISTS sys_dept (
     id VARCHAR(20) PRIMARY KEY ,

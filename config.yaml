@@ -34,6 +34,12 @@ scheduler:
     git_blame_stats:
       enabled: true
       cron: "0 */1 * * *"
+    # Codeup Merge AI 归属重算任务
+    codeup_merge_authorship:
+      enabled: true
+      cron: "*/2 * * * *"
+      batch_size: 10
+      timeout_minutes: 60
 
 # Git Blame 统计配置
 blame_stats:
@@ -79,6 +85,13 @@ swagger:
     name: MIT
 git_ai:
   api_key: git-ai123456789
+
+codeup_webhook:
+  repo_cache_dir: .cache/codeup_repos
+  max_attempts: 3
+  clone_timeout_seconds: 300
+  fetch_timeout_seconds: 120
+
 # OTEL 接收配置
 otel:
   receiver:

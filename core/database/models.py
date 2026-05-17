@@ -468,6 +468,37 @@ class AuthorshipNotes(ModelBase):
     )
 
 
+class CodeupMergeAuthorshipTask(ModelBase):
+    """Codeup 合并后 authorship 重算任务表"""
+
+    __tablename__ = "codeup_merge_authorship_tasks"
+
+    __table_args__ = (
+        UniqueConstraint("repo_url", "merge_request_id", "merge_commit_sha"),
+        Index("idx_codeup_merge_authorship_status_attempts", "status", "attempts"),
+        Index("idx_codeup_merge_authorship_repo_url", "repo_url"),
+        Index("idx_codeup_merge_authorship_commit", "merge_commit_sha"),
+    )
+
+    id: Mapped[str] = mapped_column(String(20), primary_key=True, default=gen_xid)
+    repo_url: Mapped[str] = mapped_column(Text, nullable=False)
+    project_id: Mapped[Any] = mapped_column(String(100), nullable=True)
+    merge_request_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    source_branch: Mapped[str] = mapped_column(String(255), nullable=False)
+    target_branch: Mapped[str] = mapped_column(String(255), nullable=False)
+    merge_commit_sha: Mapped[str] = mapped_column(String(40), nullable=False)
+    source_commit_shas: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error: Mapped[Any] = mapped_column(Text, nullable=True)
+    result_summary: Mapped[Any] = mapped_column(Text, nullable=True)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
+    updated_at: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=now_ts, onupdate=now_ts
+    )
+
+
 # ============================================================================
 # Git Blame 统计表 (stats_blame_ 前缀)
 # ============================================================================

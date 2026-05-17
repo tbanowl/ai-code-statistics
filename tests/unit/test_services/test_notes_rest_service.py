@@ -5,6 +5,11 @@ Tests for NotesRestService
 import pytest
 import tempfile
 import os
+from sqlalchemy import create_engine
+
+import core.config.loader as loader
+import core.database.base as database_base
+from core.database.base import Base
 from core.services.notes_service import NotesRestService
 
 
@@ -25,7 +30,20 @@ def temp_db():
 @pytest.fixture
 def service(temp_db):
     """Create service instance with temp database"""
-    return NotesRestService()
+    previous_config_data = loader.config_data
+    previous_global_engine = database_base.global_engine
+    sqlite_engine = create_engine(temp_db, echo=False)
+
+    loader.config_data = {"database": {"url": temp_db, "echo": False}}
+    database_base.global_engine = sqlite_engine
+    Base.metadata.create_all(sqlite_engine)
+
+    try:
+        yield NotesRestService()
+    finally:
+        sqlite_engine.dispose()
+        loader.config_data = previous_config_data
+        database_base.global_engine = previous_global_engine
 
 
 def test_create_note(service):

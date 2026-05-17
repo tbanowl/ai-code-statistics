@@ -7,6 +7,13 @@ import json
 import tempfile
 import os
 import sys
+from typing import Any, cast
+from sqlalchemy import create_engine
+
+import core.config.loader as loader
+import core.database.base as database_base
+from core.database.base import Base
+from core.services.notes_service import NotesRestService
 
 
 @pytest.fixture
@@ -17,29 +24,46 @@ def app():
     os.close(fd)
     temp_db_url = f'sqlite:///{path}'
 
+    previous_config_data = loader.config_data
+    previous_global_engine = database_base.global_engine
+    previous_db_url = os.environ.get('DB_URL')
+    sqlite_engine = create_engine(temp_db_url, echo=False)
+
+    loader.config_data = {"database": {"url": temp_db_url, "echo": False}}
+    database_base.global_engine = sqlite_engine
+    Base.metadata.create_all(sqlite_engine)
     os.environ['DB_URL'] = temp_db_url
 
-    # 需要在设置环境变量后重新导入模块
+    # 需要在设置数据库后重新导入/刷新路由模块级 service
     import importlib
-    if 'api.routes.notes_rest' in sys.modules:
-        importlib.reload(sys.modules['api.routes.notes_rest'])
+    if 'api.routes.authorship_notes' in sys.modules:
+        authorship_notes = cast(
+            Any, importlib.reload(sys.modules['api.routes.authorship_notes'])
+        )
+    else:
+        authorship_notes = cast(
+            Any, importlib.import_module('api.routes.authorship_notes')
+        )
+    authorship_notes.service = NotesRestService()
 
-    from api.routes.authorship_notes import git_notes_rest_bp
     from flask import Flask
 
     app = Flask(__name__)
     app.config['TESTING'] = True
     app.config['DEBUG'] = True
-    app.register_blueprint(git_notes_rest_bp)
-
-    # 关闭引擎以允许删除文件
-    from core.services.notes_service import NotesRestService
+    app.register_blueprint(authorship_notes.git_notes_rest_bp)
 
     yield app
 
     # 清理
-    service = NotesRestService()
-    service.close()
+    authorship_notes.service.close()
+    sqlite_engine.dispose()
+    loader.config_data = previous_config_data
+    database_base.global_engine = previous_global_engine
+    if previous_db_url is None:
+        os.environ.pop('DB_URL', None)
+    else:
+        os.environ['DB_URL'] = previous_db_url
 
     try:
         os.unlink(path)
