@@ -2,18 +2,23 @@ import os
 import tempfile
 
 import pytest
+from sqlalchemy import create_engine
 
 import core.config.loader as loader
+import core.database.base as db_base
 from core.database.metrics_db import MetricsDatabase
 from core.database.stats_db import StatsDatabase
 from core.scheduler.tasks.daily_aggregation_task import DailyAggregationTask
 from core.database.base import session_scope
 from core.database.models import (
+    MetricsEventsCheckpoint,
+    MetricsEventsCommitted,
     StatsContributor,
     StatsDailyStat,
     StatsRepoContributor,
     StatsRepository,
 )
+from core.utils.data_uid import gen_checkpoint_uid, gen_commited_uid
 
 
 @pytest.fixture
@@ -32,9 +37,10 @@ def setup_dbs(db_url):
         "git": {"type": "github"},
         "database": {"url": db_url, "echo": False},
     }
+    db_base.global_engine = create_engine(db_url)
     metrics_db = MetricsDatabase()
     stats_db = StatsDatabase()
-    metrics_db.init_db()
+    db_base.Base.metadata.create_all(metrics_db.engine)
     return metrics_db, stats_db
 
 
@@ -42,36 +48,37 @@ def test_query_committed_and_checkpoint_events(setup_dbs):
     metrics_db, stats_db = setup_dbs
 
     raw_id = metrics_db.save_metrics_raw(
-        batch_id="b1",
         version=1,
         event_count=2,
         payload_json="{}",
         received_at=1710000000000,
     )
-    metrics_db.save_committed_event(
-        {
-            "raw_id": raw_id,
-            "timestamp": 1710000000001,
-            "repo_url": "repo/a",
-            "author": "alice <alice@example.com>",
-            "human_additions": 6,
-            "git_diff_added_lines": 10,
-            "git_diff_deleted_lines": 2,
-            "ai_additions": [3, 1],
-            "total_ai_additions": [3, 1],
-        }
+    committed = MetricsEventsCommitted(
+        raw_id=raw_id,
+        timestamp=1710000000001,
+        repo_url="repo/a",
+        author="alice <alice@example.com>",
+        human_additions=6,
+        git_diff_added_lines=10,
+        git_diff_deleted_lines=2,
+        ai_additions=[3, 1],
+        ai_accepted=[3, 1],
+        total_ai_additions=[3, 1],
     )
-    metrics_db.save_checkpoint_event(
-        {
-            "raw_id": raw_id,
-            "timestamp": 1710000000002,
-            "repo_url": "repo/a",
-            "author": "alice <alice@example.com>",
-            "kind": "ai_agent",
-            "lines_added": 5,
-            "lines_added_sloc": 3,
-        }
+    committed.uid = gen_commited_uid(committed)
+    metrics_db.upsert_committed_event(committed)
+
+    checkpoint = MetricsEventsCheckpoint(
+        raw_id=raw_id,
+        timestamp=1710000000002,
+        repo_url="repo/a",
+        author="alice <alice@example.com>",
+        kind="ai_agent",
+        lines_added=5,
+        lines_added_sloc=3,
     )
+    checkpoint.uid = gen_checkpoint_uid(checkpoint)
+    metrics_db.save_checkpoint_event(checkpoint)
 
     committed = stats_db.query_committed_events(1710000000000, 1710000000010)
     checkpoints = stats_db.query_checkpoint_events(1710000000000, 1710000000010)
@@ -147,11 +154,7 @@ def test_consolidate_empty_repository_rows(setup_dbs):
     with session_scope(stats_db.engine) as session:
         unknown = StatsRepository(repo_path="未知仓库", repo_name="未知仓库")
         bad_repo = StatsRepository(repo_path="", repo_name="")
-        contributor = StatsContributor(
-            contributor_uid="alice@example.com",
-            name="alice",
-            email="alice@example.com",
-        )
+        contributor = StatsContributor(name="alice", email="alice@example.com")
         session.add_all([unknown, bad_repo, contributor])
         session.flush()
 
@@ -196,25 +199,25 @@ def test_aggregation_range_does_not_create_empty_repository(setup_dbs):
         session.add(StatsRepository(repo_path="", repo_name=""))
 
     raw_id = metrics_db.save_metrics_raw(
-        batch_id="b2",
         version=1,
         event_count=1,
         payload_json="{}",
         received_at=1772323200000,
     )
-    metrics_db.save_committed_event(
-        {
-            "raw_id": raw_id,
-            "timestamp": 1772323200000,
-            "repo_url": "",
-            "author": "alice <alice@example.com>",
-            "human_additions": 2,
-            "git_diff_added_lines": 8,
-            "git_diff_deleted_lines": 1,
-            "ai_additions": [3, 1],
-            "total_ai_additions": [3, 1],
-        }
+    committed = MetricsEventsCommitted(
+        raw_id=raw_id,
+        timestamp=1772323200000,
+        repo_url="",
+        author="alice <alice@example.com>",
+        human_additions=2,
+        git_diff_added_lines=8,
+        git_diff_deleted_lines=1,
+        ai_additions=[3, 1],
+        ai_accepted=[3, 1],
+        total_ai_additions=[3, 1],
     )
+    committed.uid = gen_commited_uid(committed)
+    metrics_db.upsert_committed_event(committed)
 
     task = DailyAggregationTask(loader.config_data)
     task.execute(

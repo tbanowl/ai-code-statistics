@@ -1,4 +1,5 @@
 import pytest
+from datetime import datetime, timedelta
 
 from core.services.oauth_service import OAuthService
 
@@ -10,7 +11,7 @@ def service(monkeypatch):
         lambda: {
             "git_ai": {
                 "oauth": {
-                    "secret_key": "test-secret-key-32-bytes-long!!",
+                    "secret_key": "test-secret-key-32-bytes-long!!!",
                     "token_expiry_hours": 1,
                     "refresh_token_expiry_days": 30,
                     "device_code_expiry_seconds": 900,
@@ -83,13 +84,57 @@ def test_exchange_unsupported_grant_type(service):
     assert result["error"] == "unsupported_grant_type"
 
 
-def test_exchange_device_code_current_behavior_raises_keyerror(service):
+def test_exchange_device_code_pending_until_approved(service):
     info = service.create_device_code()
-    with pytest.raises(KeyError):
-        service.exchange_token(
-            grant_type="urn:ietf:params:oauth:grant-type:device_code",
-            device_code=info["device_code"],
-            refresh_token=None,
-            install_nonce=None,
-            client_id=None,
-        )
+    result = service.exchange_token(
+        grant_type="urn:ietf:params:oauth:grant-type:device_code",
+        device_code=info["device_code"],
+        refresh_token=None,
+        install_nonce=None,
+        client_id=None,
+    )
+    assert result["error"] == "authorization_pending"
+
+
+def test_exchange_device_code_approved_returns_tokens_and_consumes_code(service):
+    info = service.create_device_code()
+    assert service.approve_device_code(info["user_code"]) is True
+
+    result = service.exchange_token(
+        grant_type="urn:ietf:params:oauth:grant-type:device_code",
+        device_code=info["device_code"],
+        refresh_token=None,
+        install_nonce=None,
+        client_id="cli",
+    )
+
+    assert "access_token" in result
+    assert "refresh_token" in result
+    assert info["device_code"] not in service.device_codes
+
+    reused = service.exchange_token(
+        grant_type="urn:ietf:params:oauth:grant-type:device_code",
+        device_code=info["device_code"],
+        refresh_token=None,
+        install_nonce=None,
+        client_id="cli",
+    )
+    assert reused["error"] == "invalid_grant"
+
+
+def test_exchange_device_code_expired_token_is_removed(service):
+    info = service.create_device_code()
+    service.device_codes[info["device_code"]]["expires_at"] = (
+        datetime.now() - timedelta(seconds=1)
+    )
+
+    result = service.exchange_token(
+        grant_type="urn:ietf:params:oauth:grant-type:device_code",
+        device_code=info["device_code"],
+        refresh_token=None,
+        install_nonce=None,
+        client_id="cli",
+    )
+
+    assert result["error"] == "expired_token"
+    assert info["device_code"] not in service.device_codes

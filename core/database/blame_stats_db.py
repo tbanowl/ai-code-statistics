@@ -10,6 +10,7 @@ from core.database.models import (
     StatsBlameRepo,
     StatsBlameRepoContributor,
     StatsRepoBranchConfig,
+    StatsRepositoryBranch,
     StatsRepository,
     StatsContributor,
     gen_xid
@@ -174,6 +175,18 @@ class BlameStatsDatabase(BaseDatabase):
                 }
                 for c in configs
             ]
+
+    def get_repository_branches(self, repo_id: str) -> list[str]:
+        """从仓库实际分支表获取分支名称列表。"""
+        with session_scope(self.engine) as session:
+            rows = (
+                session.query(StatsRepositoryBranch)
+                .filter(StatsRepositoryBranch.repo_id == repo_id)
+                .order_by(StatsRepositoryBranch.branch_name.asc())
+                .all()
+            )
+
+            return [row.branch_name for row in rows if (row.branch_name or "").strip()]
 
     def save_repo_branch_config(
         self,
@@ -373,7 +386,9 @@ class BlameStatsDatabase(BaseDatabase):
         with session_scope(self.engine) as session:
             # 先删除当天旧数据
             session.query(StatsBlameRepo).filter(
-                StatsBlameRepo.repo_id == repo_id, StatsBlameRepo.stat_date == stat_date
+                StatsBlameRepo.repo_id == repo_id,
+                StatsBlameRepo.stat_date == stat_date,
+                StatsBlameRepo.branch == branch,
             ).delete()
 
             # 插入新数据

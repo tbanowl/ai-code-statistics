@@ -21,10 +21,10 @@ def test_stats_repository_defaults_and_dict():
 
 
 def test_stats_contributor_defaults_and_dict():
-    row = StatsContributor(contributor_uid="alice@example.com", name="alice")
+    row = StatsContributor(name="alice", email="alice@example.com")
     data = row.to_dict()
-    assert data["contributor_uid"] == "alice@example.com"
     assert data["name"] == "alice"
+    assert data["email"] == "alice@example.com"
 
 
 def test_stats_repo_contributor_and_daily_stat_fields():

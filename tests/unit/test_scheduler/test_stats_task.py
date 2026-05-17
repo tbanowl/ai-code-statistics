@@ -57,6 +57,7 @@ def test_execute_calls_stats_db_methods(mock_stats_db_cls):
         }
     ]
     stats_db.query_checkpoint_events.return_value = []
+    stats_db.get_latest_stat_date.return_value = 0
     stats_db.get_or_create_repository.return_value = "r1"
     stats_db.get_or_create_contributor.return_value = "c1"
     mock_stats_db_cls.return_value = stats_db
@@ -69,7 +70,7 @@ def test_execute_calls_stats_db_methods(mock_stats_db_cls):
     assert result["records"] == 1
     stats_db.get_or_create_repository.assert_called_once_with("repo/a")
     stats_db.get_or_create_contributor.assert_called_once_with(
-        "alice", "a@example.com", contributor_uid="alice <a@example.com>"
+        "alice", "a@example.com"
     )
     stats_db.ensure_repo_contributor_link.assert_called_once_with("r1", "c1")
     assert stats_db.upsert_daily_stat.call_count == 1

@@ -115,9 +115,14 @@ class OtelLogsService:
             max_length=MAX_TIME_UNIX_NANO_LENGTH,
         )
         if time_unix_nano:
-            log_date = datetime.fromtimestamp(
-                int(time_unix_nano) / 1_000_000_000, tz=timezone.utc
-            ).strftime("%Y%m%d")
+            try:
+                log_date = datetime.fromtimestamp(
+                    int(time_unix_nano) / 1_000_000_000, tz=timezone.utc
+                ).strftime("%Y%m%d")
+            except (OverflowError, OSError, ValueError):
+                log_date = datetime.fromtimestamp(
+                    received_at / 1000, tz=timezone.utc
+                ).strftime("%Y%m%d")
         else:
             log_date = datetime.fromtimestamp(
                 received_at / 1000, tz=timezone.utc

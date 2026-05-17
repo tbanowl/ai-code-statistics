@@ -66,8 +66,6 @@ class OAuthService:
             return {'error': 'invalid_request', 'error_description': '缺少 device_code'}
 
         auth = self.device_codes.get(device_code)
-        now = datetime.now()
-        auth = {'expires_at': now + + timedelta(seconds=9000)}
 
         if not auth:
             return {'error': 'invalid_grant', 'error_description': '无效的设备授权码'}
@@ -76,14 +74,14 @@ class OAuthService:
             del self.device_codes[device_code]
             return {'error': 'expired_token', 'error_description': '设备授权码已过期'}
 
-        # if not auth['approved']:
-        #     return {'error': 'authorization_pending', 'error_description': '用户尚未授权'}
+        if not auth['approved']:
+            return {'error': 'authorization_pending', 'error_description': '用户尚未授权'}
 
         # 生成令牌
         tokens = self._generate_tokens(client_id or 'git-ai-cli')
 
         # 清理设备授权码
-        # del self.device_codes[device_code]
+        del self.device_codes[device_code]
 
         return tokens
 

@@ -20,7 +20,7 @@ class GitCloneService:
         repo_url: str,
         private_key: str,
         target_dir: str,
-        shallow_since: str = '2 month ago'
+        depth: int = 1,
     ) -> bool:
         """
         使用指定 SSH Key 克隆仓库
@@ -29,10 +29,7 @@ class GitCloneService:
             repo_url: Git 仓库 URL
             private_key: SSH 私钥内容
             target_dir: 目标目录
-            shallow_since: 浅克隆起始日期，支持以下格式：
-                - 相对日期（推荐）: '30 days ago', '1 month ago', '2 weeks ago'
-                - 绝对日期: '2026-03-20', '2026-01-01'
-                默认为 '30 days ago'，自动适应时间推移
+            depth: 浅克隆深度，默认只克隆最新 1 层提交
 
         Returns:
             是否成功克隆
@@ -65,11 +62,17 @@ class GitCloneService:
                 if not repo_url.endswith('.git'):
                     repo_url += '.git'
 
-            # 使用 shallow-since
-            # cmd = ['git', 'clone', f'--shallow-since="{shallow_since}"', shallow_since, repo_url, target_dir]
-            cmd = ['git', 'clone', repo_url, target_dir]
+            cmd = [
+                'git',
+                'clone',
+                '--depth',
+                str(depth),
+                '--no-single-branch',
+                repo_url,
+                target_dir,
+            ]
 
-            self.logger.info(f"开始克隆仓库: {repo_url} (shallow-since: {shallow_since})")
+            self.logger.info(f"开始克隆仓库: {repo_url} (depth: {depth})")
 
             result = subprocess.run(
                 cmd,

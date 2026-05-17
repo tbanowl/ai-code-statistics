@@ -34,6 +34,7 @@ class MetricsEventProcessorTask(BaseTask):
         payload = json.loads(payload_json)
         events = payload.get("events", [])
         seen_pairs = set()
+        seen_branches = set()
 
         for event in events:
             if event.get("e") not in {1, 2, 4}:
@@ -45,12 +46,18 @@ class MetricsEventProcessorTask(BaseTask):
             author_name, author_email = MetricsEventProcessorTask._parse_author(
                 author_raw
             )
-            pair_key = (repo_path, author_name)
 
+            repo_id = stats_db.get_or_create_repository(repo_path)
+            branch_name = (attrs.get("5") or "").strip()
+            branch_key = (repo_id, branch_name)
+            if branch_name and branch_key not in seen_branches:
+                stats_db.ensure_repository_branch(repo_id, branch_name)
+                seen_branches.add(branch_key)
+
+            pair_key = (repo_path, author_name)
             if pair_key in seen_pairs:
                 continue
 
-            repo_id = stats_db.get_or_create_repository(repo_path)
             contributor_id = stats_db.get_or_create_contributor(
                 author_name,
                 author_email

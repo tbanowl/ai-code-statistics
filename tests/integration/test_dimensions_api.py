@@ -13,14 +13,14 @@ def client():
 
 
 def test_list_repositories_api(client):
-    with patch("api.routes.stats_v2.StatsDatabase") as db_cls:
+    with patch("api.routes.stats.StatsDatabase") as db_cls:
         db_cls.return_value.get_repositories.return_value = {
             "items": [{"id": "r1", "repo_path": "owner/repo"}],
             "total": 1,
             "page": 1,
             "page_size": 10,
         }
-        resp = client.get("/api/v2/stats/repositories?limit=10&offset=0")
+        resp = client.get("/api/stats/repositories?limit=10&offset=0")
 
     assert resp.status_code == 200
     data = resp.get_json()
@@ -31,14 +31,14 @@ def test_list_repositories_api(client):
 
 
 def test_list_contributors_api(client):
-    with patch("api.routes.stats_v2.StatsDatabase") as db_cls:
+    with patch("api.routes.stats.StatsDatabase") as db_cls:
         db_cls.return_value.get_contributors.return_value = {
             "items": [{"id": "c1", "name": "alice"}],
             "total": 1,
             "page": 1,
             "page_size": 5,
         }
-        resp = client.get("/api/v2/stats/contributors?limit=5&offset=0")
+        resp = client.get("/api/stats/contributors?limit=5&offset=0")
 
     assert resp.status_code == 200
     data = resp.get_json()
@@ -48,7 +48,7 @@ def test_list_contributors_api(client):
 
 
 def test_repository_consolidation_report_api(client):
-    with patch("api.routes.stats_v2.StatsDatabase") as db_cls:
+    with patch("api.routes.stats.StatsDatabase") as db_cls:
         db_cls.return_value.get_repository_consolidation_report.return_value = {
             "unknown_repository": {
                 "id": "u1",
@@ -67,7 +67,7 @@ def test_repository_consolidation_report_api(client):
                 }
             ],
         }
-        resp = client.get("/api/v2/repositories/consolidation-report")
+        resp = client.get("/api/stats/repositories/consolidation-report")
 
     assert resp.status_code == 200
     data = resp.get_json()
@@ -77,14 +77,14 @@ def test_repository_consolidation_report_api(client):
 
 
 def test_query_daily_stats_api(client):
-    with patch("api.routes.stats_v2.StatsDatabase") as db_cls:
+    with patch("api.routes.stats.StatsDatabase") as db_cls:
         db_cls.return_value.get_daily_stats_paginated.return_value = {
             "items": [{"ai_accepted_lines": 2, "human_lines": 3}],
             "total": 1,
             "page": 1,
             "page_size": 20,
         }
-        resp = client.get("/api/v2/stats/daily?start_date=1&end_date=2")
+        resp = client.get("/api/stats/daily?start_date=1&end_date=2")
 
     assert resp.status_code == 200
     data = resp.get_json()
@@ -93,7 +93,7 @@ def test_query_daily_stats_api(client):
 
 
 def test_aggregate_stats_api(client):
-    with patch("api.routes.stats_v2.StatsDatabase") as db_cls:
+    with patch("api.routes.stats.StatsDatabase") as db_cls:
         db = db_cls.return_value
         db.get_aggregated_stats.return_value = [
             {
@@ -112,7 +112,10 @@ def test_aggregate_stats_api(client):
             {"ai_accepted_lines": 2},
             {"ai_accepted_lines": 1},
         ]
-        resp = client.get("/api/v2/stats/aggregate?start_date=1&end_date=2")
+        resp = client.post(
+            "/api/stats/aggregate",
+            json={"start_date": 1, "end_date": 2},
+        )
 
     assert resp.status_code == 200
     data = resp.get_json()
@@ -124,7 +127,7 @@ def test_aggregate_stats_api(client):
 
 
 def test_stats_query_returns_filter_names(client):
-    with patch("api.routes.stats_v2.StatsDatabase") as db_cls:
+    with patch("api.routes.stats.StatsDatabase") as db_cls:
         db = db_cls.return_value
         db.get_aggregated_stats.return_value = [
             {
@@ -145,7 +148,7 @@ def test_stats_query_returns_filter_names(client):
         }
 
         resp = client.get(
-            "/api/v2/stats?start_date=1&end_date=2&repo_id=r1&contributor_id=c1"
+            "/api/stats/?start_date=1&end_date=2&repo_id=r1&contributor_id=c1"
         )
 
     assert resp.status_code == 200
@@ -162,7 +165,7 @@ def test_trigger_aggregate_with_filters(client):
     old_scheduler = app.config.get("_scheduler")
     app.config["_scheduler"] = scheduler
     try:
-        with patch("api.routes.stats_v2.StatsDatabase") as db_cls:
+        with patch("api.routes.stats.StatsDatabase") as db_cls:
             db_cls.return_value.get_repository_by_id.return_value = {
                 "id": "r1",
                 "repo_path": "owner/repo",
@@ -174,7 +177,7 @@ def test_trigger_aggregate_with_filters(client):
             }
 
             resp = client.post(
-                "/api/v2/stats/aggregate",
+                "/api/stats/stats/aggregate",
                 json={
                     "start_date": 1000,
                     "end_date": 2000,
@@ -206,9 +209,9 @@ def test_trigger_aggregate_rejects_invalid_filters(client):
     old_scheduler = app.config.get("_scheduler")
     app.config["_scheduler"] = scheduler
     try:
-        with patch("api.routes.stats_v2.StatsDatabase") as db_cls:
+        with patch("api.routes.stats.StatsDatabase") as db_cls:
             db_cls.return_value.get_repository_by_id.return_value = None
-            resp = client.post("/api/v2/stats/aggregate", json={"repo_id": "missing"})
+            resp = client.post("/api/stats/stats/aggregate", json={"repo_id": "missing"})
 
         assert resp.status_code == 404
         data = resp.get_json()

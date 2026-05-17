@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import importlib.util
 import sys
@@ -42,12 +42,13 @@ author Bob
 	third line"""
     )
 
-    result = service.analyze_file_blame(
-        "https://example.com/repo.git",
-        "/tmp/repo/src/test.py",
-        "/tmp/repo",
-        "headsha",
-    )
+    with patch("os.path.getsize", return_value=12):
+        result = service.analyze_file_blame(
+            "https://example.com/repo.git",
+            "/tmp/repo/src/test.py",
+            "/tmp/repo",
+            "headsha",
+        )
 
     assert result is not None
     assert result.total_lines == 3

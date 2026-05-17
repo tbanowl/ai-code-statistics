@@ -9,11 +9,8 @@ def test_stats_repository_model_fields():
 
 
 def test_stats_contributor_model_fields():
-    contributor = StatsContributor(
-        contributor_uid="u1", name="Alice", email="a@example.com"
-    )
+    contributor = StatsContributor(name="Alice", email="a@example.com")
     data = contributor.to_dict()
-    assert data["contributor_uid"] == "u1"
     assert data["name"] == "Alice"
     assert data["email"] == "a@example.com"
 

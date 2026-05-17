@@ -1,8 +1,9 @@
-import pytest
-from core.database.base import Database
+from core.database.base import BaseDatabase
 
 
-def test_database_is_abstract():
-    """Database 应该是抽象类，不能直接实例化"""
-    with pytest.raises(TypeError):
-        Database({})
+def test_base_database_uses_configured_engine():
+    """BaseDatabase 应使用测试配置中的全局引擎。"""
+    db = BaseDatabase()
+
+    assert db.engine is not None
+    assert db.url.startswith("sqlite:///")

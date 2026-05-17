@@ -4,8 +4,10 @@ import tempfile
 import time
 
 import pytest
+from sqlalchemy import create_engine
 
 import core.config.loader as loader
+import core.database.base as db_base
 from core.database import SchedulerDatabase
 from core.database.models import TaskExecution
 from core.database.base import session_scope, now_ts
@@ -34,8 +36,9 @@ def scheduler_db(temp_db_path):
         "git": {"type": "github"},
         "database": {"url": f"sqlite:///{temp_db_path}", "echo": False},
     }
+    db_base.global_engine = create_engine(f"sqlite:///{temp_db_path}")
     db = SchedulerDatabase()
-    db.init_db()
+    db_base.Base.metadata.create_all(db.engine)
     return db
 
 

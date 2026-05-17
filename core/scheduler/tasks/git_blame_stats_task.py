@@ -164,27 +164,15 @@ class GitBlameStatsTask(BaseTask):
                 repo_path,
                 ssh_key_info["private_key"],
                 temp_dir,
-                shallow_since="2026-03-28",
+                depth=1,
             ):
                 self.logger.error("仓库克隆失败")
                 return None
 
-            # 获取分支配置
-            branch_configs = self.blame_stats_db.get_repo_branch_configs(repo_id)
-
-            # 确定要统计的分支列表
-            all_branches = self.git_clone_service.list_branches(temp_dir)
-
-            if not branch_configs:
-                # 默认：统计所有分支
-                target_branches = all_branches
-                self.logger.info(f"未配置分支，将统计所有 {len(all_branches)} 个分支")
-            else:
-                # 根据配置匹配分支
-                target_branches = self.git_clone_service.match_branches(
-                    all_branches, branch_configs
-                )
-                self.logger.info(f"根据配置匹配到 {len(target_branches)} 个分支")
+            target_branches = self.blame_stats_db.get_repository_branches(repo_id)
+            self.logger.info(
+                f"从仓库分支表读取到 {len(target_branches)} 个待统计分支"
+            )
 
             if not target_branches:
                 self.logger.warning("没有匹配到任何分支")

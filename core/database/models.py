@@ -313,6 +313,24 @@ class StatsRepoBranchConfig(ModelBase):
     )
 
 
+class StatsRepositoryBranch(ModelBase):
+    """仓库实际分支表"""
+
+    __tablename__ = "stats_repositories_branch"
+    __table_args__ = (
+        UniqueConstraint("repo_id", "branch_name"),
+        Index("idx_repositories_branch_repo", "repo_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(20), primary_key=True, default=gen_xid)
+    repo_id: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    branch_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
+    updated_at: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=now_ts, onupdate=now_ts
+    )
+
+
 class StatsContributor(ModelBase):
     """贡献者表"""
 
@@ -539,7 +557,7 @@ class StatsBlameRepo(ModelBase):
     __tablename__ = "stats_blame_repo"
 
     __table_args__ = (
-        UniqueConstraint("repo_id", "stat_date"),
+        UniqueConstraint("repo_id", "stat_date", "branch"),
         Index("idx_blame_repo_date", "repo_id", "stat_date"),
         Index("idx_blame_stat_date", "stat_date"),
     )
@@ -566,7 +584,7 @@ class StatsBlameFile(ModelBase):
     __tablename__ = "stats_blame_file"
 
     __table_args__ = (
-        UniqueConstraint("repo_id", "stat_date", "file_path"),
+        UniqueConstraint("repo_id", "stat_date", "branch", "file_path"),
         Index("idx_blame_file_repo", "repo_id", "stat_date"),
         Index("idx_blame_file_date", "stat_date"),
     )
@@ -593,7 +611,7 @@ class StatsBlameRepoContributor(ModelBase):
     __tablename__ = "stats_blame_repo_contributor"
 
     __table_args__ = (
-        UniqueConstraint("repo_id", "stat_date", "contributor_id"),
+        UniqueConstraint("repo_id", "stat_date", "branch", "contributor_id"),
         Index("idx_blame_rc_repo", "repo_id", "stat_date"),
         Index("idx_blame_rc_date", "stat_date"),
     )
@@ -620,7 +638,7 @@ class StatsBlameFileContributor(ModelBase):
     __tablename__ = "stats_blame_file_contributor"
 
     __table_args__ = (
-        UniqueConstraint("file_id", "stat_date", "contributor_id"),
+        UniqueConstraint("file_id", "stat_date", "branch", "contributor_id"),
         Index("idx_blame_fc_file", "repo_id", "stat_date", "file_path"),
         Index("idx_blame_fc_date", "stat_date"),
     )

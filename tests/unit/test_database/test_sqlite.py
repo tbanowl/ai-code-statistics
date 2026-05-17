@@ -2,8 +2,10 @@ import os
 import tempfile
 
 import pytest
+from sqlalchemy import create_engine
 
 import core.config.loader as loader
+import core.database.base as db_base
 from core.database.stats_db import StatsDatabase
 
 
@@ -23,8 +25,9 @@ def stats_db(temp_db_path):
         "git": {"type": "github"},
         "database": {"url": f"sqlite:///{temp_db_path}", "echo": False},
     }
+    db_base.global_engine = create_engine(f"sqlite:///{temp_db_path}")
     db = StatsDatabase()
-    db.init_db()
+    db_base.Base.metadata.create_all(db.engine)
     return db
 
 
@@ -76,3 +79,12 @@ def test_list_repositories_and_contributors(stats_db):
     assert len(repos) == 2
     assert total_contributors == 1
     assert len(contributors) == 1
+
+
+def test_ensure_repository_branch_upserts_branch(stats_db):
+    repo_id = stats_db.get_or_create_repository("repo/a")
+
+    first_id = stats_db.ensure_repository_branch(repo_id, "main")
+    second_id = stats_db.ensure_repository_branch(repo_id, " main ")
+
+    assert second_id == first_id

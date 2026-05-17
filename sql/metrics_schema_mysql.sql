@@ -183,6 +183,17 @@ CREATE TABLE IF NOT EXISTS stats_repo_branch_config (
     INDEX idx_repo_branch_config_enabled (repo_id, enabled)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='仓库分支表';
 
+-- 仓库实际分支表
+CREATE TABLE IF NOT EXISTS stats_repositories_branch (
+    id VARCHAR(20) PRIMARY KEY COMMENT '主键，使用 XID',
+    repo_id VARCHAR(20) NOT NULL COMMENT '仓库 ID',
+    branch_name VARCHAR(255) NOT NULL COMMENT '分支名称',
+    created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
+    updated_at BIGINT NOT NULL COMMENT '更新时间戳（毫秒）',
+    UNIQUE KEY uk_repositories_branch_repo_name (repo_id, branch_name),
+    INDEX idx_repositories_branch_repo (repo_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='仓库实际分支表';
+
 -- 贡献者表
 CREATE TABLE IF NOT EXISTS stats_contributors (
     id VARCHAR(20) PRIMARY KEY COMMENT '主键，使用 XID',
@@ -285,6 +296,7 @@ CREATE TABLE IF NOT EXISTS stats_blame_repo (
     total_files INT NOT NULL COMMENT '文件总数',
     created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
     updated_at BIGINT NOT NULL COMMENT '更新时间戳（毫秒）',
+    UNIQUE KEY uk_blame_repo_date_branch (repo_id, stat_date, branch),
     INDEX idx_blame_repo_date (repo_id, stat_date),
     INDEX idx_blame_stat_date (stat_date)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='仓库级归因统计表';
@@ -303,6 +315,7 @@ CREATE TABLE IF NOT EXISTS stats_blame_file (
     ai_ratio DECIMAL(5, 2) NOT NULL COMMENT 'AI 代码占比',
     created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
     updated_at BIGINT NOT NULL COMMENT '更新时间戳（毫秒）',
+    UNIQUE KEY uk_blame_file_branch_path (repo_id, stat_date, branch, file_path),
     INDEX idx_blame_file_repo (repo_id, stat_date),
     INDEX idx_blame_file_date (stat_date)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='文件级归因统计表';
@@ -321,6 +334,7 @@ CREATE TABLE IF NOT EXISTS stats_blame_repo_contributor (
     total_lines INT NOT NULL DEFAULT 0 COMMENT '总行数',
     created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
     updated_at BIGINT NOT NULL COMMENT '更新时间戳（毫秒）',
+    UNIQUE KEY uk_blame_rc_branch_contributor (repo_id, stat_date, branch, contributor_id),
     INDEX idx_blame_rc_repo (repo_id, stat_date),
     INDEX idx_blame_rc_date (stat_date)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='仓库贡献者归因统计表';
@@ -341,6 +355,7 @@ CREATE TABLE IF NOT EXISTS stats_blame_file_contributor (
     total_lines INT NOT NULL DEFAULT 0 COMMENT '总行数',
     created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
     updated_at BIGINT NOT NULL COMMENT '更新时间戳（毫秒）',
+    UNIQUE KEY uk_blame_fc_branch_contributor (file_id, stat_date, branch, contributor_id),
     INDEX idx_blame_fc_file (repo_id, stat_date, file_path),
     INDEX idx_blame_fc_date (stat_date)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='文件贡献者归因统计表';

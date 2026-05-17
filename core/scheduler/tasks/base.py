@@ -32,7 +32,7 @@ class BaseTask(ABC):
         self._check_running(job_id)
         try:
             self.scheduler_db.create_task_running(job_id, started_at)
-        except Exception as e:
+        except Exception:
             return { "success": True, "error": "任务执行中"}
         
         execution_id = self.scheduler_db.create_task_execution(job_id, started_at)

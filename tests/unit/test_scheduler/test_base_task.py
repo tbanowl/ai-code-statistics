@@ -36,7 +36,7 @@ def test_base_task_hooks_execution_order():
 
     @scheduled(cron="0 2 * * *", job_id="hook_task")
     class HookTask(BaseTask):
-        def before_execute(self) -> Dict:
+        def before_execute(self, context: Optional[Dict] = None) -> Dict:
             call_log.append("before")
             return {"context_data": True}
 
@@ -52,7 +52,10 @@ def test_base_task_hooks_execution_order():
 
     with patch("core.config.logging.Logger.get_logger", return_value=MagicMock()):
         task = HookTask(config)
-        result = task.run()
+        task.scheduler_db = MagicMock()
+        task.scheduler_db.get_running_task_execution.return_value = None
+        task.scheduler_db.create_task_execution.return_value = "exec-1"
+        result = task.run("hook_task")
 
     assert call_log == ["before", "execute", "after"]
     assert result["success"] is True
@@ -69,7 +72,10 @@ def test_base_task_run_catches_exception():
 
     with patch("core.config.logging.Logger.get_logger", return_value=mock_logger):
         task = ErrorTask(config)
-        result = task.run()
+        task.scheduler_db = MagicMock()
+        task.scheduler_db.get_running_task_execution.return_value = None
+        task.scheduler_db.create_task_execution.return_value = "exec-1"
+        result = task.run("error_task")
 
     assert result["success"] is False
     assert "Something went wrong" in result["error"]

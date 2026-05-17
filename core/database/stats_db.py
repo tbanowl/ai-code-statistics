@@ -11,6 +11,7 @@ from .models import (
     MetricsEventsCommitted,
     StatsContributor,
     StatsDailyStat,
+    StatsRepositoryBranch,
     StatsRepoContributor,
     StatsRepository,
 )
@@ -552,6 +553,31 @@ class StatsDatabase(BaseDatabase):
 
             record = StatsRepoContributor(
                 repo_id=repo_id, contributor_id=contributor_id
+            )
+            session.add(record)
+            session.flush()
+            return record.id
+
+    def ensure_repository_branch(self, repo_id: str, branch_name: str) -> str:
+        normalized_branch = (branch_name or "").strip()
+        if not normalized_branch:
+            raise ValueError("branch_name 不能为空")
+
+        with session_scope(self.engine) as session:
+            row = (
+                session.query(StatsRepositoryBranch)
+                .filter(StatsRepositoryBranch.repo_id == repo_id)
+                .filter(StatsRepositoryBranch.branch_name == normalized_branch)
+                .first()
+            )
+            if row:
+                row.updated_at = now_ts()
+                session.flush()
+                return row.id
+
+            record = StatsRepositoryBranch(
+                repo_id=repo_id,
+                branch_name=normalized_branch,
             )
             session.add(record)
             session.flush()

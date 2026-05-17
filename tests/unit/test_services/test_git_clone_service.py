@@ -1,6 +1,7 @@
 """Git Clone 服务单元测试"""
 import os
 import tempfile
+from unittest.mock import patch
 import pytest
 from core.services import GitCloneService
 
@@ -177,3 +178,32 @@ test content
                 temp_dir
             )
             assert result is False
+
+    @patch("core.services.git_clone_service.subprocess.run")
+    def test_clone_with_ssh_key_uses_depth_one(self, mock_run):
+        """测试克隆仓库使用 depth=1 浅克隆"""
+        service = GitCloneService()
+        valid_key = """-----BEGIN OPENSSH PRIVATE KEY-----
+test-key
+-----END OPENSSH PRIVATE KEY-----"""
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stderr = ""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = service.clone_with_ssh_key(
+                "ssh://git@example.com/repo.git",
+                valid_key,
+                temp_dir,
+            )
+
+        assert result is True
+        clone_cmd = mock_run.call_args.args[0]
+        assert clone_cmd == [
+            "git",
+            "clone",
+            "--depth",
+            "1",
+            "--no-single-branch",
+            "ssh://git@example.com/repo.git",
+            temp_dir,
+        ]

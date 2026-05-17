@@ -80,15 +80,22 @@ def trigger_job():
         from core.scheduler.registry import TaskRegistry
         task_class = TaskRegistry.get(job_id)
         if not task_class:
-            return jsonify({'success': False, 'error': '任务不存在'})
+            return jsonify({'success': False, 'error': '任务不存在'}), 404
 
         # 触发任务
-        scheduler.trigger_job_with_execution(job_id)
+        execution_id = scheduler.trigger_job_with_execution(job_id)
+        if execution_id is None:
+            running = scheduler.scheduler_db.get_running_task_execution(job_id)
+            if running:
+                return jsonify({'success': False, 'error': '任务正在运行'}), 409
+            return jsonify({'success': False, 'error': '触发任务失败'}), 500
+
         return jsonify({
             'success': True,
             'data': {
                 'status': 'pending',
-                'job_id': job_id
+                'job_id': job_id,
+                'execution_id': execution_id,
             }
         })
 

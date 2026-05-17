@@ -25,7 +25,7 @@ def test_get_scheduler_jobs(client):
 
 
 def test_stats_v2_daily_missing_dates(client):
-    response = client.get("/api/v2/stats/daily")
+    response = client.get("/api/stats/daily")
     assert response.status_code == 200
     data = response.get_json()
     assert data["success"] is True

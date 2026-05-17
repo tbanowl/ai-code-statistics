@@ -82,7 +82,7 @@ class DailyAggregationTask(BaseTask):
             )
 
             for key, stats in aggregated.items():
-                repo_path, author_name, author_email = key
+                repo_path, author_name, author_email, _author_uid = key
 
                 repo_id = stats_db.get_or_create_repository(repo_path)
                 contributor_id = stats_db.get_or_create_contributor(
@@ -106,7 +106,9 @@ class DailyAggregationTask(BaseTask):
         for event in committed_events:
             repo_path = event.get("repo_url", "")
             author_name = event.get("author", "")
-            key = (repo_path, author_name)
+            author_email = event.get("author_email")
+            author_uid = event.get("author_uid") or author_name
+            key = (repo_path, author_name, author_email, author_uid)
 
             if key not in aggregated:
                 aggregated[key] = {
@@ -123,6 +125,7 @@ class DailyAggregationTask(BaseTask):
             stats["ai_generated_lines_total"] += int(event.get("total_ai_additions_total", 0))
             stats["ai_generated_lines"] = int(event.get("ai_additions", 0))
             stats["ai_accepted_lines"] += int(event.get("ai_accepted_lines", 0))
+            stats["human_lines"] += int(event.get("human_additions", 0))
             # stats["commit_times"] += int(event.get("commit_times", 0))
             if event.get("git_ai_version"):
                 stats["git_ai_version"] = event.get("git_ai_version")
@@ -130,6 +133,7 @@ class DailyAggregationTask(BaseTask):
         for event in checkpoint_events:
             repo_path = event.get("repo_url", "")
             author_name = event.get("author", "")
+            author_email = event.get("author_email")
             author_uid = event.get("author_uid") or author_name
             matched = False
             for key in aggregated.keys():
@@ -151,7 +155,7 @@ class DailyAggregationTask(BaseTask):
                     matched = True
 
             if not matched:
-                key = (repo_path, author_name, None, author_uid)
+                key = (repo_path, author_name, author_email, author_uid)
                 aggregated[key] = {
                     "repo_name": StatsDatabase._extract_repo_name(repo_path),
                     "contributor_name": author_name or "unknown",
