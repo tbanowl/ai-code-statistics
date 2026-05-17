@@ -4,6 +4,7 @@ import tempfile
 import pytest
 
 import core.config.loader as loader
+from core.database.authorship_notes_db import compute_note_content_hash
 from core.database.blame_stats_db import BlameStatsDatabase
 from core.database.models import AuthorshipNotes
 
@@ -45,6 +46,8 @@ def test_get_git_notes_batch_returns_matching_notes(blame_stats_db):
                 author_name="tester",
                 author_email="tester@example.com",
                 note_content="note-a",
+                content_hash=compute_note_content_hash("note-a"),
+                change_seq=1,
             )
         )
         session.add(
@@ -57,6 +60,8 @@ def test_get_git_notes_batch_returns_matching_notes(blame_stats_db):
                 author_name="tester",
                 author_email="tester@example.com",
                 note_content="note-b",
+                content_hash=compute_note_content_hash("note-b"),
+                change_seq=2,
             )
         )
 

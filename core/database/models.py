@@ -451,6 +451,7 @@ class AuthorshipNotes(ModelBase):
         UniqueConstraint("repo_url", "commit_sha"),
         Index("idx_authorship_notes_repo_url", "repo_url"),
         Index("idx_authorship_notes_repo_commit", "repo_url", "commit_sha"),
+        Index("idx_authorship_notes_repo_change_seq", "repo_url", "change_seq"),
     )
 
     id: Mapped[str] = mapped_column(String(20), primary_key=True, default=gen_xid)
@@ -462,10 +463,21 @@ class AuthorshipNotes(ModelBase):
     author_email: Mapped[str] = mapped_column(Text, nullable=False)
     note_content: Mapped[str] = mapped_column(Text, nullable=False)
     commit_time: Mapped[int] = mapped_column(BigInteger, nullable=True, index=True)
+    content_hash: Mapped[str] = mapped_column(String(71), nullable=False)
+    change_seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
     updated_at: Mapped[int] = mapped_column(
         BigInteger, nullable=False, default=now_ts, onupdate=now_ts
     )
+
+
+class AuthorshipNotesSeq(ModelBase):
+    """单调递增序列表，用于 authorship_notes.change_seq。"""
+
+    __tablename__ = "authorship_notes_seq"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
 
 
 class CodeupMergeAuthorshipTask(ModelBase):

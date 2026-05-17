@@ -245,11 +245,20 @@ CREATE TABLE IF NOT EXISTS authorship_notes (
     author_name VARCHAR(100) NOT NULL COMMENT '作者名称',
     author_email VARCHAR(100) NOT NULL COMMENT '作者邮箱',
     note_content TEXT NOT NULL COMMENT '注释内容',
+    content_hash VARCHAR(71) NOT NULL COMMENT 'note_content 的 SHA-256 摘要',
+    change_seq BIGINT NOT NULL COMMENT '服务端单调递增变更序号',
     created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
     updated_at BIGINT NOT NULL COMMENT '更新时间戳（毫秒）',
+    UNIQUE KEY uk_authorship_notes_repo_commit (repo_url, commit_sha),
     INDEX idx_authorship_notes_repo_url (repo_url),
-    INDEX idx_authorship_notes_repo_commit (repo_url, commit_sha)
+    INDEX idx_authorship_notes_repo_commit (repo_url, commit_sha),
+    INDEX idx_authorship_notes_repo_change_seq (repo_url, change_seq)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='作者注释表';
+
+CREATE TABLE IF NOT EXISTS authorship_notes_seq (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '全局 authorship_notes change_seq',
+    created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='Authorship Notes 变更序列表';
 
 -- SSH Key 表
 CREATE TABLE IF NOT EXISTS stats_ssh_keys (

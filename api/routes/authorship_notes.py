@@ -28,6 +28,22 @@ def error_response(message, status_code=400):
     return jsonify({"ok": False, "error": message}), status_code
 
 
+def optional_non_negative_int(payload, field):
+    """解析可选的非负整数请求字段。"""
+    value = payload.get(field)
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError(field)
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(field) from exc
+    if parsed < 0:
+        raise ValueError(field)
+    return parsed
+
+
 @git_notes_rest_bp.route("", methods=["PUT"])
 @authorship_notes_rest_bp.route("", methods=["PUT"])
 @auth_required
@@ -276,12 +292,20 @@ def list_notes():
         if "repo_url" not in payload:
             return error_response("缺少必需字段: repo_url", 400)
 
-        since_commit_time = payload.get("since_commit_time")
-        commit_shas = get_notes_service().list_notes(
-            repo_url=payload["repo_url"], since_commit_time=since_commit_time
+        try:
+            since_change_seq = optional_non_negative_int(payload, "since_change_seq")
+            limit = optional_non_negative_int(payload, "limit")
+        except ValueError as exc:
+            return error_response(f"无效的整数参数: {exc}", 400)
+
+        result = get_notes_service().list_notes(
+            repo_url=payload["repo_url"],
+            since_commit_time=payload.get("since_commit_time"),
+            since_change_seq=since_change_seq,
+            limit=limit,
         )
 
-        return ok_response({"commit_shas": commit_shas})
+        return ok_response(result)
 
     except Exception as e:
         logger.error("列出仓库中所有有注释的提交 SHA 错误", exc_info=e)

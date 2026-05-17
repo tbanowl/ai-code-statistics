@@ -19,6 +19,9 @@ def test_authorship_notes_model_columns():
         "author_name",
         "author_email",
         "note_content",
+        "commit_time",
+        "content_hash",
+        "change_seq",
         "created_at",
         "updated_at",
     }
@@ -50,6 +53,9 @@ def test_authorship_notes_indexes():
 
     assert "idx_authorship_notes_repo_url" in indexes, "Missing repo_url index"
     assert "idx_authorship_notes_repo_commit" in indexes, "Missing repo_commit index"
+    assert (
+        "idx_authorship_notes_repo_change_seq" in indexes
+    ), "Missing repo_change_seq index"
 
 
 def test_authorship_notes_defaults():

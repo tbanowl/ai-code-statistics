@@ -57,9 +57,18 @@ class NotesRestService:
         """批量推送（创建/更新）notes"""
         return self.database.batch_push_notes(repo_url=repo_url, notes_data=notes_data)
 
-    def list_notes(self, repo_url: str, since_commit_time: int | None = None):
+    def list_notes(
+        self,
+        repo_url: str,
+        since_commit_time: int | None = None,
+        since_change_seq: int | None = None,
+        limit: int | None = None,
+    ):
         return self.database.list_notes(
-            repo_url=repo_url, since_commit_time=since_commit_time
+            repo_url=repo_url,
+            since_commit_time=since_commit_time,
+            since_change_seq=since_change_seq,
+            limit=limit,
         )
 
     def search_notes(self, repo_url: str, pattern: str):

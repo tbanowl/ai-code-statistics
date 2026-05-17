@@ -1,18 +1,35 @@
-"""
-Authorship Notes 数据库操作类
+"""Authorship Notes 数据库操作类。"""
 
-负责 authorship_notes 表的所有操作。
-"""
-
-from typing import Dict, List, Optional
+import hashlib
+from typing import Any, Dict, List, Optional
 from sqlalchemy import select
 
 from .base import session_scope, BaseDatabase
-from .models import AuthorshipNotes, gen_xid
+from .models import AuthorshipNotes, AuthorshipNotesSeq, gen_xid
+
+
+DEFAULT_LIST_LIMIT = 1000
+MAX_LIST_LIMIT = 5000
+
+
+def compute_note_content_hash(content: str) -> str:
+    return "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def normalize_list_limit(limit: int | None) -> int:
+    if limit is None or limit <= 0:
+        return DEFAULT_LIST_LIMIT
+    return min(limit, MAX_LIST_LIMIT)
 
 
 class AuthorshipNotesDatabase(BaseDatabase):
     """Authorship Notes 数据库操作类"""
+
+    def _next_change_seq(self, session) -> int:
+        seq = AuthorshipNotesSeq()
+        session.add(seq)
+        session.flush()
+        return seq.id
 
     def create_or_update_note(
         self,
@@ -38,6 +55,8 @@ class AuthorshipNotesDatabase(BaseDatabase):
         Returns:
             AuthorshipNotes: 创建或更新后的 note
         """
+        content_hash = compute_note_content_hash(content)
+
         with session_scope(self.engine) as session:
             stmt = select(AuthorshipNotes).where(
                 AuthorshipNotes.repo_url == repo_url,
@@ -46,14 +65,15 @@ class AuthorshipNotesDatabase(BaseDatabase):
             result = session.execute(stmt).scalar_one_or_none()
 
             if result:
-                # 更新现有记录
-                result.branch = branch
-                setattr(result, "note_blob_oid", note_blob_oid)
-                result.note_content = content
-                result.author_name = author_name
-                result.author_email = author_email
+                if result.content_hash != content_hash:
+                    result.branch = branch
+                    setattr(result, "note_blob_oid", note_blob_oid)
+                    result.note_content = content
+                    result.content_hash = content_hash
+                    result.change_seq = self._next_change_seq(session)
+                    result.author_name = author_name
+                    result.author_email = author_email
             else:
-                # 创建新记录
                 note = AuthorshipNotes(
                     id=gen_xid(),
                     repo_url=repo_url,
@@ -61,6 +81,8 @@ class AuthorshipNotesDatabase(BaseDatabase):
                     commit_sha=commit_sha,
                     note_blob_oid=note_blob_oid,
                     note_content=content,
+                    content_hash=content_hash,
+                    change_seq=self._next_change_seq(session),
                     author_name=author_name,
                     author_email=author_email,
                 )
@@ -108,7 +130,12 @@ class AuthorshipNotesDatabase(BaseDatabase):
 
             found_shas = set(note.commit_sha for note in results)
             notes = [
-                {"commit_sha": note.commit_sha, "content": note.note_content}
+                {
+                    "commit_sha": note.commit_sha,
+                    "content": note.note_content,
+                    "content_hash": note.content_hash,
+                    "change_seq": note.change_seq,
+                }
                 for note in results
             ]
             missing = [sha for sha in commit_shas if sha not in found_shas]
@@ -123,41 +150,25 @@ class AuthorshipNotesDatabase(BaseDatabase):
             notes_data: notes 列表
 
         Returns:
-            dict: {"created": int, "updated": int}
+            dict: {"created": int, "updated": int, "unchanged": int}
         """
         created = 0
         updated = 0
+        unchanged = 0
 
         with session_scope(self.engine) as session:
-            existing_stmt = select(AuthorshipNotes.commit_sha).where(
-                AuthorshipNotes.repo_url == repo_url
-            )
-            existing_shas = set(session.execute(existing_stmt).scalars().all())
-
             for note_data in notes_data:
                 commit_sha = note_data["commit_sha"]
+                content = note_data["content"]
+                content_hash = compute_note_content_hash(content)
 
-                if commit_sha in existing_shas:
-                    # 更新
-                    stmt = select(AuthorshipNotes).where(
-                        AuthorshipNotes.repo_url == repo_url,
-                        AuthorshipNotes.commit_sha == commit_sha,
-                    )
-                    note = session.execute(stmt).scalar_one()
-                    note.branch = note_data["branch"]
-                    setattr(
-                        note,
-                        "note_blob_oid",
-                        note_data.get(
-                            "original_commit_sha", note_data.get("note_blob_oid")
-                        ),
-                    )
-                    note.note_content = note_data["content"]
-                    note.author_name = note_data["author_name"]
-                    note.author_email = note_data["author_email"]
-                    note.commit_time = note_data.get("commit_time", 0)
-                    updated += 1
-                else:
+                stmt = select(AuthorshipNotes).where(
+                    AuthorshipNotes.repo_url == repo_url,
+                    AuthorshipNotes.commit_sha == commit_sha,
+                )
+                note = session.execute(stmt).scalar_one_or_none()
+
+                if note is None:
                     note = AuthorshipNotes(
                         id=gen_xid(),
                         repo_url=repo_url,
@@ -166,28 +177,78 @@ class AuthorshipNotesDatabase(BaseDatabase):
                         note_blob_oid=note_data.get(
                             "original_commit_sha", note_data.get("note_blob_oid")
                         ),
-                        note_content=note_data["content"],
+                        note_content=content,
+                        content_hash=content_hash,
+                        change_seq=self._next_change_seq(session),
                         author_name=note_data["author_name"],
                         author_email=note_data["author_email"],
                         commit_time=note_data.get("commit_time"),
                     )
                     session.add(note)
-                    existing_shas.add(commit_sha)
                     created += 1
+                    continue
 
-        return {"created": created, "updated": updated}
+                if note.content_hash == content_hash:
+                    unchanged += 1
+                    continue
+
+                note.branch = note_data["branch"]
+                setattr(
+                    note,
+                    "note_blob_oid",
+                    note_data.get("original_commit_sha", note_data.get("note_blob_oid")),
+                )
+                note.note_content = content
+                note.content_hash = content_hash
+                note.change_seq = self._next_change_seq(session)
+                note.author_name = note_data["author_name"]
+                note.author_email = note_data["author_email"]
+                note.commit_time = note_data.get("commit_time", 0)
+                updated += 1
+
+        return {"created": created, "updated": updated, "unchanged": unchanged}
 
     def list_notes(
-        self, repo_url: str, since_commit_time: int | None = None
-    ) -> List[str]:
+        self,
+        repo_url: str,
+        since_commit_time: int | None = None,
+        since_change_seq: int | None = None,
+        limit: int | None = None,
+    ) -> Dict[str, Any]:
+        page_limit = normalize_list_limit(limit)
+
         with session_scope(self.engine) as session:
-            stmt = select(AuthorshipNotes.commit_sha).where(
-                AuthorshipNotes.repo_url == repo_url
-            )
-            if since_commit_time is not None:
-                stmt = stmt.where(AuthorshipNotes.commit_time >= since_commit_time)
-            stmt = stmt.order_by(AuthorshipNotes.commit_sha)
-            return list(session.execute(stmt).scalars().all())
+            stmt = select(AuthorshipNotes).where(AuthorshipNotes.repo_url == repo_url)
+
+            if since_change_seq is not None:
+                stmt = stmt.where(AuthorshipNotes.change_seq > since_change_seq)
+                stmt = stmt.order_by(AuthorshipNotes.change_seq)
+            else:
+                if since_commit_time is not None:
+                    stmt = stmt.where(AuthorshipNotes.commit_time >= since_commit_time)
+                stmt = stmt.order_by(AuthorshipNotes.commit_sha)
+
+            rows = list(session.execute(stmt.limit(page_limit + 1)).scalars().all())
+
+        has_more = len(rows) > page_limit
+        page_rows = rows[:page_limit]
+        items = [
+            {
+                "commit_sha": note.commit_sha,
+                "content_hash": note.content_hash,
+                "change_seq": note.change_seq,
+                "updated_at": note.updated_at,
+            }
+            for note in page_rows
+        ]
+        next_change_seq = items[-1]["change_seq"] if items else since_change_seq or 0
+
+        return {
+            "commit_shas": [note.commit_sha for note in page_rows],
+            "items": items,
+            "next_change_seq": next_change_seq,
+            "has_more": has_more,
+        }
 
     def search_notes(self, repo_url: str, pattern: str) -> List[str]:
         """在注释内容中搜索

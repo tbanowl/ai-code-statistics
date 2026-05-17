@@ -283,6 +283,7 @@ class TestBatchPushNotes:
         assert data['ok'] is True
         assert data['data']['created'] == 2
         assert data['data']['updated'] == 0
+        assert data['data']['unchanged'] == 0
 
     def test_batch_push_with_updates(self, client):
         # Create one note first
@@ -329,6 +330,29 @@ class TestBatchPushNotes:
         data = json.loads(response.data)
         assert data['data']['created'] == 1
         assert data['data']['updated'] == 1
+        assert data['data']['unchanged'] == 0
+
+    def test_batch_push_reports_unchanged_for_same_content(self, client):
+        payload = {
+            "repo_url": "https://github.com/test/repo.git",
+            "notes": [
+                {
+                    "branch": "main",
+                    "commit_sha": "sha1",
+                    "original_commit_sha": None,
+                    "author_name": "User1",
+                    "author_email": "user1@test.com",
+                    "content": "content1",
+                }
+            ]
+        }
+
+        client.post('/worker/notes/push', json=payload, headers={'X-API-Key': 'test-key'})
+        response = client.post('/worker/notes/push', json=payload, headers={'X-API-Key': 'test-key'})
+
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert data['data'] == {"created": 0, "updated": 0, "unchanged": 1}
 
 
 class TestListNotes:
@@ -370,6 +394,78 @@ class TestListNotes:
         assert response.status_code == 200
         data = json.loads(response.data)
         assert data['data']['commit_shas'] == []
+
+    def test_list_notes_rejects_invalid_incremental_params(self, client):
+        response = client.post('/worker/notes/list',
+            json={
+                "repo_url": "https://github.com/test/repo.git",
+                "since_change_seq": "bad",
+                "limit": "also-bad",
+            },
+            headers={'X-API-Key': 'test-key'}
+        )
+
+        assert response.status_code == 400
+        data = json.loads(response.data)
+        assert data['ok'] is False
+        assert "since_change_seq" in data['error']
+
+    def test_list_notes_returns_incremental_summary_fields(self, client):
+        for sha, content in [("sha1", "content one"), ("sha2", "content two")]:
+            client.put('/worker/notes',
+                json={
+                    "repo_url": "https://github.com/test/repo.git",
+                    "branch": "main",
+                    "commit_sha": sha,
+                    "original_commit_sha": None,
+                    "author_name": "Test",
+                    "author_email": "test@test.com",
+                    "content": content,
+                },
+                headers={'X-API-Key': 'test-key'}
+            )
+
+        response = client.post('/worker/notes/list',
+            json={"repo_url": "https://github.com/test/repo.git", "since_change_seq": 0, "limit": 1},
+            headers={'X-API-Key': 'test-key'}
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert data['ok'] is True
+        assert len(data['data']['commit_shas']) == 1
+        assert len(data['data']['items']) == 1
+        assert data['data']['items'][0]['commit_sha'] == 'sha1'
+        assert data['data']['items'][0]['content_hash'].startswith('sha256:')
+        assert data['data']['items'][0]['change_seq'] > 0
+        assert data['data']['next_change_seq'] == data['data']['items'][0]['change_seq']
+        assert data['data']['has_more'] is True
+
+    def test_batch_get_returns_hash_and_change_seq(self, client):
+        client.put('/worker/notes',
+            json={
+                "repo_url": "https://github.com/test/repo.git",
+                "branch": "main",
+                "commit_sha": "sha1",
+                "original_commit_sha": None,
+                "author_name": "Test",
+                "author_email": "test@test.com",
+                "content": "content one",
+            },
+            headers={'X-API-Key': 'test-key'}
+        )
+
+        response = client.post('/worker/notes/batch',
+            json={"repo_url": "https://github.com/test/repo.git", "commit_shas": ["sha1"]},
+            headers={'X-API-Key': 'test-key'}
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        note = data['data']['notes'][0]
+        assert note['commit_sha'] == 'sha1'
+        assert note['content_hash'].startswith('sha256:')
+        assert note['change_seq'] > 0
 
 
 class TestSearchNotes:

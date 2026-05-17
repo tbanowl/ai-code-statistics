@@ -5,12 +5,17 @@ Tests for NotesRestService
 import pytest
 import tempfile
 import os
+import hashlib
 from sqlalchemy import create_engine
 
 import core.config.loader as loader
 import core.database.base as database_base
 from core.database.base import Base
 from core.services.notes_service import NotesRestService
+
+
+def expected_note_hash(content: str) -> str:
+    return "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 @pytest.fixture
@@ -65,6 +70,73 @@ def test_create_note(service):
     assert result.note_content == "test content"
     assert result.author_name == "Test User"
     assert result.author_email == "test@example.com"
+
+
+def test_create_note_generates_content_hash_and_change_seq(service):
+    note = service.create_or_update_note(
+        repo_url="https://github.com/test/repo.git",
+        branch="main",
+        commit_sha="sha-hash-1",
+        original_commit_sha=None,
+        content="stable content",
+        author_name="Test User",
+        author_email="test@example.com",
+    )
+
+    assert note.content_hash == expected_note_hash("stable content")
+    assert note.change_seq > 0
+
+
+def test_same_content_update_is_unchanged_and_keeps_change_seq(service):
+    first = service.create_or_update_note(
+        repo_url="https://github.com/test/repo.git",
+        branch="main",
+        commit_sha="sha-idempotent",
+        original_commit_sha=None,
+        content="same content",
+        author_name="Test User",
+        author_email="test@example.com",
+    )
+    first_seq = first.change_seq
+
+    second = service.create_or_update_note(
+        repo_url="https://github.com/test/repo.git",
+        branch="develop",
+        commit_sha="sha-idempotent",
+        original_commit_sha="different-blob",
+        content="same content",
+        author_name="Other User",
+        author_email="other@example.com",
+    )
+
+    assert second.change_seq == first_seq
+    assert second.content_hash == expected_note_hash("same content")
+
+
+def test_changed_content_advances_change_seq(service):
+    first = service.create_or_update_note(
+        repo_url="https://github.com/test/repo.git",
+        branch="main",
+        commit_sha="sha-change",
+        original_commit_sha=None,
+        content="old content",
+        author_name="Test User",
+        author_email="test@example.com",
+    )
+
+    second = service.create_or_update_note(
+        repo_url="https://github.com/test/repo.git",
+        branch="main",
+        commit_sha="sha-change",
+        original_commit_sha=None,
+        content="new content",
+        author_name="Test User",
+        author_email="test@example.com",
+    )
+
+    assert second.change_seq > first.change_seq
+    assert second.content_hash == expected_note_hash("new content")
+    assert second.note_content == "new content"
 
 
 def test_update_note(service):
@@ -179,6 +251,7 @@ def test_batch_push_notes(service):
 
     assert result["created"] == 2
     assert result["updated"] == 0
+    assert result["unchanged"] == 0
 
 
 def test_batch_push_with_updates(service):
@@ -219,6 +292,39 @@ def test_batch_push_with_updates(service):
 
     assert result["created"] == 1
     assert result["updated"] == 1
+    assert result["unchanged"] == 0
+
+
+def test_batch_push_reports_unchanged(service):
+    service.batch_push_notes(
+        repo_url="https://github.com/test/repo.git",
+        notes_data=[
+            {
+                "branch": "main",
+                "commit_sha": "sha-same",
+                "original_commit_sha": None,
+                "author_name": "User1",
+                "author_email": "user1@test.com",
+                "content": "same content",
+            }
+        ],
+    )
+
+    result = service.batch_push_notes(
+        repo_url="https://github.com/test/repo.git",
+        notes_data=[
+            {
+                "branch": "main",
+                "commit_sha": "sha-same",
+                "original_commit_sha": "different-blob",
+                "author_name": "User1",
+                "author_email": "user1@test.com",
+                "content": "same content",
+            }
+        ],
+    )
+
+    assert result == {"created": 0, "updated": 0, "unchanged": 1}
 
 
 def test_list_notes(service):
@@ -237,8 +343,44 @@ def test_list_notes(service):
 
     result = service.list_notes(repo_url="https://github.com/test/repo.git")
 
-    assert len(result) == 3
-    assert set(result) == {"sha1", "sha2", "sha3"}
+    assert len(result["commit_shas"]) == 3
+    assert set(result["commit_shas"]) == {"sha1", "sha2", "sha3"}
+    assert len(result["items"]) == 3
+    assert result["has_more"] is False
+
+
+def test_list_notes_summary_paginates_by_change_seq(service):
+    for idx, sha in enumerate(["sha1", "sha2", "sha3"], start=1):
+        service.create_or_update_note(
+            repo_url="https://github.com/test/repo.git",
+            branch="main",
+            commit_sha=sha,
+            original_commit_sha=None,
+            content=f"content {idx}",
+            author_name="Test",
+            author_email="test@test.com",
+        )
+
+    first_page = service.list_notes(
+        repo_url="https://github.com/test/repo.git",
+        since_change_seq=0,
+        limit=2,
+    )
+
+    assert first_page["commit_shas"] == ["sha1", "sha2"]
+    assert [item["commit_sha"] for item in first_page["items"]] == ["sha1", "sha2"]
+    assert first_page["items"][0]["content_hash"] == expected_note_hash("content 1")
+    assert first_page["has_more"] is True
+    assert first_page["next_change_seq"] == first_page["items"][-1]["change_seq"]
+
+    second_page = service.list_notes(
+        repo_url="https://github.com/test/repo.git",
+        since_change_seq=first_page["next_change_seq"],
+        limit=2,
+    )
+
+    assert second_page["commit_shas"] == ["sha3"]
+    assert second_page["has_more"] is False
 
 
 def test_search_notes(service):
