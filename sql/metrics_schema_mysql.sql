@@ -248,7 +248,7 @@ CREATE TABLE IF NOT EXISTS telemetry_envelope (
 -- 作者注释表
 CREATE TABLE IF NOT EXISTS authorship_notes (
     id VARCHAR(20) PRIMARY KEY COMMENT '主键，使用 XID',
-    repo_url VARCHAR(200) NOT NULL COMMENT '仓库 URL',
+    repo_url VARCHAR(400) NOT NULL COMMENT '仓库 URL',
     branch VARCHAR(100) NOT NULL COMMENT '分支名称',
     commit_sha VARCHAR(40) NOT NULL COMMENT '提交 SHA',
     commit_time BIGINT NOT NULL DEFAULT 0 COMMENT '提交时间戳（秒）',
@@ -393,7 +393,7 @@ CREATE TABLE IF NOT EXISTS task_executions (
 -- Codeup 合并 authorship 重算任务表
 CREATE TABLE IF NOT EXISTS codeup_merge_authorship_tasks (
     id VARCHAR(20) PRIMARY KEY COMMENT '主键，使用 XID',
-    repo_url TEXT NOT NULL COMMENT '仓库远程 URL',
+    repo_url VARCHAR(400) NOT NULL COMMENT '仓库远程 URL',
     project_id VARCHAR(100) COMMENT 'Codeup 项目 ID',
     merge_request_id VARCHAR(100) NOT NULL COMMENT 'Merge Request ID',
     source_branch VARCHAR(255) NOT NULL COMMENT '源分支',

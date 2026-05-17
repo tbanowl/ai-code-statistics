@@ -473,7 +473,7 @@ class AuthorshipNotes(ModelBase):
     )
 
     id: Mapped[str] = mapped_column(String(20), primary_key=True, default=gen_xid)
-    repo_url: Mapped[str] = mapped_column(Text, nullable=False)
+    repo_url: Mapped[str] = mapped_column(String, nullable=False)
     branch: Mapped[str] = mapped_column(String(40), nullable=False)
     commit_sha: Mapped[str] = mapped_column(String(40), nullable=False)
     note_blob_oid: Mapped[str] = mapped_column(String(40), nullable=True)
@@ -511,7 +511,7 @@ class CodeupMergeAuthorshipTask(ModelBase):
     )
 
     id: Mapped[str] = mapped_column(String(20), primary_key=True, default=gen_xid)
-    repo_url: Mapped[str] = mapped_column(Text, nullable=False)
+    repo_url: Mapped[str] = mapped_column(String, nullable=False)
     project_id: Mapped[Any] = mapped_column(String(100), nullable=True)
     merge_request_id: Mapped[str] = mapped_column(String(100), nullable=False)
     source_branch: Mapped[str] = mapped_column(String(255), nullable=False)
