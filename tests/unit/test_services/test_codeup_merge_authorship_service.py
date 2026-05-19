@@ -7,12 +7,33 @@ from types import SimpleNamespace
 CodeupMergeAuthorshipService = import_module(
     "core.services.codeup_merge_authorship_service"
 ).CodeupMergeAuthorshipService
+RepositoryMergeResolution = import_module(
+    "core.services.repository_merge_resolver"
+).RepositoryMergeResolution
+PolicyNoteUpsert = import_module(
+    "core.services.merge_authorship_policy"
+).PolicyNoteUpsert
+MergeAuthorshipPolicyResult = import_module(
+    "core.services.merge_authorship_policy"
+).MergeAuthorshipPolicyResult
 
 
 MERGE_SHA = "a" * 40
 SOURCE_SHA = "b" * 40
 REPO_URL = "https://codeup.aliyun.com/org/repo.git"
 OTHER_REPO_URL = "https://codeup.aliyun.com/org/other-repo.git"
+TARGET_NOTE = (
+    "app.py\n"
+    "  target_prompt 3\n"
+    "---\n"
+    '{"schema_version":"3","prompts":{"target_prompt":{}}}'
+)
+SOURCE_NOTE = (
+    "app.py\n"
+    "  source_prompt 1-2\n"
+    "---\n"
+    '{"schema_version":"3","prompts":{"source_prompt":{}}}'
+)
 
 
 def _split_note(content):
@@ -35,6 +56,8 @@ class FakeTaskDatabase:
         self.claim_calls = []
         self.successes = []
         self.failures = []
+        self.skips = []
+        self.merge_type_updates = []
 
     def claim_next_task(self, max_attempts):
         self.claim_calls.append(max_attempts)
@@ -47,6 +70,12 @@ class FakeTaskDatabase:
 
     def mark_failed(self, task_id, error):
         self.failures.append((task_id, error))
+
+    def mark_skipped(self, task_id, reason, merge_type=None):
+        self.skips.append((task_id, reason, merge_type))
+
+    def update_merge_type(self, task_id, merge_type):
+        self.merge_type_updates.append((task_id, merge_type))
 
 
 class FakeGitService:
@@ -113,6 +142,24 @@ class FakeGitService:
             "commit_time": 1715555555,
         }
 
+    def commit_parents(self, repo_path, commit_sha):
+        return ["c" * 40]
+
+
+class FakeMergeResolver:
+    def __init__(self, merge_type="squash_merge", reason="resolved"):
+        self.merge_type = merge_type
+        self.reason = reason
+        self.calls = []
+
+    def resolve(self, repo_path, merge_commit_sha, source_commit_shas):
+        self.calls.append((repo_path, merge_commit_sha, source_commit_shas))
+        return RepositoryMergeResolution(
+            merge_type=self.merge_type,
+            reason=self.reason,
+            source_commit_shas=source_commit_shas,
+        )
+
 
 class FakeNoteProvider:
     def __init__(self):
@@ -121,12 +168,8 @@ class FakeNoteProvider:
     def batch_get_note_contents(self, repo_url, commit_shas):
         self.calls.append((repo_url, commit_shas))
         return {
-            SOURCE_SHA: (
-                "app.py\n"
-                "  source_prompt 1-2\n"
-                "---\n"
-                '{"schema_version":"3","prompts":{"source_prompt":{}}}'
-            )
+            MERGE_SHA: TARGET_NOTE,
+            SOURCE_SHA: SOURCE_NOTE,
         }
 
 
@@ -139,22 +182,56 @@ class FakeNotesService:
         return {"created": len(notes_data), "updated": 0}
 
 
+class FakeMergePolicy:
+    def __init__(self, result=None):
+        self.result = result or MergeAuthorshipPolicyResult(
+            notes_to_upsert=[PolicyNoteUpsert(commit_sha=MERGE_SHA, content="policy content")]
+        )
+        self.calls = []
+
+    def apply(
+        self,
+        resolution,
+        target_note,
+        source_notes,
+        final_files,
+        output_commit_sha=None,
+    ):
+        self.calls.append(
+            {
+                "resolution": resolution,
+                "target_note": target_note,
+                "source_notes": source_notes,
+                "final_files": final_files,
+                "output_commit_sha": output_commit_sha,
+            }
+        )
+        return self.result
+
+
 def test_process_next_task_upserts_merge_and_source_notes_then_marks_success():
     task_db = FakeTaskDatabase()
     git_service = FakeGitService()
     note_provider = FakeNoteProvider()
     notes_service = FakeNotesService()
+    merge_policy = FakeMergePolicy()
     service = CodeupMergeAuthorshipService(
         task_db=task_db,
         git_service=git_service,
         note_provider=note_provider,
         notes_service=notes_service,
+        merge_resolver=FakeMergeResolver(),
+        merge_policy=merge_policy,
         config={"max_attempts": 5, "repo_path": "/repo"},
     )
 
     result = service.process_next_task()
 
-    assert result == {"success": True, "processed": 1, "summary": {"created": 2, "updated": 0}}
+    assert result == {
+        "success": True,
+        "processed": 1,
+        "summary": {"merge_type": "squash_merge", "upserted": 1, "created": 1, "updated": 0},
+    }
     assert task_db.claim_calls == [5]
     assert git_service.ensure_repo_calls == [
         (REPO_URL, Path("/repo"), "main", "feature/a", MERGE_SHA, [SOURCE_SHA], 60, 60)
@@ -162,25 +239,33 @@ def test_process_next_task_upserts_merge_and_source_notes_then_marks_success():
     assert note_provider.calls == [(REPO_URL, [MERGE_SHA, SOURCE_SHA])]
     assert git_service.changed_file_calls == [(Path("/repo"), "c" * 40, MERGE_SHA)]
     assert git_service.show_file_calls == [(Path("/repo"), MERGE_SHA, "app.py")]
-    assert git_service.metadata_calls == [(Path("/repo"), MERGE_SHA), (Path("/repo"), SOURCE_SHA)]
+    assert git_service.metadata_calls == [(Path("/repo"), MERGE_SHA)]
 
     assert len(notes_service.calls) == 1
     repo_url, notes_data = notes_service.calls[0]
     assert repo_url == REPO_URL
-    assert [note["commit_sha"] for note in notes_data] == [MERGE_SHA, SOURCE_SHA]
-    assert [note["branch"] for note in notes_data] == ["main", "feature/a"]
-    note_bodies = []
-    note_prompts = []
-    for note in notes_data:
-        body, metadata = _split_note(note["content"])
-        note_bodies.append(body)
-        note_prompts.append(metadata["prompts"])
-    assert note_bodies == ["app.py\n  source_prompt 1-2"] * 2
-    assert note_prompts == [{"source_prompt": {}}] * 2
+    assert [note["commit_sha"] for note in notes_data] == [MERGE_SHA]
+    assert [note["branch"] for note in notes_data] == ["main"]
+    assert notes_data[0]["content"] == "policy content"
     assert notes_data[0]["author_name"] == "Author a"
-    assert notes_data[1]["author_email"] == "b@example.com"
-    assert [note["commit_time"] for note in notes_data] == [1715555555, 1715555555]
-    assert task_db.successes == [("task-1", {"created": 2, "updated": 0})]
+    assert [note["commit_time"] for note in notes_data] == [1715555555]
+    assert task_db.merge_type_updates == [("task-1", "squash_merge")]
+    assert merge_policy.calls == [
+        {
+            "resolution": RepositoryMergeResolution(
+                merge_type="squash_merge",
+                reason="resolved",
+                source_commit_shas=[SOURCE_SHA],
+            ),
+            "target_note": TARGET_NOTE,
+            "source_notes": [SOURCE_NOTE],
+            "final_files": {"app.py": ["line 1", "line 2", "line 3"]},
+            "output_commit_sha": MERGE_SHA,
+        }
+    ]
+    assert task_db.successes == [
+        ("task-1", {"merge_type": "squash_merge", "upserted": 1, "created": 1, "updated": 0})
+    ]
     assert task_db.failures == []
 
 
@@ -189,11 +274,14 @@ def test_process_next_task_derives_empty_source_shas_and_upserts_notes():
     git_service = FakeGitService(derived_shas=[SOURCE_SHA])
     note_provider = FakeNoteProvider()
     notes_service = FakeNotesService()
+    merge_policy = FakeMergePolicy()
     service = CodeupMergeAuthorshipService(
         task_db=task_db,
         git_service=git_service,
         note_provider=note_provider,
         notes_service=notes_service,
+        merge_resolver=FakeMergeResolver(),
+        merge_policy=merge_policy,
         config={
             "repo_path": "/repo",
             "clone_timeout_seconds": 11,
@@ -203,7 +291,11 @@ def test_process_next_task_derives_empty_source_shas_and_upserts_notes():
 
     result = service.process_next_task()
 
-    assert result == {"success": True, "processed": 1, "summary": {"created": 2, "updated": 0}}
+    assert result == {
+        "success": True,
+        "processed": 1,
+        "summary": {"merge_type": "squash_merge", "upserted": 1, "created": 1, "updated": 0},
+    }
     assert git_service.ensure_repo_calls == [
         (REPO_URL, Path("/repo"), "main", "feature/a", MERGE_SHA, [], 11, 22)
     ]
@@ -211,8 +303,11 @@ def test_process_next_task_derives_empty_source_shas_and_upserts_notes():
     assert git_service.rev_list_calls == [(Path("/repo"), "c" * 40 + "..feature/a")]
     assert git_service.changed_file_calls == [(Path("/repo"), "c" * 40, MERGE_SHA)]
     assert note_provider.calls == [(REPO_URL, [MERGE_SHA, SOURCE_SHA])]
-    assert [note["commit_sha"] for note in notes_service.calls[0][1]] == [MERGE_SHA, SOURCE_SHA]
-    assert task_db.successes == [("task-1", {"created": 2, "updated": 0})]
+    assert [note["commit_sha"] for note in notes_service.calls[0][1]] == [MERGE_SHA]
+    assert task_db.merge_type_updates == [("task-1", "squash_merge")]
+    assert task_db.successes == [
+        ("task-1", {"merge_type": "squash_merge", "upserted": 1, "created": 1, "updated": 0})
+    ]
     assert task_db.failures == []
 
 
@@ -224,6 +319,8 @@ def test_process_next_task_fails_empty_source_shas_when_derivation_returns_no_co
         git_service=FakeGitService(derived_shas=[]),
         note_provider=FakeNoteProvider(),
         notes_service=notes_service,
+        merge_resolver=FakeMergeResolver(),
+        merge_policy=FakeMergePolicy(),
         config={"repo_path": "/repo"},
     )
 
@@ -247,6 +344,8 @@ def test_process_next_task_marks_failed_when_git_service_raises_without_upsert()
         git_service=FakeGitService(fail_on_changed_files=True),
         note_provider=FakeNoteProvider(),
         notes_service=notes_service,
+        merge_resolver=FakeMergeResolver(),
+        merge_policy=FakeMergePolicy(),
         config={"repo_path": "/repo"},
     )
 
@@ -255,6 +354,70 @@ def test_process_next_task_marks_failed_when_git_service_raises_without_upsert()
     assert result == {"success": False, "processed": 1, "error": "invalid git revision"}
     assert task_db.successes == []
     assert task_db.failures == [("task-1", "invalid git revision")]
+    assert notes_service.calls == []
+
+
+def test_process_next_task_standard_merge_marks_success_without_upserting_notes():
+    task_db = FakeTaskDatabase()
+    notes_service = FakeNotesService()
+    merge_policy = FakeMergePolicy(MergeAuthorshipPolicyResult(notes_to_upsert=[]))
+    service = CodeupMergeAuthorshipService(
+        task_db=task_db,
+        git_service=FakeGitService(),
+        note_provider=FakeNoteProvider(),
+        notes_service=notes_service,
+        merge_resolver=FakeMergeResolver(merge_type="standard_merge"),
+        merge_policy=merge_policy,
+        config={"repo_path": "/repo"},
+    )
+
+    result = service.process_next_task()
+
+    assert result == {
+        "success": True,
+        "processed": 1,
+        "summary": {"merge_type": "standard_merge", "upserted": 0},
+    }
+    assert task_db.merge_type_updates == [("task-1", "standard_merge")]
+    assert task_db.successes == [
+        ("task-1", {"merge_type": "standard_merge", "upserted": 0})
+    ]
+    assert task_db.skips == []
+    assert notes_service.calls == []
+
+
+def test_process_next_task_fast_forward_marks_skipped_without_upserting_notes():
+    task_db = FakeTaskDatabase()
+    notes_service = FakeNotesService()
+    merge_policy = FakeMergePolicy(
+        MergeAuthorshipPolicyResult(
+            notes_to_upsert=[],
+            skipped_reason="fast_forward_no_merge_authorship_rewrite",
+        )
+    )
+    service = CodeupMergeAuthorshipService(
+        task_db=task_db,
+        git_service=FakeGitService(),
+        note_provider=FakeNoteProvider(),
+        notes_service=notes_service,
+        merge_resolver=FakeMergeResolver(merge_type="fast_forward"),
+        merge_policy=merge_policy,
+        config={"repo_path": "/repo"},
+    )
+
+    result = service.process_next_task()
+
+    assert result == {
+        "success": True,
+        "processed": 1,
+        "skipped": True,
+        "reason": "fast_forward_no_merge_authorship_rewrite",
+    }
+    assert task_db.merge_type_updates == [("task-1", "fast_forward")]
+    assert task_db.skips == [
+        ("task-1", "fast_forward_no_merge_authorship_rewrite", "fast_forward")
+    ]
+    assert task_db.successes == []
     assert notes_service.calls == []
 
 
@@ -281,6 +444,7 @@ def test_process_next_task_passes_cache_child_path_to_ensure_repo():
         git_service=git_service,
         note_provider=FakeNoteProvider(),
         notes_service=FakeNotesService(),
+        merge_policy=FakeMergePolicy(),
         config={"repo_cache_dir": "/cache/codeup_repos"},
     )
 
