@@ -110,6 +110,26 @@ def test_codeup_merge_authorship_task_counts_failures():
     assert task.execute() == {"success": False, "processed": 1, "failed": 1}
 
 
+def test_codeup_merge_authorship_task_counts_skipped_results_separately():
+    module = importlib.import_module(
+        "core.scheduler.tasks.codeup_merge_authorship_task"
+    )
+    service = FakeService(
+        [
+            {"success": True, "processed": 1, "skipped": True},
+            {"success": True, "processed": 1},
+            {"success": True, "processed": 0},
+        ]
+    )
+
+    task = module.CodeupMergeAuthorshipTask(
+        _config(job_config={"enabled": True, "batch_size": 10}),
+        service_factory=lambda codeup_config: service,
+    )
+
+    assert task.execute() == {"success": True, "processed": 2, "failed": 0, "skipped": 1}
+
+
 def test_codeup_merge_authorship_task_defaults_invalid_batch_size_to_one():
     module = importlib.import_module(
         "core.scheduler.tasks.codeup_merge_authorship_task"

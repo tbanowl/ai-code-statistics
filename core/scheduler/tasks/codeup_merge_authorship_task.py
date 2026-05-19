@@ -36,6 +36,7 @@ class CodeupMergeAuthorshipTask(BaseTask):
         service = self._create_service(codeup_config)
         total_processed = 0
         failures = 0
+        skipped = 0
 
         for _ in range(batch_size):
             result = service.process_next_task()
@@ -45,6 +46,8 @@ class CodeupMergeAuthorshipTask(BaseTask):
                 break
 
             total_processed += processed
+            if result.get("skipped"):
+                skipped += processed
             if not result.get("success"):
                 failures += 1
                 self.logger.error(
@@ -56,10 +59,13 @@ class CodeupMergeAuthorshipTask(BaseTask):
             "processed": total_processed,
             "failed": failures,
         }
+        if skipped:
+            summary["skipped"] = skipped
         self.logger.info(
-            "Codeup Merge AI归属重算完成: processed=%s, failed=%s",
+            "Codeup Merge AI归属重算完成: processed=%s, failed=%s, skipped=%s",
             total_processed,
             failures,
+            skipped,
         )
         return summary
 
