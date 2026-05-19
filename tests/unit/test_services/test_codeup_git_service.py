@@ -264,3 +264,53 @@ def test_commit_metadata_wraps_malformed_output(stdout):
 
     with pytest.raises(CodeupGitError, match="Malformed commit metadata"):
         service.commit_metadata(Path("/repo"), "a" * 7)
+
+
+def test_commit_parents_parses_show_format_p_output():
+    sha = "a" * 40
+    parent1 = "b" * 40
+    parent2 = "c" * 40
+    runner = FakeRunner(
+        {("git", "show", "-s", "--format=%P", sha): f"{parent1} {parent2}\n"}
+    )
+    service = CodeupGitService(runner=runner)
+
+    result = service.commit_parents(Path("/repo"), sha)
+
+    assert result == [parent1, parent2]
+    assert runner.calls == [
+        (["git", "show", "-s", "--format=%P", sha], Path("/repo"), 60)
+    ]
+
+
+def test_commit_parents_returns_single_parent_for_ordinary_commit():
+    sha = "a" * 40
+    parent = "b" * 40
+    runner = FakeRunner(
+        {("git", "show", "-s", "--format=%P", sha): f"{parent}\n"}
+    )
+    service = CodeupGitService(runner=runner)
+
+    result = service.commit_parents(Path("/repo"), sha)
+
+    assert result == [parent]
+
+
+def test_commit_parents_returns_empty_for_root_commit():
+    sha = "a" * 40
+    runner = FakeRunner(
+        {("git", "show", "-s", "--format=%P", sha): "\n"}
+    )
+    service = CodeupGitService(runner=runner)
+
+    result = service.commit_parents(Path("/repo"), sha)
+
+    assert result == []
+
+
+@pytest.mark.parametrize("commit_sha", ["", "abc", "g" * 7, "-abc1234"])
+def test_commit_parents_rejects_invalid_sha(commit_sha):
+    service = CodeupGitService(runner=FakeRunner({}))
+
+    with pytest.raises(CodeupGitError, match="commit_sha"):
+        service.commit_parents(Path("/repo"), commit_sha)

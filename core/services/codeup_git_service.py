@@ -85,6 +85,14 @@ class CodeupGitService:
         )
         return stdout.splitlines()
 
+    def commit_parents(self, repo_path: Path, commit_sha: str) -> list[str]:
+        self._validate_commit_sha(commit_sha)
+        output = self._run(
+            ["git", "show", "-s", "--format=%P", commit_sha],
+            repo_path,
+        )
+        return [parent for parent in output.strip().split() if parent]
+
     def commit_metadata(self, repo_path: Path, commit_sha: str) -> dict[str, object]:
         self._validate_commit_sha(commit_sha)
         stdout = self._run(
