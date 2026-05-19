@@ -51,25 +51,46 @@ def test_merge_webhook_enqueues_merged_payload(client):
     assert data["data"]["task_id"]
 
 
-def test_merge_webhook_skips_opened_payload(client):
+def test_merge_webhook_skips_open_payload(client):
     payload = _merged_payload()
-    payload["object_attributes"]["state"] = "opened"
+    payload["object_attributes"]["state"] = "open"
 
     response = client.post("/webhook/codeup/merge", json=payload)
 
     assert response.status_code == 200
     data = response.get_json()
     assert data["success"] is True
-    assert data["data"] == {"success": True, "skipped": True, "reason": "not_merged"}
+    assert data["data"]["skipped"] is True
+    assert data["data"]["reason"] == "not_merge_completion"
+    assert data["data"]["event_kind"] == "mr_update"
 
 
-def test_merge_webhook_rejects_missing_merge_commit_sha(client):
+def test_merge_webhook_skips_missing_merge_commit_sha(client):
     payload = _merged_payload()
     del payload["object_attributes"]["merge_commit_sha"]
+
+    response = client.post("/webhook/codeup/merge", json=payload)
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["success"] is True
+    assert data["data"]["skipped"] is True
+    assert data["data"]["event_kind"] == "mr_update"
+
+
+def test_merge_webhook_rejects_invalid_payload(client):
+    payload = {
+        "object_attributes": {
+            "state": "merged",
+            "source_branch": "feature/a",
+            "target_branch": "main",
+            "merge_commit_sha": "a" * 40,
+        },
+    }
 
     response = client.post("/webhook/codeup/merge", json=payload)
 
     assert response.status_code == 400
     data = response.get_json()
     assert data["success"] is False
-    assert "merge_commit_sha" in data["error"]
+    assert "missing_required_identity" in data["error"]
