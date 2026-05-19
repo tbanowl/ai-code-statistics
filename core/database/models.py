@@ -19,6 +19,7 @@ from sqlalchemy import (
     Index,
     UniqueConstraint,
 )
+from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import Mapped, mapped_column
 from .base import Base
 
@@ -508,6 +509,8 @@ class CodeupMergeAuthorshipTask(ModelBase):
         Index("idx_codeup_merge_authorship_status_attempts", "status", "attempts"),
         Index("idx_codeup_merge_authorship_repo_url", "repo_url"),
         Index("idx_codeup_merge_authorship_commit", "merge_commit_sha"),
+        Index("idx_codeup_merge_authorship_event_kind", "event_kind"),
+        Index("idx_codeup_merge_authorship_merge_type", "merge_type"),
     )
 
     id: Mapped[str] = mapped_column(String(20), primary_key=True, default=gen_xid)
@@ -519,6 +522,13 @@ class CodeupMergeAuthorshipTask(ModelBase):
     merge_commit_sha: Mapped[str] = mapped_column(String(40), nullable=False)
     source_commit_shas: Mapped[str] = mapped_column(Text, nullable=False)
     payload: Mapped[str] = mapped_column(Text, nullable=False)
+    event_kind: Mapped[Any] = mapped_column(String(64), nullable=True)
+    payload_version_hint: Mapped[Any] = mapped_column(String(32), nullable=True)
+    normalized_payload: Mapped[Any] = mapped_column(
+        LONGTEXT().with_variant(Text(), "sqlite"), nullable=True
+    )
+    merge_type: Mapped[Any] = mapped_column(String(64), nullable=True)
+    skipped_reason: Mapped[Any] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_error: Mapped[Any] = mapped_column(Text, nullable=True)

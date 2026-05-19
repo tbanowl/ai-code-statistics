@@ -27,12 +27,22 @@ class CodeupMergeAuthorshipDatabase(BaseDatabase):
         merge_commit_sha: str,
         source_commit_shas: list[str],
         payload: dict[str, Any],
+        event_kind: str | None = None,
+        payload_version_hint: str | None = None,
+        normalized_payload: dict[str, Any] | None = None,
+        merge_type: str | None = None,
+        skipped_reason: str | None = None,
     ) -> tuple[CodeupMergeAuthorshipTask, bool]:
         """创建或幂等更新 Codeup 合并重算任务。"""
         source_commit_shas_json = json.dumps(
             source_commit_shas, ensure_ascii=False, sort_keys=True
         )
         payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        normalized_payload_json = (
+            json.dumps(normalized_payload, ensure_ascii=False, sort_keys=True)
+            if normalized_payload is not None
+            else None
+        )
 
         with session_scope(self.engine) as session:
             stmt = select(CodeupMergeAuthorshipTask).where(
@@ -50,6 +60,11 @@ class CodeupMergeAuthorshipDatabase(BaseDatabase):
                     target_branch=target_branch,
                     source_commit_shas_json=source_commit_shas_json,
                     payload_json=payload_json,
+                    event_kind=event_kind,
+                    payload_version_hint=payload_version_hint,
+                    normalized_payload_json=normalized_payload_json,
+                    merge_type=merge_type,
+                    skipped_reason=skipped_reason,
                 )
                 return session.execute(stmt).scalar_one(), False
 
@@ -63,6 +78,11 @@ class CodeupMergeAuthorshipDatabase(BaseDatabase):
                 merge_commit_sha=merge_commit_sha,
                 source_commit_shas_json=source_commit_shas_json,
                 payload_json=payload_json,
+                event_kind=event_kind,
+                payload_version_hint=payload_version_hint,
+                normalized_payload_json=normalized_payload_json,
+                merge_type=merge_type,
+                skipped_reason=skipped_reason,
             ), True
         except IntegrityError:
             return self._update_existing_task_after_duplicate_insert(
@@ -74,6 +94,11 @@ class CodeupMergeAuthorshipDatabase(BaseDatabase):
                 merge_commit_sha=merge_commit_sha,
                 source_commit_shas_json=source_commit_shas_json,
                 payload_json=payload_json,
+                event_kind=event_kind,
+                payload_version_hint=payload_version_hint,
+                normalized_payload_json=normalized_payload_json,
+                merge_type=merge_type,
+                skipped_reason=skipped_reason,
             ), False
 
     def _insert_new_task(
@@ -86,6 +111,11 @@ class CodeupMergeAuthorshipDatabase(BaseDatabase):
         merge_commit_sha: str,
         source_commit_shas_json: str,
         payload_json: str,
+        event_kind: str | None = None,
+        payload_version_hint: str | None = None,
+        normalized_payload_json: str | None = None,
+        merge_type: str | None = None,
+        skipped_reason: str | None = None,
     ) -> CodeupMergeAuthorshipTask:
         with session_scope(self.engine) as session:
             stmt = select(CodeupMergeAuthorshipTask).where(
@@ -103,6 +133,11 @@ class CodeupMergeAuthorshipDatabase(BaseDatabase):
                 merge_commit_sha=merge_commit_sha,
                 source_commit_shas=source_commit_shas_json,
                 payload=payload_json,
+                event_kind=event_kind,
+                payload_version_hint=payload_version_hint,
+                normalized_payload=normalized_payload_json,
+                merge_type=merge_type,
+                skipped_reason=skipped_reason,
                 status="pending",
                 attempts=0,
             )
@@ -118,12 +153,24 @@ class CodeupMergeAuthorshipDatabase(BaseDatabase):
         target_branch: str,
         source_commit_shas_json: str,
         payload_json: str,
+        event_kind: str | None = None,
+        payload_version_hint: str | None = None,
+        normalized_payload_json: str | None = None,
+        merge_type: str | None = None,
+        skipped_reason: str | None = None,
     ) -> None:
         task.project_id = project_id
         task.source_branch = source_branch
         task.target_branch = target_branch
         task.source_commit_shas = source_commit_shas_json
         task.payload = payload_json
+        task.event_kind = event_kind
+        task.payload_version_hint = payload_version_hint
+        task.normalized_payload = normalized_payload_json
+        if merge_type is not None:
+            task.merge_type = merge_type
+        if skipped_reason is not None:
+            task.skipped_reason = skipped_reason
         if task.status in {"pending", "failed"}:
             task.status = "pending"
             task.attempts = 0
@@ -139,6 +186,11 @@ class CodeupMergeAuthorshipDatabase(BaseDatabase):
         merge_commit_sha: str,
         source_commit_shas_json: str,
         payload_json: str,
+        event_kind: str | None = None,
+        payload_version_hint: str | None = None,
+        normalized_payload_json: str | None = None,
+        merge_type: str | None = None,
+        skipped_reason: str | None = None,
     ) -> CodeupMergeAuthorshipTask:
         with session_scope(self.engine) as session:
             stmt = select(CodeupMergeAuthorshipTask).where(
@@ -154,6 +206,11 @@ class CodeupMergeAuthorshipDatabase(BaseDatabase):
                 target_branch=target_branch,
                 source_commit_shas_json=source_commit_shas_json,
                 payload_json=payload_json,
+                event_kind=event_kind,
+                payload_version_hint=payload_version_hint,
+                normalized_payload_json=normalized_payload_json,
+                merge_type=merge_type,
+                skipped_reason=skipped_reason,
             )
             session.flush()
             return session.execute(stmt).scalar_one()
@@ -236,3 +293,35 @@ class CodeupMergeAuthorshipDatabase(BaseDatabase):
 
             task.status = "failed"
             task.last_error = error
+
+    def mark_skipped(
+        self,
+        task_id: str,
+        reason: str,
+        merge_type: str | None = None,
+    ) -> None:
+        with session_scope(self.engine) as session:
+            task = session.execute(
+                select(CodeupMergeAuthorshipTask).where(
+                    CodeupMergeAuthorshipTask.id == task_id
+                )
+            ).scalar_one_or_none()
+            if task is None:
+                return
+
+            task.status = "skipped"
+            task.skipped_reason = reason
+            if merge_type is not None:
+                task.merge_type = merge_type
+
+    def update_merge_type(self, task_id: str, merge_type: str) -> None:
+        with session_scope(self.engine) as session:
+            task = session.execute(
+                select(CodeupMergeAuthorshipTask).where(
+                    CodeupMergeAuthorshipTask.id == task_id
+                )
+            ).scalar_one_or_none()
+            if task is None:
+                return
+
+            task.merge_type = merge_type

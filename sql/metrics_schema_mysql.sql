@@ -401,6 +401,11 @@ CREATE TABLE IF NOT EXISTS codeup_merge_authorship_tasks (
     merge_commit_sha VARCHAR(40) NOT NULL COMMENT '合并提交 SHA',
     source_commit_shas TEXT NOT NULL COMMENT '源提交 SHA 列表 JSON',
     payload TEXT NOT NULL COMMENT '原始 webhook payload JSON',
+    event_kind VARCHAR(64) COMMENT '事件类型标识',
+    payload_version_hint VARCHAR(32) COMMENT 'payload 版本提示',
+    normalized_payload LONGTEXT COMMENT '标准化后的 payload JSON',
+    merge_type VARCHAR(64) COMMENT '合并类型: squash, normal, merge-commit 等',
+    skipped_reason VARCHAR(255) COMMENT '跳过处理的原因',
     status VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT '任务状态',
     attempts INT NOT NULL DEFAULT 0 COMMENT '尝试次数',
     last_error TEXT COMMENT '最后错误信息',
@@ -410,7 +415,9 @@ CREATE TABLE IF NOT EXISTS codeup_merge_authorship_tasks (
     UNIQUE KEY uk_codeup_merge_authorship_task (repo_url(400), merge_request_id, merge_commit_sha),
     INDEX idx_codeup_merge_authorship_status_attempts (status, attempts),
     INDEX idx_codeup_merge_authorship_repo_url (repo_url(400)),
-    INDEX idx_codeup_merge_authorship_commit (merge_commit_sha)
+    INDEX idx_codeup_merge_authorship_commit (merge_commit_sha),
+    INDEX idx_codeup_merge_authorship_event_kind (event_kind),
+    INDEX idx_codeup_merge_authorship_merge_type (merge_type)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='Codeup 合并 authorship 重算任务表';
 
 -- 系统管理表

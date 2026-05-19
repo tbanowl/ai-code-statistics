@@ -3,8 +3,10 @@ import json
 import core.config.loader as loader
 import core.database.base as database_base
 from core.database.base import Base
+from core.database.models import CodeupMergeAuthorshipTask
 from core.database.codeup_merge_authorship_db import CodeupMergeAuthorshipDatabase
 from sqlalchemy import create_engine
+from sqlalchemy.dialects import mysql
 
 
 def setup_function():
@@ -27,7 +29,26 @@ def _create_with_project_id(db, project_id):
         merge_commit_sha="a" * 40,
         source_commit_shas=["b" * 40, "c" * 40],
         payload={"object_attributes": {"iid": 42}},
+        event_kind="merge_request",
+        payload_version_hint="v1",
+        normalized_payload={"title": "PR title", "action": "merge"},
+        merge_type="squash",
     )
+
+
+def _create_minimal(db, **overrides):
+    defaults = dict(
+        repo_url="https://codeup.aliyun.com/org/repo.git",
+        project_id="1001",
+        merge_request_id="99",
+        source_branch="feature/min",
+        target_branch="main",
+        merge_commit_sha="d" * 40,
+        source_commit_shas=["e" * 40],
+        payload={"object_attributes": {"iid": 99}},
+    )
+    defaults.update(overrides)
+    return db.create_or_update_task(**defaults)
 
 
 def test_create_or_update_task_creates_pending_task():
@@ -139,3 +160,126 @@ def test_mark_success_and_failure_updates_status_fields():
     assert successful_task.status == "success"
     assert successful_task.result_summary is not None
     assert json.loads(successful_task.result_summary) == {"created": 1, "updated": 2}
+
+
+def test_create_or_update_task_persists_new_fields():
+    db = CodeupMergeAuthorshipDatabase()
+    task, created = _create(db)
+    assert created is True
+    assert task.event_kind == "merge_request"
+    assert task.payload_version_hint == "v1"
+    assert json.loads(task.normalized_payload) == {"title": "PR title", "action": "merge"}
+    assert task.merge_type == "squash"
+    assert task.skipped_reason is None
+
+
+def test_normalized_payload_uses_mysql_longtext_for_large_normalized_events():
+    column_type = CodeupMergeAuthorshipTask.__table__.c.normalized_payload.type
+
+    assert column_type.compile(dialect=mysql.dialect()) == "LONGTEXT"
+
+
+def test_create_or_update_task_persists_skipped_reason_on_insert():
+    db = CodeupMergeAuthorshipDatabase()
+    task, created = db.create_or_update_task(
+        repo_url="https://codeup.aliyun.com/org/repo.git",
+        project_id="1001",
+        merge_request_id="55",
+        source_branch="feature/x",
+        target_branch="main",
+        merge_commit_sha="f" * 40,
+        source_commit_shas=["g" * 40],
+        payload={"object_attributes": {"iid": 55}},
+        skipped_reason="target branch excluded",
+    )
+    assert created is True
+    assert task.skipped_reason == "target branch excluded"
+    assert task.status == "pending"
+
+
+def test_create_or_update_task_skipped_reason_preserved_on_duplicate_update():
+    db = CodeupMergeAuthorshipDatabase()
+    first, _ = db.create_or_update_task(
+        repo_url="https://codeup.aliyun.com/org/repo.git",
+        project_id="1001",
+        merge_request_id="77",
+        source_branch="feature/y",
+        target_branch="main",
+        merge_commit_sha="h" * 40,
+        source_commit_shas=["i" * 40],
+        payload={"object_attributes": {"iid": 77}},
+        skipped_reason="branch policy",
+    )
+    assert first.skipped_reason == "branch policy"
+    second, second_created = db.create_or_update_task(
+        repo_url="https://codeup.aliyun.com/org/repo.git",
+        project_id="1001",
+        merge_request_id="77",
+        source_branch="feature/y",
+        target_branch="main",
+        merge_commit_sha="h" * 40,
+        source_commit_shas=["i" * 40],
+        payload={"object_attributes": {"iid": 77}},
+        skipped_reason="branch policy",
+    )
+    assert second_created is False
+    assert second.skipped_reason == "branch policy"
+
+
+def test_create_or_update_task_without_optional_new_fields():
+    db = CodeupMergeAuthorshipDatabase()
+    task, created = _create_minimal(db)
+    assert created is True
+    assert task.event_kind is None
+    assert task.payload_version_hint is None
+    assert task.normalized_payload is None
+    assert task.merge_type is None
+    assert task.skipped_reason is None
+
+
+def test_mark_skipped_sets_status_and_reason():
+    db = CodeupMergeAuthorshipDatabase()
+    task, _ = _create(db)
+    db.mark_skipped(task.id, reason="target branch excluded by policy")
+    refreshed = db.get_task(task.id)
+    assert refreshed is not None
+    assert refreshed.status == "skipped"
+    assert refreshed.skipped_reason == "target branch excluded by policy"
+
+
+def test_mark_skipped_with_merge_type():
+    db = CodeupMergeAuthorshipDatabase()
+    task, _ = _create_minimal(db)
+    db.mark_skipped(task.id, reason="not a squash merge", merge_type="normal")
+    refreshed = db.get_task(task.id)
+    assert refreshed is not None
+    assert refreshed.status == "skipped"
+    assert refreshed.skipped_reason == "not a squash merge"
+    assert refreshed.merge_type == "normal"
+
+
+def test_update_merge_type():
+    db = CodeupMergeAuthorshipDatabase()
+    task, _ = _create_minimal(db)
+    assert task.merge_type is None
+    db.update_merge_type(task.id, merge_type="squash")
+    refreshed = db.get_task(task.id)
+    assert refreshed is not None
+    assert refreshed.merge_type == "squash"
+    db.update_merge_type(task.id, merge_type="normal")
+    refreshed2 = db.get_task(task.id)
+    assert refreshed2 is not None
+    assert refreshed2.merge_type == "normal"
+
+
+def test_duplicate_update_preserves_new_fields():
+    db = CodeupMergeAuthorshipDatabase()
+    first, _ = _create(db)
+    assert first.merge_type == "squash"
+    assert first.event_kind == "merge_request"
+    _, second_created = _create(db)
+    assert second_created is False
+    refreshed = db.get_task(first.id)
+    assert refreshed is not None
+    assert refreshed.merge_type == "squash"
+    assert refreshed.event_kind == "merge_request"
