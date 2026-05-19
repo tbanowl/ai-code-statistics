@@ -30,6 +30,7 @@ def handle_merge_webhook():
         if not payload:
             return error_response("请求体不能为空", 400)
 
+        logger.info(f"收到 Codeup 合并 webhook 请求: {payload}")
         result = get_codeup_webhook_service().enqueue_merge_event(payload)
         return success_response(result)
 

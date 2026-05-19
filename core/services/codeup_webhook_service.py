@@ -89,6 +89,7 @@ class CodeupWebhookService:
         return self._string_required(
             object_attributes.get("iid")
             or object_attributes.get("id")
+            or object_attributes.get("biz_id")
             or payload.get("merge_request_id"),
             "merge_request_id",
         )
