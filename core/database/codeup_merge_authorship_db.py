@@ -294,6 +294,21 @@ class CodeupMergeAuthorshipDatabase(BaseDatabase):
             task.status = "failed"
             task.last_error = error
 
+    def release_for_retry(self, task_id: str, reason: str) -> None:
+        """Release a claimed task back to pending without consuming an attempt."""
+        with session_scope(self.engine) as session:
+            task = session.execute(
+                select(CodeupMergeAuthorshipTask).where(
+                    CodeupMergeAuthorshipTask.id == task_id
+                )
+            ).scalar_one_or_none()
+            if task is None:
+                return
+
+            task.status = "pending"
+            task.attempts = max(int(task.attempts or 0) - 1, 0)
+            task.last_error = reason
+
     def mark_skipped(
         self,
         task_id: str,
