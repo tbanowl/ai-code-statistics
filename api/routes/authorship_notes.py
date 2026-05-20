@@ -1,5 +1,3 @@
-import os
-
 from flask import Blueprint, request, jsonify
 from core.config.logging import Logger
 from core.middleware.auth import auth_required
@@ -11,7 +9,7 @@ authorship_notes_rest_bp = Blueprint(
 )
 logger = Logger.get_logger("api.notes")
 
-service = NotesRestService(db_url=os.environ.get("DB_URL"))
+service = NotesRestService()
 
 
 def get_notes_service() -> NotesRestService:

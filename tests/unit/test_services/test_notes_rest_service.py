@@ -18,6 +18,42 @@ def expected_note_hash(content: str) -> str:
     return "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
+def test_initialization_reads_db_url_from_loader_config(temp_db):
+    """Notes DB initialization must read database URL from loader config."""
+    previous_config_data = loader.config_data
+    previous_global_engine = database_base.global_engine
+    sqlite_engine = create_engine(temp_db, echo=False)
+    full_config = {
+        "database": {"url": temp_db, "echo": False},
+        "scheduler": {"enabled": True},
+        "git_ai": {"api_key": "test-key"},
+        "web": {"debug": True},
+    }
+
+    loader.config_data = full_config
+    Base.metadata.create_all(sqlite_engine)
+
+    try:
+        service = NotesRestService()
+        service.create_or_update_note(
+            repo_url="https://github.com/test/repo.git",
+            branch="main",
+            commit_sha="config-db-url",
+            original_commit_sha=None,
+            content="from loader config",
+            author_name="Test User",
+            author_email="test@example.com",
+        )
+        assert loader.config_data is full_config
+        assert loader.config_data["scheduler"] == {"enabled": True}
+        assert loader.config_data["git_ai"] == {"api_key": "test-key"}
+        service.close()
+    finally:
+        sqlite_engine.dispose()
+        loader.config_data = previous_config_data
+        database_base.global_engine = previous_global_engine
+
+
 @pytest.fixture
 def temp_db():
     """Create temporary database for testing"""

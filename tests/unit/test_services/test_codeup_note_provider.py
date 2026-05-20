@@ -1,4 +1,6 @@
+import os
 import pytest
+import tempfile
 from sqlalchemy import create_engine
 
 import core.config.loader as loader
@@ -11,9 +13,12 @@ from core.services.notes_service import NotesRestService
 def isolated_notes_database():
     original_config_data = loader.config_data
     original_engine = database_base.global_engine
-    test_engine = create_engine("sqlite:///:memory:", echo=False)
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    test_db_url = f"sqlite:///{path}"
+    test_engine = create_engine(test_db_url, echo=False)
 
-    loader.config_data = {"database": {"url": "sqlite:///:memory:", "echo": False}}
+    loader.config_data = {"database": {"url": test_db_url, "echo": False}}
     database_base.global_engine = test_engine
     Base.metadata.create_all(test_engine)
 
@@ -23,6 +28,10 @@ def isolated_notes_database():
         test_engine.dispose()
         database_base.global_engine = original_engine
         loader.config_data = original_config_data
+        try:
+            os.unlink(path)
+        except (PermissionError, OSError):
+            pass
 
 
 def test_batch_get_note_contents_returns_existing_db_notes_only():

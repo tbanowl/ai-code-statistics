@@ -7,17 +7,6 @@ from flask import Flask, send_from_directory
 import os
 import sys
 from core.config.loader import load_config_by_path
-from core.config.logging import init_logging, setup_flask_logging, Logger
-from api.routes.stats import stats_bp
-from api.routes.stats_repo import stats_repo_bp
-from api.routes.scheduler import scheduler_bp
-from api.routes.git_ai import git_ai_bp
-from api.routes.git_ai_worker import metrics_bp, cas_bp, oauth_bp, releases_bp
-from api.routes.authorship_notes import git_notes_rest_bp, authorship_notes_rest_bp
-from api.routes.codeup_webhook import codeup_webhook_bp
-from api.routes.otel_receiver import otel_receiver_bp
-from api.routes.system import system_bp
-from core.config.swagger import swagger_setup
 
 try:
     from dotenv import load_dotenv
@@ -32,6 +21,18 @@ sys.path.insert(0, BASE_DIR)
 
 # 加载配置
 config = load_config_by_path(os.path.join(BASE_DIR, "config.yaml"))
+
+from core.config.logging import init_logging, setup_flask_logging, Logger
+from api.routes.stats import stats_bp
+from api.routes.stats_repo import stats_repo_bp
+from api.routes.scheduler import scheduler_bp
+from api.routes.git_ai import git_ai_bp
+from api.routes.git_ai_worker import metrics_bp, cas_bp, oauth_bp, releases_bp
+from api.routes.authorship_notes import git_notes_rest_bp, authorship_notes_rest_bp
+from api.routes.codeup_webhook import codeup_webhook_bp
+from api.routes.otel_receiver import otel_receiver_bp
+from api.routes.system import system_bp
+from core.config.swagger import swagger_setup
 
 # 初始化日志系统（在加载配置后）
 init_logging(config.get("logging", {}), BASE_DIR)

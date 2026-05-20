@@ -4,7 +4,6 @@ REST Notes Store 服务
 提供 Authorship Notes 数据的 CRUD 业务逻辑。
 """
 
-import core.config.loader as loader
 from core.config.logging import Logger
 from core.database.authorship_notes_db import AuthorshipNotesDatabase
 
@@ -12,10 +11,8 @@ from core.database.authorship_notes_db import AuthorshipNotesDatabase
 class NotesRestService:
     """REST Notes Store 服务"""
 
-    def __init__(self, db_url: str | None = None):
+    def __init__(self):
         """初始化 NotesRestService"""
-        if db_url:
-            loader.config_data = {"database": {"url": db_url, "echo": False}}
         self.logger = Logger.get_logger("services.notes")
         self.database = AuthorshipNotesDatabase()
 

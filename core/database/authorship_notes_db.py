@@ -2,8 +2,10 @@
 
 import hashlib
 from typing import Any, Dict, List, Optional
-from sqlalchemy import select
+from sqlalchemy import create_engine, select
+from sqlalchemy.engine import Engine
 
+from core.config import loader
 from .base import session_scope, BaseDatabase
 from .models import AuthorshipNotes, AuthorshipNotesSeq, gen_xid
 
@@ -24,6 +26,27 @@ def normalize_list_limit(limit: int | None) -> int:
 
 class AuthorshipNotesDatabase(BaseDatabase):
     """Authorship Notes 数据库操作类"""
+
+    def __init__(self):
+        super().__init__()
+        config_data = loader.load_config()
+        database_config = config_data.get("database", {})
+        db_url = database_config.get("url")
+        self._engine = create_engine(db_url, echo=self.echo) if db_url else None
+
+    @property
+    def engine(self) -> Engine:
+        """获取引擎实例"""
+        if self._engine is not None:
+            return self._engine
+        return super().engine
+
+    def close(self) -> None:
+        if self._engine is not None:
+            self._engine.dispose()
+            self._engine = None
+            return
+        super().close()
 
     def _next_change_seq(self, session) -> int:
         seq = AuthorshipNotesSeq()
