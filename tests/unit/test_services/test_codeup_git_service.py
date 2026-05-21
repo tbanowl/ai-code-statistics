@@ -9,14 +9,19 @@ codeup_git_service = import_module("core.services.codeup_git_service")
 CodeupGitError = codeup_git_service.CodeupGitError
 CodeupGitService = codeup_git_service.CodeupGitService
 
+VALID_PRIVATE_KEY = """-----BEGIN OPENSSH PRIVATE KEY-----
+abc123
+-----END OPENSSH PRIVATE KEY-----
+"""
+
 
 class FakeRunner:
     def __init__(self, stdout_by_args):
         self.stdout_by_args = stdout_by_args
         self.calls = []
 
-    def __call__(self, args, cwd, timeout):
-        self.calls.append((args, cwd, timeout))
+    def __call__(self, args, cwd, timeout, env=None):
+        self.calls.append((args, cwd, timeout, env))
         return self.stdout_by_args[tuple(args)]
 
 
@@ -27,7 +32,7 @@ def test_rev_list_calls_git_rev_list_and_splits_stdout_lines():
     result = service.rev_list(Path("/repo"), "base..head")
 
     assert result == ["abc", "def"]
-    assert runner.calls == [(["git", "rev-list", "base..head"], Path("/repo"), 60)]
+    assert runner.calls == [(["git", "rev-list", "base..head"], Path("/repo"), 60, None)]
 
 
 def test_commit_metadata_parses_author_and_commit_time():
@@ -96,8 +101,8 @@ def test_ensure_repo_clones_then_fetches_required_refs_and_commits(tmp_path):
 
     assert result == tmp_path / "repo"
     assert runner.calls == [
-        (["git", "clone", "https://codeup.aliyun.com/org/repo.git", str(tmp_path / "repo")], tmp_path, 12),
-        (["git", "fetch", "origin", "main", "feature/a", "a" * 40, "b" * 40], tmp_path / "repo", 34),
+        (["git", "clone", "https://codeup.aliyun.com/org/repo.git", str(tmp_path / "repo")], tmp_path, 12, None),
+        (["git", "fetch", "origin", "main", "feature/a", "a" * 40, "b" * 40], tmp_path / "repo", 34, None),
     ]
 
 
@@ -124,8 +129,190 @@ def test_ensure_repo_existing_repo_fetches_required_refs_and_commits(tmp_path):
 
     assert result == repo_dir
     assert runner.calls == [
-        (["git", "fetch", "origin", "main", "feature/a", "a" * 40, "b" * 40], repo_dir, 34),
+        (["git", "fetch", "origin", "main", "feature/a", "a" * 40, "b" * 40], repo_dir, 34, None),
     ]
+
+
+def test_ensure_repo_with_private_key_clones_and_fetches_with_git_ssh_command(tmp_path):
+    ssh_repo_url = "ssh://git@codeup.aliyun.com/org/repo.git"
+    runner = FakeRunner(
+        {
+            ("git", "clone", ssh_repo_url, str(tmp_path / "repo")): "",
+            ("git", "fetch", "origin", "main", "feature/a", "a" * 40, "b" * 40): "",
+        }
+    )
+    service = CodeupGitService(runner=runner)
+
+    result = service.ensure_repo(
+        repo_url="https://codeup.aliyun.com/org/repo.git",
+        repo_dir=tmp_path / "repo",
+        target_branch="main",
+        source_branch="feature/a",
+        merge_commit_sha="a" * 40,
+        source_commit_shas=["b" * 40],
+        clone_timeout=12,
+        fetch_timeout=34,
+        private_key=VALID_PRIVATE_KEY,
+    )
+
+    assert result == tmp_path / "repo"
+    assert len(runner.calls) == 2
+    clone_call, fetch_call = runner.calls
+    assert clone_call[0] == ["git", "clone", ssh_repo_url, str(tmp_path / "repo")]
+    assert fetch_call[0] == ["git", "fetch", "origin", "main", "feature/a", "a" * 40, "b" * 40]
+    for _, _, _, env in runner.calls:
+        assert env is not None
+        ssh_command = env["GIT_SSH_COMMAND"]
+        assert "ssh -i" in ssh_command
+        assert "StrictHostKeyChecking=no" in ssh_command
+        assert "IdentitiesOnly=yes" in ssh_command
+
+
+def test_existing_repo_fetches_with_private_key_env(tmp_path):
+    repo_dir = tmp_path / "repo"
+    (repo_dir / ".git").mkdir(parents=True)
+    ssh_repo_url = "ssh://git@codeup.aliyun.com/org/repo.git"
+    runner = FakeRunner(
+        {
+            ("git", "remote", "set-url", "origin", ssh_repo_url): "",
+            ("git", "fetch", "origin", "main", "feature/a", "a" * 40): "",
+        }
+    )
+    service = CodeupGitService(runner=runner)
+
+    result = service.ensure_repo(
+        repo_url="https://codeup.aliyun.com/org/repo.git",
+        repo_dir=repo_dir,
+        target_branch="main",
+        source_branch="feature/a",
+        merge_commit_sha="a" * 40,
+        source_commit_shas=[],
+        clone_timeout=12,
+        fetch_timeout=34,
+        private_key=VALID_PRIVATE_KEY,
+    )
+
+    assert result == repo_dir
+    assert len(runner.calls) == 2
+    set_url_call, fetch_call = runner.calls
+    assert set_url_call[0] == ["git", "remote", "set-url", "origin", ssh_repo_url]
+    assert fetch_call[0] == ["git", "fetch", "origin", "main", "feature/a", "a" * 40]
+    for _, _, _, env in runner.calls:
+        assert env is not None
+        assert "GIT_SSH_COMMAND" in env
+        assert "abc123" not in env["GIT_SSH_COMMAND"]
+
+
+def test_ensure_repo_rejects_invalid_private_key(tmp_path):
+    service = CodeupGitService(runner=FakeRunner({}))
+
+    with pytest.raises(CodeupGitError, match="Invalid SSH private key"):
+        service.ensure_repo(
+            repo_url="https://codeup.aliyun.com/org/repo.git",
+            repo_dir=tmp_path / "repo",
+            target_branch="main",
+            source_branch="feature/a",
+            merge_commit_sha="a" * 40,
+            source_commit_shas=[],
+            clone_timeout=12,
+            fetch_timeout=34,
+            private_key="not a key",
+        )
+
+
+def test_run_supports_legacy_three_argument_runner():
+    calls = []
+
+    def legacy_runner(args, cwd, timeout):
+        calls.append((args, cwd, timeout))
+        return "legacy ok\n"
+
+    result = CodeupGitService(runner=legacy_runner)._run(
+        ["git", "status"], Path("/repo"), timeout=7
+    )
+
+    assert result == "legacy ok\n"
+    assert calls == [(["git", "status"], Path("/repo"), 7)]
+
+
+def test_run_does_not_mask_type_error_from_runner_body():
+    def broken_runner(args, cwd, timeout, env=None):
+        raise TypeError("runner body failed")
+
+    with pytest.raises(TypeError, match="runner body failed"):
+        CodeupGitService(runner=broken_runner)._run(["git", "status"], Path("/repo"))
+
+
+def test_create_ssh_command_shell_quotes_key_path_with_spaces_and_quotes():
+    key_path = "/tmp/codeup key 'quoted'"
+
+    command = CodeupGitService()._create_ssh_command(key_path)
+
+    assert "ssh -i '/tmp/codeup key '\"'\"'quoted'\"'\"''" in command
+    assert f'"{key_path}"' not in command
+
+
+def test_private_key_temp_file_is_cleaned_after_success(tmp_path):
+    observed_key_paths = []
+
+    def runner(args, cwd, timeout, env=None):
+        assert env is not None
+        ssh_command = env["GIT_SSH_COMMAND"]
+        key_path = ssh_command.split(" -o ", 1)[0].removeprefix("ssh -i ").strip("'")
+        observed_key_paths.append(Path(key_path))
+        assert Path(key_path).exists()
+        return ""
+
+    service = CodeupGitService(runner=runner)
+
+    result = service._run_with_optional_ssh_key(
+        ["git", "fetch", "origin", "main"], tmp_path, 12, VALID_PRIVATE_KEY
+    )
+
+    assert result == ""
+    assert observed_key_paths
+    assert not observed_key_paths[0].exists()
+
+
+def test_private_key_temp_file_is_cleaned_after_failure(tmp_path):
+    observed_key_paths = []
+
+    def runner(args, cwd, timeout, env=None):
+        assert env is not None
+        ssh_command = env["GIT_SSH_COMMAND"]
+        key_path = ssh_command.split(" -o ", 1)[0].removeprefix("ssh -i ").strip("'")
+        observed_key_paths.append(Path(key_path))
+        assert Path(key_path).exists()
+        raise RuntimeError("git failed")
+
+    service = CodeupGitService(runner=runner)
+
+    with pytest.raises(RuntimeError, match="git failed"):
+        service._run_with_optional_ssh_key(
+            ["git", "fetch", "origin", "main"], tmp_path, 12, VALID_PRIVATE_KEY
+        )
+
+    assert observed_key_paths
+    assert not observed_key_paths[0].exists()
+
+
+def test_private_key_is_not_in_ssh_command_and_file_mode_is_0600(tmp_path):
+    secret_marker = "abc123"
+
+    def runner(args, cwd, timeout, env=None):
+        assert env is not None
+        ssh_command = env["GIT_SSH_COMMAND"]
+        key_path = ssh_command.split(" -o ", 1)[0].removeprefix("ssh -i ").strip("'")
+        assert secret_marker not in ssh_command
+        assert Path(key_path).read_text(encoding="utf-8") == VALID_PRIVATE_KEY
+        assert Path(key_path).stat().st_mode & 0o777 == 0o600
+        return ""
+
+    result = CodeupGitService(runner=runner)._run_with_optional_ssh_key(
+        ["git", "fetch", "origin", "main"], tmp_path, 12, VALID_PRIVATE_KEY
+    )
+
+    assert result == ""
 
 
 def test_merge_base_and_rev_list_commands_support_source_sha_derivation():
@@ -143,8 +330,8 @@ def test_merge_base_and_rev_list_commands_support_source_sha_derivation():
     assert base == "c" * 40
     assert commits == ["b" * 40, "d" * 40]
     assert runner.calls == [
-        (["git", "merge-base", "feature/a", "main"], Path("/repo"), 60),
-        (["git", "rev-list", "c" * 40 + "..feature/a"], Path("/repo"), 60),
+        (["git", "merge-base", "feature/a", "main"], Path("/repo"), 60, None),
+        (["git", "rev-list", "c" * 40 + "..feature/a"], Path("/repo"), 60, None),
     ]
 
 
@@ -218,6 +405,7 @@ def test_run_uses_expected_subprocess_kwargs_without_shell(monkeypatch, tmp_path
                 "text": True,
                 "capture_output": True,
                 "check": True,
+                "env": None,
             },
         )
     ]
@@ -279,7 +467,7 @@ def test_commit_parents_parses_show_format_p_output():
 
     assert result == [parent1, parent2]
     assert runner.calls == [
-        (["git", "show", "-s", "--format=%P", sha], Path("/repo"), 60)
+        (["git", "show", "-s", "--format=%P", sha], Path("/repo"), 60, None)
     ]
 
 
