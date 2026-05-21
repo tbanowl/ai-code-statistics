@@ -483,3 +483,29 @@ CREATE TABLE IF NOT EXISTS sys_role_menu (
     INDEX idx_role_menu_role (role_id),
     INDEX idx_role_menu_menu (menu_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='角色菜单表';
+
+CREATE TABLE IF NOT EXISTS cx_command_usage_events (
+   id BIGINT AUTO_INCREMENT PRIMARY KEY,
+   event_id VARCHAR(80) NOT NULL UNIQUE,
+   schema_version VARCHAR(16) NOT NULL,
+   event_type VARCHAR(64) NOT NULL,
+   event_time TIMESTAMP(3) NOT NULL,
+   command_name VARCHAR(64) NOT NULL,
+   spec_id VARCHAR(128) NOT NULL,
+   spec_id_source VARCHAR(32),
+   project_id VARCHAR(128),
+   git_user_name VARCHAR(128),
+   git_user_email VARCHAR(256),
+   session_id VARCHAR(128),
+   plugin_version VARCHAR(32),
+   source VARCHAR(64),
+   warning VARCHAR(128),
+   token_name VARCHAR(128),
+   raw_event JSON,
+   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_usage_spec_command ON cx_command_usage_events(spec_id, command_name);
+CREATE INDEX idx_usage_project_time ON cx_command_usage_events(project_id, event_time);
+CREATE INDEX idx_usage_user_time ON cx_command_usage_events(git_user_email, event_time);
+CREATE INDEX idx_usage_event_time ON cx_command_usage_events(event_time);
