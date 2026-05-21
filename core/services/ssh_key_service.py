@@ -8,7 +8,7 @@ from cryptography.hazmat.backends import default_backend
 from base64 import b64encode, b64decode
 from core.config.logging import Logger
 from core.database.base import BaseDatabase, session_scope
-from core.database.models import gen_xid
+from core.database.models import StatsRepository, gen_xid
 
 
 class SshKeyService:
@@ -239,6 +239,32 @@ class SshKeyService:
             "private_key": private_key,
         }
 
+    def get_ssh_key_for_repo_url(self, repo_url: Optional[str]) -> Optional[Dict]:
+        """
+        获取仓库的 SSH Key
+
+        优先级：仓库配置的 Key > 配置文件默认 Key
+
+        Args:
+            repo_url: 仓库 URL
+
+        Returns:
+            SSH Key 信息（包含私钥）
+        """
+        # 优先使用仓库配置的 Key
+        if repo_url:
+            # 这里应该根据 repo_url 查找对应的 SSH Key ID
+            repo = self._get_repo_for_repo_url(repo_url)
+            if repo:
+                key = self.get_ssh_key_private(repo.ssh_key_id)
+                if key:
+                    return key
+
+        # 其次使用配置文件默认 Key
+        default_key = self.load_default_ssh_key_from_config()
+        return default_key
+
+
     def get_ssh_key_for_repo(self, repo_ssh_key_id: Optional[str]) -> Optional[Dict]:
         """
         获取仓库的 SSH Key
@@ -288,3 +314,27 @@ class SshKeyService:
             if os.path.exists(temp_path):
                 os.unlink(temp_path)
             raise e
+
+    def _get_repo_for_repo_url(self, repo_url: str) -> Optional[StatsRepository]:
+        """
+        根据仓库 URL 获取对应的 SSH Key ID
+
+        这里应该实现根据 repo_url 查找对应的 SSH Key ID 的逻辑
+        可能需要一个新的数据库表来存储 repo_url 和 ssh_key_id 的映射关系
+
+        Args:
+            repo_url: 仓库 URL
+
+        Returns:
+            SSH Key ID 或 None
+        """
+        
+        with session_scope(self.database.engine) as session:
+            repo = (
+                session.query(StatsRepository)
+                .filter(StatsRepository.repo_path == repo_url)
+                .filter(StatsRepository.repo_stats_flag == 1)
+                .one()
+            )
+
+            return repo            
