@@ -334,7 +334,7 @@ class SshKeyService:
                 session.query(StatsRepository)
                 .filter(StatsRepository.repo_path == repo_url)
                 .filter(StatsRepository.repo_stats_flag == 1)
-                .one()
+                .one_or_none()
             )
 
             return repo            

@@ -76,9 +76,7 @@ class CodeupMergeAuthorshipService:
             return {"success": False, "processed": 1, "error": str(exc)}
 
     def _ssh_key_info(self, task) -> dict[str, Any] | None:
-        return self.ssh_key_service.get_ssh_key_for_repo(
-            getattr(task, "ssh_key_id", None)
-        )
+        return self.ssh_key_service.get_ssh_key_for_repo_url(task.repo_url)
 
     def _process_task(self, task, private_key: str | None = None) -> dict[str, Any]:
         source_shas = json.loads(task.source_commit_shas or "[]")
