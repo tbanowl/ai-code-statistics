@@ -283,3 +283,26 @@ def test_duplicate_update_preserves_new_fields():
     assert refreshed is not None
     assert refreshed.merge_type == "squash"
     assert refreshed.event_kind == "merge_request"
+
+
+def test_release_for_retry_requeues_processing_task_without_consuming_attempt():
+    db = CodeupMergeAuthorshipDatabase()
+    task, _ = _create(db)
+    claimed = db.claim_next_task(max_attempts=3)
+    assert claimed is not None
+    assert claimed.status == "processing"
+    assert claimed.attempts == 1
+
+    db.release_for_retry(claimed.id, "missing ssh key for Codeup merge authorship")
+
+    released = db.get_task(task.id)
+    assert released is not None
+    assert released.status == "pending"
+    assert released.attempts == 0
+    assert released.last_error == "missing ssh key for Codeup merge authorship"
+
+    reclaimed = db.claim_next_task(max_attempts=3)
+    assert reclaimed is not None
+    assert reclaimed.id == task.id
+    assert reclaimed.status == "processing"
+    assert reclaimed.attempts == 1

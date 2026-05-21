@@ -8,6 +8,7 @@ from core.database.codeup_merge_authorship_db import CodeupMergeAuthorshipDataba
 from core.services.codeup_git_service import CodeupGitService
 from core.services.codeup_note_provider import CodeupDatabaseNoteProvider
 from core.services.notes_service import NotesRestService
+from core.services.ssh_key_service import SshKeyService
 
 
 class CodeupMergeAuthorshipService:
@@ -19,6 +20,7 @@ class CodeupMergeAuthorshipService:
         notes_service: NotesRestService | None = None,
         merge_resolver: Any | None = None,
         merge_policy: Any | None = None,
+        ssh_key_service: Any | None = None,
         config: dict[str, Any] | None = None,
     ):
         self.task_db = task_db or CodeupMergeAuthorshipDatabase()
@@ -27,6 +29,7 @@ class CodeupMergeAuthorshipService:
         self.notes_service = notes_service or NotesRestService()
         self.merge_resolver = merge_resolver or self._default_merge_resolver()
         self.merge_policy = merge_policy or self._default_merge_policy()
+        self.ssh_key_service = ssh_key_service or SshKeyService()
         self.config = config or {}
 
     def _default_merge_resolver(self) -> Any:
@@ -44,7 +47,18 @@ class CodeupMergeAuthorshipService:
             return {"success": True, "processed": 0}
 
         try:
-            summary = self._process_task(task)
+            ssh_key_info = self._ssh_key_info(task)
+            if ssh_key_info is None:
+                reason = "missing ssh key for Codeup merge authorship"
+                self.task_db.release_for_retry(task.id, reason)
+                return {
+                    "success": True,
+                    "processed": 1,
+                    "released": True,
+                    "reason": reason,
+                }
+            private_key = ssh_key_info.get("private_key")
+            summary = self._process_task(task, private_key=private_key)
             if summary.get("skipped_reason"):
                 reason = str(summary["skipped_reason"])
                 merge_type = summary.get("merge_type")
@@ -61,7 +75,12 @@ class CodeupMergeAuthorshipService:
             self.task_db.mark_failed(task.id, str(exc))
             return {"success": False, "processed": 1, "error": str(exc)}
 
-    def _process_task(self, task) -> dict[str, Any]:
+    def _ssh_key_info(self, task) -> dict[str, Any] | None:
+        return self.ssh_key_service.get_ssh_key_for_repo(
+            getattr(task, "ssh_key_id", None)
+        )
+
+    def _process_task(self, task, private_key: str | None = None) -> dict[str, Any]:
         source_shas = json.loads(task.source_commit_shas or "[]")
         repo_path = self._repo_path(task)
         repo_path = self.git_service.ensure_repo(
@@ -73,6 +92,7 @@ class CodeupMergeAuthorshipService:
             source_commit_shas=source_shas,
             clone_timeout=int(self.config.get("clone_timeout_seconds", 60)),
             fetch_timeout=int(self.config.get("fetch_timeout_seconds", 60)),
+            private_key=private_key,
         )
         merge_base_sha = self._merge_base(repo_path, task) if task.merge_commit_sha else None
 

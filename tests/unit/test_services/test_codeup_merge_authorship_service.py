@@ -7,6 +7,7 @@ from types import SimpleNamespace
 CodeupMergeAuthorshipService = import_module(
     "core.services.codeup_merge_authorship_service"
 ).CodeupMergeAuthorshipService
+SshKeyService = import_module("core.services.ssh_key_service").SshKeyService
 RepositoryMergeResolution = import_module(
     "core.services.repository_merge_resolver"
 ).RepositoryMergeResolution
@@ -22,6 +23,8 @@ MERGE_SHA = "a" * 40
 SOURCE_SHA = "b" * 40
 REPO_URL = "https://codeup.aliyun.com/org/repo.git"
 OTHER_REPO_URL = "https://codeup.aliyun.com/org/other-repo.git"
+SSH_KEY_ID = "ssh-key-1"
+MISSING_SSH_KEY_REASON = "missing ssh key for Codeup merge authorship"
 TARGET_NOTE = (
     "app.py\n"
     "  target_prompt 3\n"
@@ -52,11 +55,13 @@ class FakeTaskDatabase:
             target_branch="main",
             merge_commit_sha=MERGE_SHA,
             source_commit_shas=json.dumps(source_commit_shas),
+            ssh_key_id=SSH_KEY_ID,
         )
         self.claim_calls = []
         self.successes = []
         self.failures = []
         self.skips = []
+        self.releases = []
         self.merge_type_updates = []
 
     def claim_next_task(self, max_attempts):
@@ -73,6 +78,9 @@ class FakeTaskDatabase:
 
     def mark_skipped(self, task_id, reason, merge_type=None):
         self.skips.append((task_id, reason, merge_type))
+
+    def release_for_retry(self, task_id, reason):
+        self.releases.append((task_id, reason))
 
     def update_merge_type(self, task_id, merge_type):
         self.merge_type_updates.append((task_id, merge_type))
@@ -101,17 +109,21 @@ class FakeGitService:
         source_commit_shas,
         clone_timeout,
         fetch_timeout,
+        private_key=None,
     ):
         self.ensure_repo_calls.append(
-            (
-                repo_url,
-                repo_dir,
-                target_branch,
-                source_branch,
-                merge_commit_sha,
-                source_commit_shas,
-                clone_timeout,
-                fetch_timeout,
+            EnsureRepoCall(
+                {
+                "repo_url": repo_url,
+                "repo_dir": repo_dir,
+                "target_branch": target_branch,
+                "source_branch": source_branch,
+                "merge_commit_sha": merge_commit_sha,
+                "source_commit_shas": source_commit_shas,
+                "clone_timeout": clone_timeout,
+                "fetch_timeout": fetch_timeout,
+                "private_key": private_key,
+                }
             )
         )
         return repo_dir
@@ -144,6 +156,45 @@ class FakeGitService:
 
     def commit_parents(self, repo_path, commit_sha):
         return ["c" * 40]
+
+
+class EnsureRepoCall(dict):
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return self._legacy_tuple()[key]
+        return super().__getitem__(key)
+
+    def __eq__(self, other):
+        return other == self._legacy_tuple() or super().__eq__(other)
+
+    def _legacy_tuple(self):
+        legacy_tuple = (
+            self["repo_url"],
+            self["repo_dir"],
+            self["target_branch"],
+            self["source_branch"],
+            self["merge_commit_sha"],
+            self["source_commit_shas"],
+            self["clone_timeout"],
+            self["fetch_timeout"],
+        )
+        return legacy_tuple
+
+
+class FakeSshKeyService:
+    def __init__(self, private_key):
+        self.private_key = private_key
+        self.calls = []
+
+    def get_ssh_key_for_repo(self, repo_ssh_key_id):
+        self.calls.append(repo_ssh_key_id)
+        if self.private_key is None:
+            return None
+        return {"private_key": self.private_key}
+
+
+def available_ssh_key_service():
+    return FakeSshKeyService(private_key="PRIVATE KEY")
 
 
 class FakeMergeResolver:
@@ -222,6 +273,7 @@ def test_process_next_task_upserts_merge_and_source_notes_then_marks_success():
         notes_service=notes_service,
         merge_resolver=FakeMergeResolver(),
         merge_policy=merge_policy,
+        ssh_key_service=available_ssh_key_service(),
         config={"max_attempts": 5, "repo_path": "/repo"},
     )
 
@@ -269,6 +321,89 @@ def test_process_next_task_upserts_merge_and_source_notes_then_marks_success():
     assert task_db.failures == []
 
 
+def test_default_constructor_wires_real_ssh_key_service():
+    service = CodeupMergeAuthorshipService(
+        task_db=FakeTaskDatabase(),
+        git_service=FakeGitService(),
+        note_provider=FakeNoteProvider(),
+        notes_service=FakeNotesService(),
+        merge_resolver=FakeMergeResolver(),
+        merge_policy=FakeMergePolicy(),
+    )
+
+    assert isinstance(service.ssh_key_service, SshKeyService)
+
+
+def test_ssh_key_info_returns_key_for_task_ssh_key_id():
+    ssh_key_service = FakeSshKeyService(private_key="PRIVATE KEY")
+    service = CodeupMergeAuthorshipService(
+        task_db=FakeTaskDatabase(),
+        git_service=FakeGitService(),
+        note_provider=FakeNoteProvider(),
+        notes_service=FakeNotesService(),
+        merge_resolver=FakeMergeResolver(),
+        merge_policy=FakeMergePolicy(),
+        ssh_key_service=ssh_key_service,
+    )
+
+    ssh_key_info = service._ssh_key_info(SimpleNamespace(ssh_key_id=SSH_KEY_ID))
+
+    assert ssh_key_info == {"private_key": "PRIVATE KEY"}
+    assert ssh_key_service.calls == [SSH_KEY_ID]
+
+
+def test_process_next_task_releases_for_retry_without_git_when_injected_ssh_key_missing():
+    task_db = FakeTaskDatabase()
+    git_service = FakeGitService()
+    service = CodeupMergeAuthorshipService(
+        task_db=task_db,
+        git_service=git_service,
+        note_provider=FakeNoteProvider(),
+        notes_service=FakeNotesService(),
+        merge_resolver=FakeMergeResolver(),
+        merge_policy=FakeMergePolicy(),
+        ssh_key_service=FakeSshKeyService(private_key=None),
+        config={"repo_path": "/repo"},
+    )
+
+    result = service.process_next_task()
+
+    assert result == {
+        "success": True,
+        "processed": 1,
+        "released": True,
+        "reason": MISSING_SSH_KEY_REASON,
+    }
+    assert task_db.releases == [("task-1", MISSING_SSH_KEY_REASON)]
+    assert git_service.ensure_repo_calls == []
+    assert task_db.successes == []
+    assert task_db.failures == []
+    assert task_db.skips == []
+
+
+def test_process_next_task_passes_injected_private_key_to_ensure_repo():
+    task_db = FakeTaskDatabase()
+    git_service = FakeGitService()
+    ssh_key_service = FakeSshKeyService(private_key="PRIVATE KEY")
+    service = CodeupMergeAuthorshipService(
+        task_db=task_db,
+        git_service=git_service,
+        note_provider=FakeNoteProvider(),
+        notes_service=FakeNotesService(),
+        merge_resolver=FakeMergeResolver(),
+        merge_policy=FakeMergePolicy(),
+        ssh_key_service=ssh_key_service,
+        config={"repo_path": "/repo"},
+    )
+
+    result = service.process_next_task()
+
+    assert result["success"] is True
+    assert ssh_key_service.calls == [SSH_KEY_ID]
+    assert git_service.ensure_repo_calls[0]["private_key"] == "PRIVATE KEY"
+    assert not isinstance(git_service.ensure_repo_calls[0]["private_key"], dict)
+
+
 def test_process_next_task_derives_empty_source_shas_and_upserts_notes():
     task_db = FakeTaskDatabase(source_commit_shas=[])
     git_service = FakeGitService(derived_shas=[SOURCE_SHA])
@@ -282,6 +417,7 @@ def test_process_next_task_derives_empty_source_shas_and_upserts_notes():
         notes_service=notes_service,
         merge_resolver=FakeMergeResolver(),
         merge_policy=merge_policy,
+        ssh_key_service=available_ssh_key_service(),
         config={
             "repo_path": "/repo",
             "clone_timeout_seconds": 11,
@@ -321,6 +457,7 @@ def test_process_next_task_fails_empty_source_shas_when_derivation_returns_no_co
         notes_service=notes_service,
         merge_resolver=FakeMergeResolver(),
         merge_policy=FakeMergePolicy(),
+        ssh_key_service=available_ssh_key_service(),
         config={"repo_path": "/repo"},
     )
 
@@ -346,6 +483,7 @@ def test_process_next_task_marks_failed_when_git_service_raises_without_upsert()
         notes_service=notes_service,
         merge_resolver=FakeMergeResolver(),
         merge_policy=FakeMergePolicy(),
+        ssh_key_service=available_ssh_key_service(),
         config={"repo_path": "/repo"},
     )
 
@@ -368,6 +506,7 @@ def test_process_next_task_standard_merge_marks_success_without_upserting_notes(
         notes_service=notes_service,
         merge_resolver=FakeMergeResolver(merge_type="standard_merge"),
         merge_policy=merge_policy,
+        ssh_key_service=available_ssh_key_service(),
         config={"repo_path": "/repo"},
     )
 
@@ -402,6 +541,7 @@ def test_process_next_task_fast_forward_marks_skipped_without_upserting_notes():
         notes_service=notes_service,
         merge_resolver=FakeMergeResolver(merge_type="fast_forward"),
         merge_policy=merge_policy,
+        ssh_key_service=available_ssh_key_service(),
         config={"repo_path": "/repo"},
     )
 
@@ -422,7 +562,10 @@ def test_process_next_task_fast_forward_marks_skipped_without_upserting_notes():
 
 
 def test_repo_path_defaults_to_distinct_cache_child_per_repo_url():
-    service = CodeupMergeAuthorshipService(config={"repo_cache_dir": "/cache/codeup_repos"})
+    service = CodeupMergeAuthorshipService(
+        ssh_key_service=available_ssh_key_service(),
+        config={"repo_cache_dir": "/cache/codeup_repos"},
+    )
     first_task = SimpleNamespace(repo_url=REPO_URL)
     second_task = SimpleNamespace(repo_url=OTHER_REPO_URL)
 
@@ -445,6 +588,7 @@ def test_process_next_task_passes_cache_child_path_to_ensure_repo():
         note_provider=FakeNoteProvider(),
         notes_service=FakeNotesService(),
         merge_policy=FakeMergePolicy(),
+        ssh_key_service=available_ssh_key_service(),
         config={"repo_cache_dir": "/cache/codeup_repos"},
     )
 
@@ -457,6 +601,7 @@ def test_process_next_task_passes_cache_child_path_to_ensure_repo():
 
 def test_repo_path_preserves_explicit_repo_path_override():
     service = CodeupMergeAuthorshipService(
+        ssh_key_service=available_ssh_key_service(),
         config={"repo_cache_dir": "/cache/codeup_repos", "repo_path": "/explicit/repo"}
     )
 
@@ -467,6 +612,7 @@ def test_repo_path_preserves_explicit_repo_path_override():
 
 def test_repo_path_preserves_repo_paths_mapping_override_for_repo_url():
     service = CodeupMergeAuthorshipService(
+        ssh_key_service=available_ssh_key_service(),
         config={
             "repo_cache_dir": "/cache/codeup_repos",
             "repo_paths": {REPO_URL: "/mapped/repo"},

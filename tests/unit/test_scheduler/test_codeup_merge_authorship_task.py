@@ -170,6 +170,25 @@ def test_codeup_merge_authorship_task_defaults_less_than_one_batch_size_to_one()
     assert service.calls == 1
 
 
+def test_codeup_merge_authorship_task_counts_released_results_separately():
+    module = importlib.import_module(
+        "core.scheduler.tasks.codeup_merge_authorship_task"
+    )
+    service = FakeService(
+        [
+            {"success": True, "processed": 1, "released": True, "reason": "missing ssh key for Codeup merge authorship"},
+            {"success": True, "processed": 0},
+        ]
+    )
+
+    task = module.CodeupMergeAuthorshipTask(
+        _config(job_config={"enabled": True, "batch_size": 10}),
+        service_factory=lambda codeup_config: service,
+    )
+
+    assert task.execute() == {"success": True, "processed": 1, "failed": 0, "released": 1}
+
+
 def test_codeup_merge_authorship_task_passes_business_config_to_factory():
     module = importlib.import_module(
         "core.scheduler.tasks.codeup_merge_authorship_task"

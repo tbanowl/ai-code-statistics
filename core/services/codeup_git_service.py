@@ -1,10 +1,14 @@
+import inspect
+import os
+import shlex
 import subprocess
+import tempfile
 import re
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Mapping
 
 
-GitRunner = Callable[[list[str], Path, int], str]
+GitRunner = Callable[..., str]
 SAFE_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{7,40}$")
 
 
@@ -26,6 +30,7 @@ class CodeupGitService:
         source_commit_shas: list[str],
         clone_timeout: int,
         fetch_timeout: int,
+        private_key: str | None = None,
     ) -> Path:
         self._validate_repo_url(repo_url)
         self._validate_ref(target_branch, "target_branch")
@@ -35,6 +40,14 @@ class CodeupGitService:
             self._validate_commit_sha(source_commit_sha)
 
         if (repo_dir / ".git").exists():
+            if private_key is not None:
+                origin_url = self._repo_url_for_auth(repo_url, private_key)
+                self._run_with_optional_ssh_key(
+                    ["git", "remote", "set-url", "origin", origin_url],
+                    repo_dir,
+                    fetch_timeout,
+                    private_key,
+                )
             self._fetch_required_refs(
                 repo_dir,
                 target_branch,
@@ -42,11 +55,18 @@ class CodeupGitService:
                 merge_commit_sha,
                 source_commit_shas,
                 fetch_timeout,
+                private_key=private_key,
             )
             return repo_dir
 
         repo_dir.parent.mkdir(parents=True, exist_ok=True)
-        self._run(["git", "clone", repo_url, str(repo_dir)], repo_dir.parent, clone_timeout)
+        clone_url = self._repo_url_for_auth(repo_url, private_key)
+        self._run_with_optional_ssh_key(
+            ["git", "clone", clone_url, str(repo_dir)],
+            repo_dir.parent,
+            clone_timeout,
+            private_key,
+        )
         self._fetch_required_refs(
             repo_dir,
             target_branch,
@@ -54,6 +74,7 @@ class CodeupGitService:
             merge_commit_sha,
             source_commit_shas,
             fetch_timeout,
+            private_key=private_key,
         )
         return repo_dir
 
@@ -111,9 +132,99 @@ class CodeupGitService:
                 f"Malformed commit metadata for commit_sha '{commit_sha}'"
             ) from exc
 
-    def _run(self, args: list[str], cwd: Path, timeout: int = 60) -> str:
+    def _run_with_optional_ssh_key(
+        self,
+        args: list[str],
+        cwd: Path,
+        timeout: int,
+        private_key: str | None,
+    ) -> str:
+        if private_key is None:
+            return self._run(args, cwd, timeout)
+
+        normalized_key = self._normalize_private_key(private_key)
+        if not self._validate_private_key_format(normalized_key):
+            raise CodeupGitError("Invalid SSH private key")
+
+        temp_key_path = self._write_private_key_to_temp(normalized_key)
+        try:
+            env = os.environ.copy()
+            env["GIT_SSH_COMMAND"] = self._create_ssh_command(temp_key_path)
+            return self._run(args, cwd, timeout, env=env)
+        finally:
+            if os.path.exists(temp_key_path):
+                os.unlink(temp_key_path)
+
+    def _normalize_private_key(self, private_key: str) -> str:
+        key_content = private_key.strip().replace("\\n", "\n").replace("\r\n", "\n")
+        if not key_content.endswith("\n"):
+            key_content += "\n"
+        return key_content
+
+    def _validate_private_key_format(self, private_key: str) -> bool:
+        if not private_key or not private_key.strip():
+            return False
+        key_content = private_key.strip()
+        headers = [
+            "-----BEGIN RSA PRIVATE KEY-----",
+            "-----BEGIN OPENSSH PRIVATE KEY-----",
+            "-----BEGIN EC PRIVATE KEY-----",
+            "-----BEGIN DSA PRIVATE KEY-----",
+            "-----BEGIN PRIVATE KEY-----",
+            "-----BEGIN ED25519 PRIVATE KEY-----",
+        ]
+        footers = [
+            "-----END RSA PRIVATE KEY-----",
+            "-----END OPENSSH PRIVATE KEY-----",
+            "-----END EC PRIVATE KEY-----",
+            "-----END DSA PRIVATE KEY-----",
+            "-----END PRIVATE KEY-----",
+            "-----END ED25519 PRIVATE KEY-----",
+        ]
+        return any(header in key_content for header in headers) and any(
+            footer in key_content for footer in footers
+        )
+
+    def _write_private_key_to_temp(self, private_key: str) -> str:
+        fd, temp_path = tempfile.mkstemp(prefix="codeup_ssh_key_")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as key_file:
+                key_file.write(private_key)
+            os.chmod(temp_path, 0o600)
+            return temp_path
+        except Exception:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+            raise
+
+    def _create_ssh_command(self, key_file_path: str) -> str:
+        return (
+            f"ssh -i {shlex.quote(key_file_path)} "
+            "-o StrictHostKeyChecking=no "
+            "-o UserKnownHostsFile=/dev/null "
+            "-o IdentitiesOnly=yes "
+            "-o LogLevel=ERROR"
+        )
+
+    def _repo_url_for_auth(self, repo_url: str, private_key: str | None) -> str:
+        if private_key is None or not repo_url.startswith(("http://", "https://")):
+            return repo_url
+        ssh_url = repo_url.replace("https://", "ssh://git@", 1).replace(
+            "http://", "ssh://git@", 1
+        )
+        if not ssh_url.endswith(".git"):
+            ssh_url += ".git"
+        return ssh_url
+
+    def _run(
+        self,
+        args: list[str],
+        cwd: Path,
+        timeout: int = 60,
+        env: Mapping[str, str] | None = None,
+    ) -> str:
         if self.runner is not None:
-            return self.runner(args, cwd, timeout)
+            return self._run_with_runner(args, cwd, timeout, env)
 
         if not cwd.exists() or not cwd.is_dir():
             raise CodeupGitError(f"Invalid git working directory: {cwd}")
@@ -126,6 +237,7 @@ class CodeupGitService:
                 text=True,
                 capture_output=True,
                 check=True,
+                env=env,
             )
             return result.stdout
         except subprocess.CalledProcessError as exc:
@@ -133,6 +245,41 @@ class CodeupGitService:
             raise CodeupGitError(f"git command failed: {detail}") from exc
         except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
             raise CodeupGitError(f"git command failed: {exc}") from exc
+
+    def _run_with_runner(
+        self,
+        args: list[str],
+        cwd: Path,
+        timeout: int,
+        env: Mapping[str, str] | None,
+    ) -> str:
+        if self.runner is None:
+            raise CodeupGitError("Git runner is not configured")
+
+        if self._runner_accepts_env(self.runner):
+            return self.runner(args, cwd, timeout, env)
+        return self.runner(args, cwd, timeout)
+
+    def _runner_accepts_env(self, runner: GitRunner) -> bool:
+        try:
+            signature = inspect.signature(runner)
+        except (TypeError, ValueError):
+            return True
+
+        positional_count = 0
+        for parameter in signature.parameters.values():
+            if parameter.kind is inspect.Parameter.VAR_POSITIONAL:
+                return True
+            if parameter.kind is inspect.Parameter.VAR_KEYWORD:
+                return True
+            if parameter.name == "env":
+                return True
+            if parameter.kind in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            ):
+                positional_count += 1
+        return positional_count >= 4
 
     def _fetch_required_refs(
         self,
@@ -142,11 +289,14 @@ class CodeupGitService:
         merge_commit_sha: str,
         source_commit_shas: list[str],
         timeout: int,
+        private_key: str | None = None,
     ) -> None:
         refs = self._unique_refs(
             [target_branch, source_branch, merge_commit_sha, *source_commit_shas]
         )
-        self._run(["git", "fetch", "origin", *refs], repo_dir, timeout)
+        self._run_with_optional_ssh_key(
+            ["git", "fetch", "origin", *refs], repo_dir, timeout, private_key
+        )
 
     def _unique_refs(self, refs: list[str]) -> list[str]:
         unique = []
