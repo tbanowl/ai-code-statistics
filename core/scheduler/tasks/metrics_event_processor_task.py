@@ -7,6 +7,7 @@ from core.scheduler.tasks.base import BaseTask
 from core.scheduler.scheduled import scheduled
 from core.services.metrics_service import MetricsService
 from core.database import MetricsDatabase, StatsDatabase
+from core.utils.repo_url import normalize_repo_url
 
 
 @scheduled(cron="*/2 * * * *", job_id="metrics_event_processor", name="Metrics事件处理")
@@ -41,7 +42,7 @@ class MetricsEventProcessorTask(BaseTask):
                 continue
 
             attrs = event.get("a", {}) or {}
-            repo_path = attrs.get("1") or ""
+            repo_path = normalize_repo_url(attrs.get("1"))
             author_raw = attrs.get("2")
             author_name, author_email = MetricsEventProcessorTask._parse_author(
                 author_raw

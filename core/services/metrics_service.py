@@ -8,6 +8,7 @@ from core.config.logging import Logger
 from core.database import MetricsDatabase
 from core.database.models import MetricsEventsAgentUsage, MetricsEventsCheckpoint, MetricsEventsCommitted, MetricsEventsInstallHooks
 from core.utils.data_uid import gen_commited_uid, gen_checkpoint_uid, gen_agent_usage_uid, gen_install_hooks_uid
+from core.utils.repo_url import normalize_repo_url
 
 
 class MetricsService:
@@ -78,7 +79,7 @@ class MetricsService:
                 total_ai_deletions= self._get_u32_array(values, "8"),
                 time_waiting_for_ai= self._get_u64_array(values, "9"),
                 git_ai_version= self._get_string(attrs, "0"),
-                repo_url= self._get_string(attrs, "1"),
+                repo_url= normalize_repo_url(self._get_string(attrs, "1")),
                 author= self._get_string(attrs, "2"),
                 commit_sha= self._get_string(attrs, "3"),
                 base_commit_sha= self._get_string(attrs, "4"),
@@ -99,7 +100,7 @@ class MetricsService:
                 event_id = 2,
                 timestamp = timestamp,
                 git_ai_version = self._get_string(attrs, "0"),
-                repo_url = self._get_string(attrs, "1"),
+                repo_url = normalize_repo_url(self._get_string(attrs, "1")),
                 author = self._get_string(attrs, "2"),
                 commit_sha = self._get_string(attrs, "3"),
                 base_commit_sha = self._get_string(attrs, "4"),
@@ -140,7 +141,7 @@ class MetricsService:
                 lines_added_sloc = self._get_u32(values, "5"),
                 lines_deleted_sloc = self._get_u32(values, "6"),
                 git_ai_version = self._get_string(attrs, "0"),
-                repo_url = self._get_string(attrs, "1"),
+                repo_url = normalize_repo_url(self._get_string(attrs, "1")),
                 author = self._get_string(attrs, "2"),
                 commit_sha = self._get_string(attrs, "3"),
                 base_commit_sha = self._get_string(attrs, "4"),
