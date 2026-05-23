@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Tuple
 from sqlalchemy import func, or_, text
 
 from .base import BaseDatabase, now_ts, session_scope
+from core.utils.repo_url import normalize_repo_url, UNKNOWN_REPO
 from .models import (
     MetricsEventsCheckpoint,
     MetricsEventsCommitted,
@@ -99,7 +100,7 @@ class StatsDatabase(BaseDatabase):
 
     def consolidate_unknown_repositories(self) -> Optional[str]:
         with session_scope(self.engine) as session:
-            unknown_path = "未知仓库"
+            unknown_path = UNKNOWN_REPO
             bad_rows = (
                 session.query(StatsRepository)
                 .filter(
@@ -203,7 +204,7 @@ class StatsDatabase(BaseDatabase):
         with session_scope(self.engine) as session:
             unknown = (
                 session.query(StatsRepository)
-                .filter(StatsRepository.repo_path == "未知仓库")
+                .filter(StatsRepository.repo_path == UNKNOWN_REPO)
                 .first()
             )
 
@@ -266,16 +267,11 @@ class StatsDatabase(BaseDatabase):
             }
 
     @staticmethod
-    def _normalize_repo_path(repo_path: Optional[str]) -> str:
-        value = (repo_path or "").strip()
-        return value or "未知仓库"
-
-    @staticmethod
     def _extract_repo_name(repo_path: str) -> str:
         raw = (repo_path or "").strip()
         if not raw:
-            return "未知仓库"
-        if raw == "未知仓库":
+            return UNKNOWN_REPO
+        if raw == UNKNOWN_REPO:
             return raw
 
         value = raw
@@ -292,7 +288,15 @@ class StatsDatabase(BaseDatabase):
                 value = value.split("/", 1)[1]
 
         value = value.strip("/")
-        return value or "未知仓库"
+
+        # Drop leading host segment (e.g. "github.com/org/repo" -> "org/repo").
+        # A segment is considered a host if it contains '.' or ':'.
+        if "/" in value:
+            first, rest = value.split("/", 1)
+            if ("." in first or ":" in first) and rest.strip("/"):
+                value = rest.strip("/")
+
+        return value or UNKNOWN_REPO
 
     @staticmethod
     def _parse_author(author: Optional[str]) -> Tuple[str, Optional[str]]:
@@ -322,7 +326,9 @@ class StatsDatabase(BaseDatabase):
                 .filter(MetricsEventsCommitted.timestamp <= end_ts)
             )
             if repo_url:
-                query = query.filter(MetricsEventsCommitted.repo_url == repo_url)
+                query = query.filter(
+                    MetricsEventsCommitted.repo_url == normalize_repo_url(repo_url)
+                )
             if author:
                 author_key = author.strip()
                 query = query.filter(
@@ -373,8 +379,9 @@ class StatsDatabase(BaseDatabase):
             if end_ts is not None:
                 query = query.filter(MetricsEventsCommitted.timestamp <= end_ts)
             if repo_url:
+                normalized_repo_url = normalize_repo_url(repo_url)
                 query = query.filter(
-                    MetricsEventsCommitted.repo_url.contains(repo_url.strip())
+                    MetricsEventsCommitted.repo_url.contains(normalized_repo_url)
                 )
             if author:
                 author_key = author.strip()
@@ -455,7 +462,9 @@ class StatsDatabase(BaseDatabase):
                 .filter(MetricsEventsCheckpoint.kind == "ai_agent")
             )
             if repo_url:
-                query = query.filter(MetricsEventsCheckpoint.repo_url == repo_url)
+                query = query.filter(
+                    MetricsEventsCheckpoint.repo_url == normalize_repo_url(repo_url)
+                )
             if author:
                 author_key = author.strip()
                 query = query.filter(
@@ -486,7 +495,7 @@ class StatsDatabase(BaseDatabase):
 
     def get_or_create_repository(self, repo_path: str) -> str:
         self.consolidate_unknown_repositories()
-        normalized_path = self._normalize_repo_path(repo_path)
+        normalized_path = normalize_repo_url(repo_path)
         extracted_name = self._extract_repo_name(normalized_path)
 
         with session_scope(self.engine) as session:
@@ -643,7 +652,7 @@ class StatsDatabase(BaseDatabase):
                 query = query.filter(StatsRepository.repo_name.like(like))\
                 .filter(StatsRepository.repo_path.like(like))
                 
-            query = query.filter(StatsRepository.repo_name != '未知仓库').order_by(StatsRepository.created_at.desc())
+            query = query.filter(StatsRepository.repo_name != UNKNOWN_REPO).order_by(StatsRepository.created_at.desc())
             total = query.count()
             rows = query.offset((page - 1) * page_size).limit(page_size).all()
             return {
@@ -749,7 +758,7 @@ class StatsDatabase(BaseDatabase):
             items: List[Dict] = []
             for stat, repo_name, contributor_name in rows:
                 item = stat.to_dict()
-                item["repo_name"] = repo_name or "未知仓库"
+                item["repo_name"] = repo_name or UNKNOWN_REPO
                 item["contributor_name"] = contributor_name or "unknown"
                 items.append(item)
             return items
@@ -798,7 +807,7 @@ class StatsDatabase(BaseDatabase):
             items: List[Dict] = []
             for stat, repo_name, contributor_name in rows:
                 item = stat.to_dict()
-                item["repo_name"] = repo_name or "未知仓库"
+                item["repo_name"] = repo_name or UNKNOWN_REPO
                 item["contributor_name"] = contributor_name or "unknown"
                 items.append(item)
 

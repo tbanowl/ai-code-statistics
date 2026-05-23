@@ -128,7 +128,7 @@ def test_repository_contributor_and_daily_stats_flow(setup_dbs):
 
     assert repo_total == 1
     assert contributor_total == 1
-    assert repos[0]["repo_path"] == "https://github.com/org/repo-a.git"
+    assert repos[0]["repo_path"] == "github.com/org/repo-a"
     assert repos[0]["repo_name"] == "org/repo-a"
     assert contributors[0]["name"] == "alice"
     assert len(daily) == 1
