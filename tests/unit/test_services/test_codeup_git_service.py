@@ -89,7 +89,7 @@ def test_ensure_repo_clones_then_fetches_required_refs_and_commits(tmp_path):
     service = CodeupGitService(runner=runner)
 
     result = service.ensure_repo(
-        repo_url="https://codeup.aliyun.com/org/repo.git",
+        repo_url="codeup.aliyun.com/org/repo",
         repo_dir=tmp_path / "repo",
         target_branch="main",
         source_branch="feature/a",
@@ -117,7 +117,7 @@ def test_ensure_repo_existing_repo_fetches_required_refs_and_commits(tmp_path):
     service = CodeupGitService(runner=runner)
 
     result = service.ensure_repo(
-        repo_url="https://codeup.aliyun.com/org/repo.git",
+        repo_url="codeup.aliyun.com/org/repo",
         repo_dir=repo_dir,
         target_branch="main",
         source_branch="feature/a",
@@ -144,7 +144,7 @@ def test_ensure_repo_with_private_key_clones_and_fetches_with_git_ssh_command(tm
     service = CodeupGitService(runner=runner)
 
     result = service.ensure_repo(
-        repo_url="https://codeup.aliyun.com/org/repo.git",
+        repo_url="codeup.aliyun.com/org/repo",
         repo_dir=tmp_path / "repo",
         target_branch="main",
         source_branch="feature/a",
@@ -168,6 +168,17 @@ def test_ensure_repo_with_private_key_clones_and_fetches_with_git_ssh_command(tm
         assert "IdentitiesOnly=yes" in ssh_command
 
 
+def test_repo_url_for_auth_normalizes_scp_style_url_with_private_key():
+    service = CodeupGitService()
+
+    result = service._repo_url_for_auth(
+        "git@codeup.aliyun.com:org/repo.git",
+        VALID_PRIVATE_KEY,
+    )
+
+    assert result == "ssh://git@codeup.aliyun.com/org/repo.git"
+
+
 def test_existing_repo_fetches_with_private_key_env(tmp_path):
     repo_dir = tmp_path / "repo"
     (repo_dir / ".git").mkdir(parents=True)
@@ -181,7 +192,7 @@ def test_existing_repo_fetches_with_private_key_env(tmp_path):
     service = CodeupGitService(runner=runner)
 
     result = service.ensure_repo(
-        repo_url="https://codeup.aliyun.com/org/repo.git",
+        repo_url="codeup.aliyun.com/org/repo",
         repo_dir=repo_dir,
         target_branch="main",
         source_branch="feature/a",
@@ -208,7 +219,7 @@ def test_ensure_repo_rejects_invalid_private_key(tmp_path):
 
     with pytest.raises(CodeupGitError, match="Invalid SSH private key"):
         service.ensure_repo(
-            repo_url="https://codeup.aliyun.com/org/repo.git",
+            repo_url="codeup.aliyun.com/org/repo",
             repo_dir=tmp_path / "repo",
             target_branch="main",
             source_branch="feature/a",
@@ -502,3 +513,96 @@ def test_commit_parents_rejects_invalid_sha(commit_sha):
 
     with pytest.raises(CodeupGitError, match="commit_sha"):
         service.commit_parents(Path("/repo"), commit_sha)
+
+
+class TestRepoUrlForAuth:
+    """_repo_url_for_auth 对归一化 URL 的还原测试"""
+
+    def test_normalized_no_private_key_returns_https_url(self):
+        service = CodeupGitService()
+        result = service._repo_url_for_auth("codeup.aliyun.com/org/repo", None)
+        assert result == "https://codeup.aliyun.com/org/repo.git"
+
+    def test_normalized_with_private_key_returns_ssh_url(self):
+        service = CodeupGitService()
+        result = service._repo_url_for_auth("codeup.aliyun.com/org/repo", VALID_PRIVATE_KEY)
+        assert result == "ssh://git@codeup.aliyun.com/org/repo.git"
+
+    def test_legacy_https_no_private_key_returns_as_is(self):
+        service = CodeupGitService()
+        result = service._repo_url_for_auth("https://codeup.aliyun.com/org/repo.git", None)
+        assert result == "https://codeup.aliyun.com/org/repo.git"
+
+    def test_legacy_https_with_private_key_returns_ssh_url(self):
+        service = CodeupGitService()
+        result = service._repo_url_for_auth("https://codeup.aliyun.com/org/repo.git", VALID_PRIVATE_KEY)
+        assert result == "ssh://git@codeup.aliyun.com/org/repo.git"
+
+    def test_legacy_http_with_private_key_returns_ssh_url(self):
+        service = CodeupGitService()
+        result = service._repo_url_for_auth("http://codeup.aliyun.com/org/repo.git", VALID_PRIVATE_KEY)
+        assert result == "ssh://git@codeup.aliyun.com/org/repo.git"
+
+    def test_normalized_with_port_no_private_key(self):
+        service = CodeupGitService()
+        result = service._repo_url_for_auth("devops.cxmt.com:8022/group/project", None)
+        assert result == "https://devops.cxmt.com:8022/group/project.git"
+
+    def test_normalized_with_port_with_private_key(self):
+        service = CodeupGitService()
+        result = service._repo_url_for_auth("devops.cxmt.com:8022/group/project", VALID_PRIVATE_KEY)
+        assert result == "ssh://git@devops.cxmt.com:8022/group/project.git"
+
+
+def test_ensure_repo_normalized_url_with_private_key_uses_ssh_clone(tmp_path):
+    ssh_repo_url = "ssh://git@codeup.aliyun.com/org/repo.git"
+    runner = FakeRunner(
+        {
+            ("git", "clone", ssh_repo_url, str(tmp_path / "repo")): "",
+            ("git", "fetch", "origin", "main", "feature/a", "a" * 40): "",
+        }
+    )
+    service = CodeupGitService(runner=runner)
+
+    service.ensure_repo(
+        repo_url="codeup.aliyun.com/org/repo",
+        repo_dir=tmp_path / "repo",
+        target_branch="main",
+        source_branch="feature/a",
+        merge_commit_sha="a" * 40,
+        source_commit_shas=[],
+        clone_timeout=12,
+        fetch_timeout=34,
+        private_key=VALID_PRIVATE_KEY,
+    )
+
+    clone_call = runner.calls[0]
+    assert clone_call[0] == ["git", "clone", ssh_repo_url, str(tmp_path / "repo")]
+    assert clone_call[3] is not None
+    assert "GIT_SSH_COMMAND" in clone_call[3]
+
+
+def test_ensure_repo_normalized_url_without_private_key_uses_https_clone(tmp_path):
+    https_repo_url = "https://codeup.aliyun.com/org/repo.git"
+    runner = FakeRunner(
+        {
+            ("git", "clone", https_repo_url, str(tmp_path / "repo")): "",
+            ("git", "fetch", "origin", "main", "feature/a", "a" * 40): "",
+        }
+    )
+    service = CodeupGitService(runner=runner)
+
+    service.ensure_repo(
+        repo_url="codeup.aliyun.com/org/repo",
+        repo_dir=tmp_path / "repo",
+        target_branch="main",
+        source_branch="feature/a",
+        merge_commit_sha="a" * 40,
+        source_commit_shas=[],
+        clone_timeout=12,
+        fetch_timeout=34,
+    )
+
+    clone_call = runner.calls[0]
+    assert clone_call[0] == ["git", "clone", https_repo_url, str(tmp_path / "repo")]
+    assert clone_call[3] is None

@@ -7,6 +7,8 @@ import re
 from pathlib import Path
 from typing import Callable, Mapping
 
+from core.utils.repo_url import normalize_repo_url, restore_repo_url
+
 
 GitRunner = Callable[..., str]
 SAFE_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{7,40}$")
@@ -207,14 +209,29 @@ class CodeupGitService:
         )
 
     def _repo_url_for_auth(self, repo_url: str, private_key: str | None) -> str:
-        if private_key is None or not repo_url.startswith(("http://", "https://")):
+        # 检测是否为无协议输入：可能是已归一化 host/path，也可能是 scp-style git@host:path.git。
+        has_protocol = repo_url.startswith(("http://", "https://", "ssh://", "git://", "file://"))
+        normalized_repo_url = normalize_repo_url(repo_url) if not has_protocol else repo_url
+
+        if private_key is None:
+            if not has_protocol:
+                return restore_repo_url(normalized_repo_url, "https")
             return repo_url
-        ssh_url = repo_url.replace("https://", "ssh://git@", 1).replace(
-            "http://", "ssh://git@", 1
-        )
-        if not ssh_url.endswith(".git"):
-            ssh_url += ".git"
-        return ssh_url
+
+        # private_key 存在 → 需要 SSH URL
+        if not has_protocol:
+            return restore_repo_url(normalized_repo_url, "ssh")
+
+        # 兼容旧调用方传入完整 http/https URL 的情况
+        if repo_url.startswith(("http://", "https://")):
+            ssh_url = repo_url.replace("https://", "ssh://git@", 1).replace(
+                "http://", "ssh://git@", 1
+            )
+            if not ssh_url.endswith(".git"):
+                ssh_url += ".git"
+            return ssh_url
+
+        return repo_url
 
     def _run(
         self,
