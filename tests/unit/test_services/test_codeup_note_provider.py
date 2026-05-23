@@ -50,8 +50,9 @@ def test_batch_get_note_contents_returns_existing_db_notes_only():
         author_email="test@example.com",
     )
 
+    # Service normalizes repo_url, so DB stores "codeup.aliyun.com/org/repo"
     result = CodeupDatabaseNoteProvider().batch_get_note_contents(
-        repo_url, [existing, missing]
+        "codeup.aliyun.com/org/repo", [existing, missing]
     )
 
     assert result == {existing: content}

@@ -6,6 +6,7 @@ REST Notes Store 服务
 
 from core.config.logging import Logger
 from core.database.authorship_notes_db import AuthorshipNotesDatabase
+from core.utils.repo_url import normalize_repo_url
 
 
 class NotesRestService:
@@ -28,6 +29,7 @@ class NotesRestService:
         original_commit_sha: str | None = None,
     ):
         """创建或更新单个 note"""
+        repo_url = normalize_repo_url(repo_url)
         return self.database.create_or_update_note(
             repo_url=repo_url,
             branch=branch,
@@ -44,14 +46,17 @@ class NotesRestService:
 
     def get_note(self, repo_url: str, commit_sha: str):
         """获取单个 note"""
+        repo_url = normalize_repo_url(repo_url)
         return self.database.get_note(repo_url=repo_url, commit_sha=commit_sha)
 
     def batch_get_notes(self, repo_url: str, commit_shas: list):
         """批量获取 notes"""
+        repo_url = normalize_repo_url(repo_url)
         return self.database.batch_get_notes(repo_url=repo_url, commit_shas=commit_shas)
 
     def batch_push_notes(self, repo_url: str, notes_data: list):
         """批量推送（创建/更新）notes"""
+        repo_url = normalize_repo_url(repo_url)
         return self.database.batch_push_notes(repo_url=repo_url, notes_data=notes_data)
 
     def list_notes(
@@ -61,6 +66,7 @@ class NotesRestService:
         since_change_seq: int | None = None,
         limit: int | None = None,
     ):
+        repo_url = normalize_repo_url(repo_url)
         return self.database.list_notes(
             repo_url=repo_url,
             since_commit_time=since_commit_time,
@@ -70,6 +76,7 @@ class NotesRestService:
 
     def search_notes(self, repo_url: str, pattern: str):
         """在注释内容中搜索"""
+        repo_url = normalize_repo_url(repo_url)
         return self.database.search_notes(repo_url=repo_url, pattern=pattern)
 
     def close(self):

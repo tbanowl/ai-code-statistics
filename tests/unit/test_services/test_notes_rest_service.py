@@ -100,7 +100,7 @@ def test_create_note(service):
     )
 
     assert result.id is not None
-    assert result.repo_url == "https://github.com/test/repo.git"
+    assert result.repo_url == "github.com/test/repo"
     assert result.branch == "main"
     assert result.commit_sha == "abc123def4567890123456789012345678901234"
     assert result.note_content == "test content"
