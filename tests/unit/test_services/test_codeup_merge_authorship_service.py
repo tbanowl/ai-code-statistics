@@ -192,6 +192,12 @@ class FakeSshKeyService:
             return None
         return {"private_key": self.private_key}
 
+    def get_ssh_key_for_repo_url(self, repo_url):
+        self.calls.append(repo_url)
+        if self.private_key is None:
+            return None
+        return {"private_key": self.private_key}
+
 
 def available_ssh_key_service():
     return FakeSshKeyService(private_key="PRIVATE KEY")
@@ -346,10 +352,10 @@ def test_ssh_key_info_returns_key_for_task_ssh_key_id():
         ssh_key_service=ssh_key_service,
     )
 
-    ssh_key_info = service._ssh_key_info(SimpleNamespace(ssh_key_id=SSH_KEY_ID))
+    ssh_key_info = service._ssh_key_info(SimpleNamespace(repo_url=REPO_URL))
 
     assert ssh_key_info == {"private_key": "PRIVATE KEY"}
-    assert ssh_key_service.calls == [SSH_KEY_ID]
+    assert ssh_key_service.calls == [REPO_URL]
 
 
 def test_process_next_task_releases_for_retry_without_git_when_injected_ssh_key_missing():
@@ -399,7 +405,7 @@ def test_process_next_task_passes_injected_private_key_to_ensure_repo():
     result = service.process_next_task()
 
     assert result["success"] is True
-    assert ssh_key_service.calls == [SSH_KEY_ID]
+    assert ssh_key_service.calls == [REPO_URL]
     assert git_service.ensure_repo_calls[0]["private_key"] == "PRIVATE KEY"
     assert not isinstance(git_service.ensure_repo_calls[0]["private_key"], dict)
 
