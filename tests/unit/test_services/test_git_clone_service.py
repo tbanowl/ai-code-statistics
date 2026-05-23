@@ -207,3 +207,150 @@ test-key
             "ssh://git@example.com/repo.git",
             temp_dir,
         ]
+
+    @patch("core.services.git_clone_service.subprocess.run")
+    def test_clone_with_normalized_repo_url(self, mock_run):
+        """归一化格式 host/path 被转换为 ssh://git@host/path.git"""
+        service = GitCloneService()
+        valid_key = """-----BEGIN OPENSSH PRIVATE KEY-----
+test-key
+-----END OPENSSH PRIVATE KEY-----"""
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stderr = ""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = service.clone_with_ssh_key(
+                "gitlab.com/mygroup/myrepo",
+                valid_key,
+                temp_dir,
+            )
+
+        assert result is True
+        clone_cmd = mock_run.call_args.args[0]
+        assert clone_cmd[5] == "ssh://git@gitlab.com/mygroup/myrepo.git"
+
+    @patch("core.services.git_clone_service.subprocess.run")
+    def test_clone_with_normalized_devops_with_port(self, mock_run):
+        """归一化格式带端口的 devops 地址（devops.cxmt.com:8022/group/project）转换为 SSH URL"""
+        service = GitCloneService()
+        valid_key = """-----BEGIN OPENSSH PRIVATE KEY-----
+test-key
+-----END OPENSSH PRIVATE KEY-----"""
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stderr = ""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = service.clone_with_ssh_key(
+                "devops.cxmt.com:8022/group/project",
+                valid_key,
+                temp_dir,
+            )
+
+        assert result is True
+        clone_cmd = mock_run.call_args.args[0]
+        assert clone_cmd[5] == "ssh://git@devops.cxmt.com:8022/group/project.git"
+
+    @patch("core.services.git_clone_service.subprocess.run")
+    def test_clone_legacy_https_url_converted_to_ssh(self, mock_run):
+        """遗留 https URL 被正确转换为 SSH URL"""
+        service = GitCloneService()
+        valid_key = """-----BEGIN OPENSSH PRIVATE KEY-----
+test-key
+-----END OPENSSH PRIVATE KEY-----"""
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stderr = ""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = service.clone_with_ssh_key(
+                "https://gitlab.com/mygroup/myrepo.git",
+                valid_key,
+                temp_dir,
+            )
+
+        assert result is True
+        clone_cmd = mock_run.call_args.args[0]
+        assert clone_cmd[5] == "ssh://git@gitlab.com/mygroup/myrepo.git"
+
+    @patch("core.services.git_clone_service.subprocess.run")
+    def test_clone_scp_style_repo_url_converted_to_ssh(self, mock_run):
+        """scp-style git@host:path.git 被规范化后还原为 SSH URL"""
+        service = GitCloneService()
+        valid_key = """-----BEGIN OPENSSH PRIVATE KEY-----
+test-key
+-----END OPENSSH PRIVATE KEY-----"""
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stderr = ""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = service.clone_with_ssh_key(
+                "git@codeup.aliyun.com:org/repo.git",
+                valid_key,
+                temp_dir,
+            )
+
+        assert result is True
+        clone_cmd = mock_run.call_args.args[0]
+        assert clone_cmd[5] == "ssh://git@codeup.aliyun.com/org/repo.git"
+
+    @patch("core.services.git_clone_service.subprocess.run")
+    def test_clone_legacy_http_devops_url_converted_to_ssh_with_port(self, mock_run):
+        """遗留 http://devops.cxmt.com/group/project 转换后应保留端口 8022"""
+        service = GitCloneService()
+        valid_key = """-----BEGIN OPENSSH PRIVATE KEY-----
+test-key
+-----END OPENSSH PRIVATE KEY-----"""
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stderr = ""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = service.clone_with_ssh_key(
+                "http://devops.cxmt.com/group/project",
+                valid_key,
+                temp_dir,
+            )
+
+        assert result is True
+        clone_cmd = mock_run.call_args.args[0]
+        assert clone_cmd[5] == "ssh://git@devops.cxmt.com:8022/group/project.git"
+
+    @patch("core.services.git_clone_service.subprocess.run")
+    def test_clone_legacy_https_devops_url_injects_port(self, mock_run):
+        """遗留 https://devops.cxmt.com/group/project 注入端口 8022"""
+        service = GitCloneService()
+        valid_key = """-----BEGIN OPENSSH PRIVATE KEY-----
+test-key
+-----END OPENSSH PRIVATE KEY-----"""
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stderr = ""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = service.clone_with_ssh_key(
+                "https://devops.cxmt.com/group/project",
+                valid_key,
+                temp_dir,
+            )
+
+        assert result is True
+        clone_cmd = mock_run.call_args.args[0]
+        assert clone_cmd[5] == "ssh://git@devops.cxmt.com:8022/group/project.git"
+
+    @patch("core.services.git_clone_service.subprocess.run")
+    def test_clone_ssh_url_passed_through(self, mock_run):
+        """已经是 SSH 格式的 URL 直接透传"""
+        service = GitCloneService()
+        valid_key = """-----BEGIN OPENSSH PRIVATE KEY-----
+test-key
+-----END OPENSSH PRIVATE KEY-----"""
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stderr = ""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = service.clone_with_ssh_key(
+                "ssh://git@devops.cxmt.com:8022/group/project.git",
+                valid_key,
+                temp_dir,
+            )
+
+        assert result is True
+        clone_cmd = mock_run.call_args.args[0]
+        assert clone_cmd[5] == "ssh://git@devops.cxmt.com:8022/group/project.git"

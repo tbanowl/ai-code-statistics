@@ -6,6 +6,7 @@ import shutil
 import fnmatch
 from typing import Optional
 from core.config.logging import Logger
+from core.utils.repo_url import normalize_repo_url, restore_repo_url
 
 
 class GitCloneService:
@@ -54,13 +55,20 @@ class GitCloneService:
             env = os.environ.copy()
             env['GIT_SSH_COMMAND'] = ssh_command
 
-            # 将 http/https 地址改为 ssh
-            if repo_url.startswith('http'):
-                repo_url = repo_url.replace('https://', 'ssh://git@')
-                repo_url = repo_url.replace('http://', 'ssh://git@')
-                repo_url = repo_url.replace('devops.cxmt.com', 'devops.cxmt.com:8022')
-                if not repo_url.endswith('.git'):
-                    repo_url += '.git'
+            # 将仓库地址转换为 SSH URL
+            if repo_url.startswith('http://') or repo_url.startswith('https://'):
+                # 遗留完整 URL：先归一化，再还原为 SSH
+                normalized = normalize_repo_url(repo_url)
+                # 遗留兼容：devops.cxmt.com 的 HTTP URL 无端口时注入 :8022
+                if (normalized.startswith('devops.cxmt.com/')
+                        and ':8022' not in normalized):
+                    normalized = normalized.replace(
+                        'devops.cxmt.com/', 'devops.cxmt.com:8022/', 1)
+                repo_url = restore_repo_url(normalized, "ssh")
+            elif not repo_url.startswith('ssh://') and not repo_url.startswith('git://'):
+                # 无协议输入：可能是已归一化 host/path，也可能是 scp-style git@host:path.git。
+                normalized = normalize_repo_url(repo_url)
+                repo_url = restore_repo_url(normalized, "ssh")
 
             cmd = [
                 'git',
