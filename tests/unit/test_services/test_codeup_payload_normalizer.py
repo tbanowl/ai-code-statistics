@@ -1,4 +1,5 @@
 from core.services.codeup_payload_normalizer import CodeupPayloadNormalizer
+from core.utils.repo_url import UNKNOWN_REPO
 
 
 def test_normalizes_new_codeup_payload_with_stable_ids():
@@ -24,7 +25,7 @@ def test_normalizes_new_codeup_payload_with_stable_ids():
 
     event = CodeupPayloadNormalizer().normalize(payload)
 
-    assert event.repo_url == "https://codeup.aliyun.com/org/repo.git"
+    assert event.repo_url == "codeup.aliyun.com/org/repo"
     assert event.project_id == "project-1"
     assert event.merge_request_id == "mr-biz-42"
     assert event.source_branch == "feature/a"
@@ -51,7 +52,7 @@ def test_normalizes_legacy_payload_with_fallbacks():
 
     event = CodeupPayloadNormalizer().normalize(payload)
 
-    assert event.repo_url == "https://codeup.aliyun.com/org/legacy.git"
+    assert event.repo_url == "codeup.aliyun.com/org/legacy"
     assert event.project_id == "123"
     assert event.merge_request_id == "12"
     assert event.event_action == "merged_success"
@@ -67,6 +68,6 @@ def test_missing_repo_url_is_recorded_without_guessing():
 
     event = CodeupPayloadNormalizer().normalize(payload)
 
-    assert event.repo_url is None
+    assert event.repo_url == UNKNOWN_REPO
     assert event.merge_request_id == "12"
     assert event.payload_version_hint == "unknown"

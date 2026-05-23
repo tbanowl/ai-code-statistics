@@ -74,7 +74,7 @@ def test_merged_payload_creates_task():
 
     task = CodeupMergeAuthorshipDatabase().get_task(result["task_id"])
     assert task is not None
-    assert task.repo_url == "https://codeup.aliyun.com/org/repo.git"
+    assert task.repo_url == "codeup.aliyun.com/org/repo"
     assert task.project_id == "1001"
     assert task.merge_request_id == "42"
     assert task.source_branch == "feature/codeup"
@@ -96,7 +96,7 @@ def test_new_version_merged_payload_stores_normalizer_fields():
     assert task.payload_version_hint == "new"
     assert task.normalized_payload is not None
     normalized = json.loads(task.normalized_payload)
-    assert normalized["repo_url"] == "https://codeup.aliyun.com/org/repo.git"
+    assert normalized["repo_url"] == "codeup.aliyun.com/org/repo"
     assert normalized["merge_request_id"] == "mr-biz-42"
 
 

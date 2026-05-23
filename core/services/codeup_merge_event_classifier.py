@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from core.services.codeup_payload_normalizer import NormalizedCodeupMergeEvent
+from core.utils.repo_url import UNKNOWN_REPO
 
 
 @dataclass(frozen=True)
@@ -22,7 +23,7 @@ class CodeupMergeEventClassifier:
     UPDATE_ACTIONS = {"open", "update", "reopen", "reopened", "close", "closed"}
 
     def classify(self, event: NormalizedCodeupMergeEvent) -> CodeupMergeEventClassification:
-        if not event.repo_url or not event.merge_request_id:
+        if not event.repo_url or event.repo_url == UNKNOWN_REPO or not event.merge_request_id:
             return CodeupMergeEventClassification("invalid", False, "missing_required_identity", 400)
 
         action = (event.event_action or "").lower()

@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from core.utils.repo_url import normalize_repo_url
+
 
 @dataclass(frozen=True)
 class NormalizedCodeupMergeEvent:
@@ -48,7 +50,7 @@ class CodeupPayloadNormalizer:
         version_hint = "new" if payload.get("version") == "new" else "legacy" if project or repository else "unknown"
 
         return NormalizedCodeupMergeEvent(
-            repo_url=self._first_string(
+            repo_url=normalize_repo_url(self._first_string(
                 repository.get("git_http_url"),
                 repository.get("http_url"),
                 repository.get("url"),
@@ -57,7 +59,7 @@ class CodeupPayloadNormalizer:
                 project_repository.get("url"),
                 project.get("git_http_url"),
                 project.get("git_ssh_url"),
-            ),
+            )),
             project_id=self._first_string(attrs.get("project_id"), project.get("id"), payload.get("project_id")),
             merge_request_id=self._first_string(
                 attrs.get("biz_id"),

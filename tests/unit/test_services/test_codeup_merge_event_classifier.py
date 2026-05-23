@@ -1,10 +1,11 @@
 from core.services.codeup_merge_event_classifier import CodeupMergeEventClassifier
 from core.services.codeup_payload_normalizer import NormalizedCodeupMergeEvent
+from core.utils.repo_url import UNKNOWN_REPO
 
 
 def _event(**overrides):
     values = {
-        "repo_url": "https://codeup.aliyun.com/org/repo.git",
+        "repo_url": "codeup.aliyun.com/org/repo",
         "project_id": "100",
         "merge_request_id": "42",
         "source_branch": "feature/a",
@@ -43,6 +44,13 @@ def test_open_event_is_skipped_as_mr_update():
 
 def test_missing_repo_is_invalid():
     result = CodeupMergeEventClassifier().classify(_event(repo_url=None))
+    assert result.event_kind == "invalid"
+    assert result.should_enqueue is False
+    assert result.http_status == 400
+
+
+def test_unknown_repo_is_invalid():
+    result = CodeupMergeEventClassifier().classify(_event(repo_url=UNKNOWN_REPO))
     assert result.event_kind == "invalid"
     assert result.should_enqueue is False
     assert result.http_status == 400
