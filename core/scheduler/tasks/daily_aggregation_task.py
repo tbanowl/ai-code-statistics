@@ -5,6 +5,7 @@ from typing import Dict, List
 from core.scheduler.tasks.base import BaseTask
 from core.scheduler.scheduled import scheduled
 from core.database import StatsDatabase
+from core.utils.repo_url import normalize_repo_url
 
 
 @scheduled(cron="0 2 * * *", job_id="daily_aggregation", name="每日统计聚合")
@@ -61,7 +62,7 @@ class DailyAggregationTask(BaseTask):
                 ).timestamp()
                 * 1000
             )
-            stat_date = cursor.strftime('%Y%m%d')
+            stat_date = int(cursor.strftime("%Y%m%d"))
 
             self.logger.info(f"聚合时间范围: {day_start_ts} - {day_end_ts}")
 
@@ -104,7 +105,7 @@ class DailyAggregationTask(BaseTask):
         aggregated = {}
 
         for event in committed_events:
-            repo_path = event.get("repo_url", "")
+            repo_path = normalize_repo_url(event.get("repo_url"))
             author_name = event.get("author", "")
             author_email = event.get("author_email")
             author_uid = event.get("author_uid") or author_name
@@ -131,7 +132,7 @@ class DailyAggregationTask(BaseTask):
                 stats["git_ai_version"] = event.get("git_ai_version")
 
         for event in checkpoint_events:
-            repo_path = event.get("repo_url", "")
+            repo_path = normalize_repo_url(event.get("repo_url"))
             author_name = event.get("author", "")
             author_email = event.get("author_email")
             author_uid = event.get("author_uid") or author_name
