@@ -101,11 +101,17 @@ class GitBlameStatsTask(BaseTask):
                 )
 
                 if result:
-                    success_repos += 1
-                    self.logger.info(
-                        f"仓库 {repo_name} 统计完成: "
-                        f"成功分支 {result.get('success_branches', 0)}/{result.get('total_branches', 0)}"
-                    )
+                    if result.get("skipped"):
+                        skipped_repos += 1
+                        self.logger.info(
+                            f"仓库 {repo_name} 跳过统计: {result.get('skipped_reason')}"
+                        )
+                    else:
+                        success_repos += 1
+                        self.logger.info(
+                            f"仓库 {repo_name} 统计完成: "
+                            f"成功分支 {result.get('success_branches', 0)}/{result.get('total_branches', 0)}"
+                        )
                 else:
                     failed_repos += 1
 
@@ -175,8 +181,16 @@ class GitBlameStatsTask(BaseTask):
             )
 
             if not target_branches:
-                self.logger.warning("没有匹配到任何分支")
-                return None
+                self.logger.warning("仓库分支表没有可统计分支，跳过统计")
+                return {
+                    "success": True,
+                    "total_branches": 0,
+                    "success_branches": 0,
+                    "failed_branches": 0,
+                    "branch_results": {},
+                    "skipped": True,
+                    "skipped_reason": "no_branches",
+                }
 
             # 获取统计配置
             config = load_config()
@@ -194,6 +208,7 @@ class GitBlameStatsTask(BaseTask):
                 # 切换分支
                 if not self.git_clone_service.checkout_branch(temp_dir, branch):
                     self.logger.warning(f"分支 {branch} 切换失败，跳过")
+                    self.blame_stats_db.mark_repository_branch_deleted(repo_id, branch)
                     failed_count += 1
                     continue
 
@@ -209,6 +224,9 @@ class GitBlameStatsTask(BaseTask):
 
                 # 保存该分支的统计结果
                 self._save_branch_stats(repo_id, stat_date, result)
+                self.blame_stats_db.update_repository_last_blame_commit_sha(
+                    repo_id, result.commit_sha
+                )
 
                 branch_results[branch] = {
                     "total_lines": result.total_lines,

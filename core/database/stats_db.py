@@ -580,6 +580,8 @@ class StatsDatabase(BaseDatabase):
                 .first()
             )
             if row:
+                row.is_deleted = 0
+                row.deleted_at = None
                 row.updated_at = now_ts()
                 session.flush()
                 return row.id
@@ -587,6 +589,8 @@ class StatsDatabase(BaseDatabase):
             record = StatsRepositoryBranch(
                 repo_id=repo_id,
                 branch_name=normalized_branch,
+                is_deleted=0,
+                deleted_at=None,
             )
             session.add(record)
             session.flush()

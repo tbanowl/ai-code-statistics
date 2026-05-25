@@ -108,3 +108,43 @@ author Alice
 
     assert result[1]["commit"] == "abc123"
     assert result[1]["author"] == "Alice"
+
+
+def test_analyze_file_blame_excludes_blank_lines(tmp_path):
+    class FakeDatabase:
+        def get_git_notes_batch(self, commits):
+            return {}
+
+    service = BlameStatsService(FakeDatabase())
+    service._run_git_blame = lambda repo_dir, rel_path: """abc123 1 1 1
+author Alice
+author-mail <alice@example.com>
+	print("hello")
+abc123 2 2 1
+author Alice
+author-mail <alice@example.com>
+	
+abc123 3 3 1
+author Alice
+author-mail <alice@example.com>
+	   
+abc123 4 4 1
+author Alice
+author-mail <alice@example.com>
+	return 1"""
+
+    file_path = tmp_path / "app.py"
+    file_path.write_text('print("hello")\n\n   \nreturn 1\n')
+
+    result = service.analyze_file_blame(
+        "ssh://git@example.com/repo.git",
+        str(file_path),
+        str(tmp_path),
+        "abc123",
+        {},
+    )
+
+    assert result.total_lines == 2
+    assert result.non_ai_lines == 2
+    assert result.ai_lines == 0
+    assert result.contributor_stats["Alice"]["total_lines"] == 2

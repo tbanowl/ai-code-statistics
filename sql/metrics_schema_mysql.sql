@@ -165,6 +165,7 @@ CREATE TABLE IF NOT EXISTS stats_repositories (
     repo_name VARCHAR(100) COMMENT '仓库名称',
     repo_stats_flag INT DEFAULT 1 COMMENT '是否启用归因统计（0/1）',
     ssh_key_id VARCHAR(20) COMMENT '关联的 SSH Key ID',
+    last_blame_commit_sha VARCHAR(40) COMMENT '最近一次 Git Blame 统计成功的提交 SHA',
     created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
     updated_at BIGINT NOT NULL COMMENT '更新时间戳（毫秒）',
     INDEX idx_stats_repositories_name (repo_name)
@@ -188,6 +189,8 @@ CREATE TABLE IF NOT EXISTS stats_repositories_branch (
     id VARCHAR(20) PRIMARY KEY COMMENT '主键，使用 XID',
     repo_id VARCHAR(20) NOT NULL COMMENT '仓库 ID',
     branch_name VARCHAR(255) NOT NULL COMMENT '分支名称',
+    is_deleted INT NOT NULL DEFAULT 0 COMMENT '是否已删除（0/1）',
+    deleted_at BIGINT COMMENT '删除时间戳（毫秒）',
     created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
     updated_at BIGINT NOT NULL COMMENT '更新时间戳（毫秒）',
     UNIQUE KEY uk_repositories_branch_repo_name (repo_id, branch_name),

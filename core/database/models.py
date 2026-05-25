@@ -289,6 +289,8 @@ class StatsRepository(ModelBase):
     repo_stats_flag: Mapped[int] = mapped_column(Integer, default=1)
     # 关联的 SSH Key ID（为空时使用配置文件默认 Key）
     ssh_key_id: Mapped[str] = mapped_column(String(20), nullable=True)
+    # 最近一次 Git Blame 统计成功的提交 SHA
+    last_blame_commit_sha: Mapped[str] = mapped_column(String(40), nullable=True)
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
     updated_at: Mapped[int] = mapped_column(
         BigInteger, nullable=False, default=now_ts, onupdate=now_ts
@@ -326,6 +328,8 @@ class StatsRepositoryBranch(ModelBase):
     id: Mapped[str] = mapped_column(String(20), primary_key=True, default=gen_xid)
     repo_id: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     branch_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_deleted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    deleted_at: Mapped[int] = mapped_column(BigInteger, nullable=True)
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
     updated_at: Mapped[int] = mapped_column(
         BigInteger, nullable=False, default=now_ts, onupdate=now_ts

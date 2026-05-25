@@ -83,6 +83,24 @@ class BlameStatsDatabase(BaseDatabase):
             repo.updated_at = int(time.time() * 1000)
             return True
 
+    def update_repository_last_blame_commit_sha(
+        self, repo_id: str, commit_sha: str
+    ) -> bool:
+        """更新仓库最近一次 Git Blame 统计成功的提交 SHA。"""
+        with session_scope(self.engine) as session:
+            repo = (
+                session.query(StatsRepository)
+                .filter(StatsRepository.id == repo_id)
+                .first()
+            )
+
+            if not repo:
+                return False
+
+            repo.last_blame_commit_sha = commit_sha
+            repo.updated_at = int(time.time() * 1000)
+            return True
+
     def get_repositories_to_stat(self) -> list:
         """
         获取需要统计的仓库列表
@@ -181,12 +199,40 @@ class BlameStatsDatabase(BaseDatabase):
         with session_scope(self.engine) as session:
             rows = (
                 session.query(StatsRepositoryBranch)
-                .filter(StatsRepositoryBranch.repo_id == repo_id)
+                .filter(
+                    StatsRepositoryBranch.repo_id == repo_id,
+                    StatsRepositoryBranch.is_deleted == 0,
+                )
                 .order_by(StatsRepositoryBranch.branch_name.asc())
                 .all()
             )
 
             return [row.branch_name for row in rows if (row.branch_name or "").strip()]
+
+    def mark_repository_branch_deleted(self, repo_id: str, branch_name: str) -> bool:
+        """将仓库分支标记为已删除。"""
+        normalized_branch = (branch_name or "").strip()
+        if not normalized_branch:
+            return False
+
+        now = int(time.time() * 1000)
+        with session_scope(self.engine) as session:
+            row = (
+                session.query(StatsRepositoryBranch)
+                .filter(
+                    StatsRepositoryBranch.repo_id == repo_id,
+                    StatsRepositoryBranch.branch_name == normalized_branch,
+                )
+                .first()
+            )
+
+            if not row:
+                return False
+
+            row.is_deleted = 1
+            row.deleted_at = now
+            row.updated_at = now
+            return True
 
     def save_repo_branch_config(
         self,

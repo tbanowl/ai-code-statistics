@@ -1,5 +1,6 @@
 from unittest.mock import MagicMock
 
+from core.services.blame_stats_service import RepoBlameResult
 from core.scheduler.tasks.git_blame_stats_task import GitBlameStatsTask
 
 
@@ -31,4 +32,138 @@ def test_stat_repository_reads_branches_from_repository_branch_table(tmp_path):
         "private-key",
         task.git_clone_service.clone_with_ssh_key.call_args.args[2],
         depth=1,
+    )
+
+
+def test_execute_counts_repository_without_branches_as_skipped():
+    task = GitBlameStatsTask.__new__(GitBlameStatsTask)
+    task.logger = MagicMock()
+    task.ssh_key_service = MagicMock()
+    task.blame_stats_db = MagicMock()
+
+    task.ssh_key_service.load_default_ssh_key_from_config.return_value = None
+    task.ssh_key_service.get_ssh_key_for_repo.return_value = {
+        "private_key": "private-key"
+    }
+    task.blame_stats_db.get_repositories_to_stat.return_value = [
+        {
+            "id": "repo-1",
+            "repo_path": "ssh://git@example.com/repo.git",
+            "repo_name": "repo",
+            "ssh_key_id": None,
+        }
+    ]
+    task._stat_repository = MagicMock(
+        return_value={
+            "success": True,
+            "skipped": True,
+            "skipped_reason": "no_branches",
+            "total_branches": 0,
+            "success_branches": 0,
+            "failed_branches": 0,
+            "branch_results": {},
+        }
+    )
+
+    result = task.execute({"stat_date": "20260517"})
+
+    assert result["success_repos"] == 0
+    assert result["failed_repos"] == 0
+    assert result["skipped_repos"] == 1
+
+
+def test_stat_repository_skips_when_repository_branch_table_is_empty():
+    task = GitBlameStatsTask.__new__(GitBlameStatsTask)
+    task.logger = MagicMock()
+    task.blame_stats_db = MagicMock()
+    task.ssh_key_service = MagicMock()
+    task.git_clone_service = MagicMock()
+    task.blame_stats_service = MagicMock()
+
+    task.git_clone_service.clone_with_ssh_key.return_value = True
+    task.blame_stats_db.get_repository_branches.return_value = []
+
+    result = task._stat_repository(
+        "repo-1",
+        "ssh://git@example.com/repo.git",
+        "20260517",
+        {"private_key": "private-key"},
+    )
+
+    assert result == {
+        "success": True,
+        "total_branches": 0,
+        "success_branches": 0,
+        "failed_branches": 0,
+        "branch_results": {},
+        "skipped": True,
+        "skipped_reason": "no_branches",
+    }
+    task.git_clone_service.checkout_branch.assert_not_called()
+    task.blame_stats_service.analyze_repository.assert_not_called()
+
+
+def test_stat_repository_marks_missing_branch_deleted():
+    task = GitBlameStatsTask.__new__(GitBlameStatsTask)
+    task.logger = MagicMock()
+    task.blame_stats_db = MagicMock()
+    task.ssh_key_service = MagicMock()
+    task.git_clone_service = MagicMock()
+    task.blame_stats_service = MagicMock()
+
+    task.git_clone_service.clone_with_ssh_key.return_value = True
+    task.blame_stats_db.get_repository_branches.return_value = ["main"]
+    task.git_clone_service.checkout_branch.return_value = False
+
+    result = task._stat_repository(
+        "repo-1",
+        "ssh://git@example.com/repo.git",
+        "20260517",
+        {"private_key": "private-key"},
+    )
+
+    assert result["failed_branches"] == 1
+    task.blame_stats_db.mark_repository_branch_deleted.assert_called_once_with(
+        "repo-1", "main"
+    )
+    task.blame_stats_service.analyze_repository.assert_not_called()
+
+
+def test_stat_repository_records_last_blame_commit_sha_after_success():
+    task = GitBlameStatsTask.__new__(GitBlameStatsTask)
+    task.logger = MagicMock()
+    task.blame_stats_db = MagicMock()
+    task.ssh_key_service = MagicMock()
+    task.git_clone_service = MagicMock()
+    task.blame_stats_service = MagicMock()
+    task._save_branch_stats = MagicMock()
+
+    task.git_clone_service.clone_with_ssh_key.return_value = True
+    task.blame_stats_db.get_repository_branches.return_value = ["main"]
+    task.blame_stats_db.get_repository_repo_url.return_value = (
+        "ssh://git@example.com/repo.git"
+    )
+    task.git_clone_service.checkout_branch.return_value = True
+    task.blame_stats_service.analyze_repository.return_value = RepoBlameResult(
+        stat_date="20260517",
+        commit_sha="abc123def456",
+        branch="main",
+        total_lines=10,
+        ai_lines=4,
+        non_ai_lines=6,
+        total_files=1,
+        files_results=[],
+        contributor_stats={},
+    )
+
+    result = task._stat_repository(
+        "repo-1",
+        "ssh://git@example.com/repo.git",
+        "20260517",
+        {"private_key": "private-key"},
+    )
+
+    assert result["success_branches"] == 1
+    task.blame_stats_db.update_repository_last_blame_commit_sha.assert_called_once_with(
+        "repo-1", "abc123def456"
     )

@@ -12,6 +12,7 @@ from core.database.blame_stats_db import BlameStatsDatabase
 from core.database.base import session_scope
 from core.database.models import AuthorshipNotes
 from core.database.models import StatsBlameRepo, StatsBlameFile, StatsBlameRepoContributor
+from core.database.models import StatsRepository, StatsRepositoryBranch
 
 
 @pytest.fixture
@@ -83,6 +84,46 @@ def test_get_repository_branches_reads_repository_branch_table(blame_stats_db):
     stats_db.ensure_repository_branch(repo_id, "main")
 
     assert blame_stats_db.get_repository_branches(repo_id) == ["main", "release"]
+
+
+def test_repository_branch_soft_delete_excludes_branch_from_stats(blame_stats_db):
+    stats_db = StatsDatabase()
+    repo_id = stats_db.get_or_create_repository("https://example.com/repo.git")
+    stats_db.ensure_repository_branch(repo_id, "main")
+    stats_db.ensure_repository_branch(repo_id, "release")
+
+    assert blame_stats_db.mark_repository_branch_deleted(repo_id, "release") is True
+
+    assert blame_stats_db.get_repository_branches(repo_id) == ["main"]
+    with session_scope(blame_stats_db.engine) as session:
+        row = (
+            session.query(StatsRepositoryBranch)
+            .filter(StatsRepositoryBranch.repo_id == repo_id)
+            .filter(StatsRepositoryBranch.branch_name == "release")
+            .one()
+        )
+        assert row.is_deleted == 1
+        assert row.deleted_at is not None
+
+
+def test_update_repository_last_blame_commit_sha(blame_stats_db):
+    stats_db = StatsDatabase()
+    repo_id = stats_db.get_or_create_repository("https://example.com/repo.git")
+
+    assert (
+        blame_stats_db.update_repository_last_blame_commit_sha(
+            repo_id, "abc123def456"
+        )
+        is True
+    )
+
+    with session_scope(blame_stats_db.engine) as session:
+        repo = (
+            session.query(StatsRepository)
+            .filter(StatsRepository.id == repo_id)
+            .one()
+        )
+        assert repo.last_blame_commit_sha == "abc123def456"
 
 
 def test_save_branch_stats_batch_keeps_multiple_branches(blame_stats_db):

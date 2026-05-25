@@ -481,12 +481,16 @@ class BlameStatsService:
             unique_commits = list({line["commit"] for line in blame_data.values()})
             new_notes_cache = self._notes_cache(unique_commits, notes_cache)
 
-            total_lines = len(blame_data)
+            total_lines = 0
             ai_lines = 0
             non_ai_lines = 0
             contributor_stats = {}
 
             for line_num, line_info in blame_data.items():
+                if not line_info.get("content", "").strip():
+                    continue
+
+                total_lines += 1
                 is_ai, ai_author = self._is_ai_line(
                     line_num, rel_path, line_info["commit"], new_notes_cache
                 )
@@ -569,10 +573,17 @@ class BlameStatsService:
                         author_mail = lines[i][13:-1]
                     i += 1
 
+                content = ""
                 if i < len(lines) and lines[i].startswith("\t"):
+                    content = lines[i][1:]
                     i += 1
 
-                result[final_line] = {"commit": commit_sha, "author": author, "author_mail": author_mail}
+                result[final_line] = {
+                    "commit": commit_sha,
+                    "author": author,
+                    "author_mail": author_mail,
+                    "content": content,
+                }
                 continue
 
             i += 1
