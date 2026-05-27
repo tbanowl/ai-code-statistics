@@ -346,6 +346,56 @@ def test_merge_base_and_rev_list_commands_support_source_sha_derivation():
     ]
 
 
+def test_merge_base_uses_remote_tracking_ref_when_source_branch_is_not_local():
+    source_branch = "git-ai-1"
+    merge_sha = "a" * 40
+    base_sha = "c" * 40
+    calls = []
+
+    def runner(args, cwd, timeout, env=None):
+        calls.append((args, cwd, timeout, env))
+        if args == ["git", "merge-base", source_branch, merge_sha]:
+            raise CodeupGitError("git command failed: fatal: Not a valid object name git-ai-1")
+        if args == ["git", "merge-base", f"origin/{source_branch}", merge_sha]:
+            return f"{base_sha}\n"
+        raise AssertionError(f"unexpected git args: {args}")
+
+    service = CodeupGitService(runner=runner)
+
+    result = service.merge_base(Path("/repo"), source_branch, merge_sha)
+
+    assert result == base_sha
+    assert calls == [
+        (["git", "merge-base", source_branch, merge_sha], Path("/repo"), 60, None),
+        (["git", "merge-base", f"origin/{source_branch}", merge_sha], Path("/repo"), 60, None),
+    ]
+
+
+def test_rev_list_uses_remote_tracking_ref_when_range_head_branch_is_not_local():
+    base_sha = "c" * 40
+    source_branch = "git-ai-1"
+    head_sha = "b" * 40
+    calls = []
+
+    def runner(args, cwd, timeout, env=None):
+        calls.append((args, cwd, timeout, env))
+        if args == ["git", "rev-list", f"{base_sha}..{source_branch}"]:
+            raise CodeupGitError("git command failed: fatal: Not a valid object name git-ai-1")
+        if args == ["git", "rev-list", f"{base_sha}..origin/{source_branch}"]:
+            return f"{head_sha}\n"
+        raise AssertionError(f"unexpected git args: {args}")
+
+    service = CodeupGitService(runner=runner)
+
+    result = service.rev_list(Path("/repo"), f"{base_sha}..{source_branch}")
+
+    assert result == [head_sha]
+    assert calls == [
+        (["git", "rev-list", f"{base_sha}..{source_branch}"], Path("/repo"), 60, None),
+        (["git", "rev-list", f"{base_sha}..origin/{source_branch}"], Path("/repo"), 60, None),
+    ]
+
+
 @pytest.mark.parametrize("revision_range", ["", "   ", "-n1"])
 def test_rev_list_rejects_empty_or_option_like_revision_ranges(revision_range):
     service = CodeupGitService(runner=FakeRunner({}))

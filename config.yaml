@@ -37,7 +37,7 @@ scheduler:
     # Codeup Merge AI 归属重算任务
     codeup_merge_authorship:
       enabled: true
-      cron: "*/2 * * * *"
+      cron: "*/1 * * * *"
       batch_size: 10
       timeout_minutes: 60
 

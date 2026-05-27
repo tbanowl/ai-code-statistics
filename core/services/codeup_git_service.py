@@ -83,15 +83,17 @@ class CodeupGitService:
     def merge_base(self, repo_path: Path, source_ref: str, target_ref_or_merge_sha: str) -> str:
         self._validate_ref(source_ref, "source_ref")
         self._validate_ref(target_ref_or_merge_sha, "target_ref_or_merge_sha")
-        stdout = self._run(
-            ["git", "merge-base", source_ref, target_ref_or_merge_sha], repo_path
+        stdout = self._run_with_remote_ref_fallback(
+            repo_path,
+            ["git", "merge-base", source_ref, target_ref_or_merge_sha],
+            source_ref,
         ).strip()
         self._validate_commit_sha(stdout)
         return stdout
 
     def rev_list(self, repo_path: Path, revision_range: str) -> list[str]:
         self._validate_ref(revision_range, "revision_range")
-        stdout = self._run(["git", "rev-list", revision_range], repo_path)
+        stdout = self._run_rev_list(repo_path, revision_range)
         return stdout.splitlines()
 
     def show_file_lines(self, repo_path: Path, commit_sha: str, file_path: str) -> list[str]:
@@ -321,6 +323,39 @@ class CodeupGitService:
             if ref and ref not in unique:
                 unique.append(ref)
         return unique
+
+    def _run_with_remote_ref_fallback(
+        self,
+        repo_path: Path,
+        args: list[str],
+        ref: str,
+    ) -> str:
+        try:
+            return self._run(args, repo_path)
+        except CodeupGitError:
+            if ref.startswith("origin/"):
+                raise
+            remote_ref = f"origin/{ref}"
+            fallback_args = [remote_ref if arg == ref else arg for arg in args]
+            return self._run(fallback_args, repo_path)
+
+    def _run_rev_list(self, repo_path: Path, revision_range: str) -> str:
+        try:
+            return self._run(["git", "rev-list", revision_range], repo_path)
+        except CodeupGitError:
+            resolved_range = self._revision_range_with_remote_head(revision_range)
+            if resolved_range == revision_range:
+                raise
+            return self._run(["git", "rev-list", resolved_range], repo_path)
+
+    def _revision_range_with_remote_head(self, revision_range: str) -> str:
+        if ".." not in revision_range or "..." in revision_range:
+            return revision_range
+
+        base_ref, head_ref = revision_range.split("..", 1)
+        if not base_ref or not head_ref or head_ref.startswith("origin/"):
+            return revision_range
+        return f"{base_ref}..origin/{head_ref}"
 
     def _validate_repo_url(self, repo_url: str) -> None:
         if not repo_url or not repo_url.strip() or repo_url.startswith("-"):

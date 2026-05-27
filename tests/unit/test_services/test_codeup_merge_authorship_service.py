@@ -90,7 +90,7 @@ class FakeGitService:
     def __init__(self, fail_on_changed_files=False, derived_shas=None):
         if derived_shas is None:
             derived_shas = [SOURCE_SHA]
-        self.ensure_repo_calls = []
+        self.fetch_refs_calls = []
         self.merge_base_calls = []
         self.rev_list_calls = []
         self.changed_file_calls = []
@@ -99,34 +99,19 @@ class FakeGitService:
         self.fail_on_changed_files = fail_on_changed_files
         self.derived_shas = derived_shas
 
-    def ensure_repo(
-        self,
-        repo_url,
-        repo_dir,
-        target_branch,
-        source_branch,
-        merge_commit_sha,
-        source_commit_shas,
-        clone_timeout,
-        fetch_timeout,
-        private_key=None,
+    def _fetch_required_refs(
+        self, repo_dir, target_branch, source_branch,
+        merge_commit_sha, source_commit_shas, timeout, private_key=None,
     ):
-        self.ensure_repo_calls.append(
-            EnsureRepoCall(
-                {
-                "repo_url": repo_url,
-                "repo_dir": repo_dir,
-                "target_branch": target_branch,
-                "source_branch": source_branch,
-                "merge_commit_sha": merge_commit_sha,
-                "source_commit_shas": source_commit_shas,
-                "clone_timeout": clone_timeout,
-                "fetch_timeout": fetch_timeout,
-                "private_key": private_key,
-                }
-            )
-        )
-        return repo_dir
+        self.fetch_refs_calls.append({
+            "repo_dir": repo_dir,
+            "target_branch": target_branch,
+            "source_branch": source_branch,
+            "merge_commit_sha": merge_commit_sha,
+            "source_commit_shas": source_commit_shas,
+            "timeout": timeout,
+            "private_key": private_key,
+        })
 
     def merge_base(self, repo_path, source_ref, target_ref_or_merge_sha):
         self.merge_base_calls.append((repo_path, source_ref, target_ref_or_merge_sha))
@@ -158,27 +143,19 @@ class FakeGitService:
         return ["c" * 40]
 
 
-class EnsureRepoCall(dict):
-    def __getitem__(self, key):
-        if isinstance(key, int):
-            return self._legacy_tuple()[key]
-        return super().__getitem__(key)
+class FakeGitCloneService:
+    def __init__(self, succeed=True):
+        self.succeed = succeed
+        self.clone_calls = []
 
-    def __eq__(self, other):
-        return other == self._legacy_tuple() or super().__eq__(other)
-
-    def _legacy_tuple(self):
-        legacy_tuple = (
-            self["repo_url"],
-            self["repo_dir"],
-            self["target_branch"],
-            self["source_branch"],
-            self["merge_commit_sha"],
-            self["source_commit_shas"],
-            self["clone_timeout"],
-            self["fetch_timeout"],
-        )
-        return legacy_tuple
+    def clone_with_ssh_key(self, repo_url, private_key, target_dir, depth=1):
+        self.clone_calls.append({
+            "repo_url": repo_url,
+            "private_key": private_key,
+            "target_dir": target_dir,
+            "depth": depth,
+        })
+        return self.succeed
 
 
 class FakeSshKeyService:
@@ -201,6 +178,26 @@ class FakeSshKeyService:
 
 def available_ssh_key_service():
     return FakeSshKeyService(private_key="PRIVATE KEY")
+
+
+def _default_git_clone_service():
+    return FakeGitCloneService(succeed=True)
+
+
+def _build_service(**overrides):
+    defaults = dict(
+        task_db=FakeTaskDatabase(),
+        git_service=FakeGitService(),
+        note_provider=FakeNoteProvider(),
+        notes_service=FakeNotesService(),
+        merge_resolver=FakeMergeResolver(),
+        merge_policy=FakeMergePolicy(),
+        ssh_key_service=available_ssh_key_service(),
+        config={"repo_path": "/repo"},
+        git_clone_service=_default_git_clone_service(),
+    )
+    defaults.update(overrides)
+    return CodeupMergeAuthorshipService(**defaults)
 
 
 class FakeMergeResolver:
@@ -267,6 +264,7 @@ class FakeMergePolicy:
 
 
 def test_process_next_task_upserts_merge_and_source_notes_then_marks_success():
+    git_clone_service = FakeGitCloneService()
     task_db = FakeTaskDatabase()
     git_service = FakeGitService()
     note_provider = FakeNoteProvider()
@@ -281,6 +279,7 @@ def test_process_next_task_upserts_merge_and_source_notes_then_marks_success():
         merge_policy=merge_policy,
         ssh_key_service=available_ssh_key_service(),
         config={"max_attempts": 5, "repo_path": "/repo"},
+        git_clone_service=git_clone_service,
     )
 
     result = service.process_next_task()
@@ -291,9 +290,13 @@ def test_process_next_task_upserts_merge_and_source_notes_then_marks_success():
         "summary": {"merge_type": "squash_merge", "upserted": 1, "created": 1, "updated": 0},
     }
     assert task_db.claim_calls == [5]
-    assert git_service.ensure_repo_calls == [
-        (REPO_URL, Path("/repo"), "main", "feature/a", MERGE_SHA, [SOURCE_SHA], 60, 60)
-    ]
+    assert len(git_clone_service.clone_calls) == 1
+    assert git_clone_service.clone_calls[0]["repo_url"] == REPO_URL
+    assert git_clone_service.clone_calls[0]["private_key"] == "PRIVATE KEY"
+    assert git_clone_service.clone_calls[0]["target_dir"] == str(Path("/repo"))
+    assert len(git_service.fetch_refs_calls) == 1
+    assert git_service.fetch_refs_calls[0]["target_branch"] == "main"
+    assert git_service.fetch_refs_calls[0]["source_branch"] == "feature/a"
     assert note_provider.calls == [(REPO_URL, [MERGE_SHA, SOURCE_SHA])]
     assert git_service.changed_file_calls == [(Path("/repo"), "c" * 40, MERGE_SHA)]
     assert git_service.show_file_calls == [(Path("/repo"), MERGE_SHA, "app.py")]
@@ -335,6 +338,7 @@ def test_default_constructor_wires_real_ssh_key_service():
         notes_service=FakeNotesService(),
         merge_resolver=FakeMergeResolver(),
         merge_policy=FakeMergePolicy(),
+        git_clone_service=FakeGitCloneService(),
     )
 
     assert isinstance(service.ssh_key_service, SshKeyService)
@@ -350,6 +354,7 @@ def test_ssh_key_info_returns_key_for_task_ssh_key_id():
         merge_resolver=FakeMergeResolver(),
         merge_policy=FakeMergePolicy(),
         ssh_key_service=ssh_key_service,
+        git_clone_service=FakeGitCloneService(),
     )
 
     ssh_key_info = service._ssh_key_info(SimpleNamespace(repo_url=REPO_URL))
@@ -359,6 +364,7 @@ def test_ssh_key_info_returns_key_for_task_ssh_key_id():
 
 
 def test_process_next_task_releases_for_retry_without_git_when_injected_ssh_key_missing():
+    git_clone_service = FakeGitCloneService()
     task_db = FakeTaskDatabase()
     git_service = FakeGitService()
     service = CodeupMergeAuthorshipService(
@@ -370,6 +376,7 @@ def test_process_next_task_releases_for_retry_without_git_when_injected_ssh_key_
         merge_policy=FakeMergePolicy(),
         ssh_key_service=FakeSshKeyService(private_key=None),
         config={"repo_path": "/repo"},
+        git_clone_service=git_clone_service,
     )
 
     result = service.process_next_task()
@@ -381,13 +388,15 @@ def test_process_next_task_releases_for_retry_without_git_when_injected_ssh_key_
         "reason": MISSING_SSH_KEY_REASON,
     }
     assert task_db.releases == [("task-1", MISSING_SSH_KEY_REASON)]
-    assert git_service.ensure_repo_calls == []
+    assert git_clone_service.clone_calls == []
+    assert git_service.fetch_refs_calls == []
     assert task_db.successes == []
     assert task_db.failures == []
     assert task_db.skips == []
 
 
-def test_process_next_task_passes_injected_private_key_to_ensure_repo():
+def test_process_next_task_passes_injected_private_key_to_clone():
+    git_clone_service = FakeGitCloneService()
     task_db = FakeTaskDatabase()
     git_service = FakeGitService()
     ssh_key_service = FakeSshKeyService(private_key="PRIVATE KEY")
@@ -400,17 +409,19 @@ def test_process_next_task_passes_injected_private_key_to_ensure_repo():
         merge_policy=FakeMergePolicy(),
         ssh_key_service=ssh_key_service,
         config={"repo_path": "/repo"},
+        git_clone_service=git_clone_service,
     )
 
     result = service.process_next_task()
 
     assert result["success"] is True
     assert ssh_key_service.calls == [REPO_URL]
-    assert git_service.ensure_repo_calls[0]["private_key"] == "PRIVATE KEY"
-    assert not isinstance(git_service.ensure_repo_calls[0]["private_key"], dict)
+    assert git_clone_service.clone_calls[0]["private_key"] == "PRIVATE KEY"
+    assert git_service.fetch_refs_calls[0]["private_key"] == "PRIVATE KEY"
 
 
 def test_process_next_task_derives_empty_source_shas_and_upserts_notes():
+    git_clone_service = FakeGitCloneService()
     task_db = FakeTaskDatabase(source_commit_shas=[])
     git_service = FakeGitService(derived_shas=[SOURCE_SHA])
     note_provider = FakeNoteProvider()
@@ -429,6 +440,7 @@ def test_process_next_task_derives_empty_source_shas_and_upserts_notes():
             "clone_timeout_seconds": 11,
             "fetch_timeout_seconds": 22,
         },
+        git_clone_service=git_clone_service,
     )
 
     result = service.process_next_task()
@@ -438,9 +450,10 @@ def test_process_next_task_derives_empty_source_shas_and_upserts_notes():
         "processed": 1,
         "summary": {"merge_type": "squash_merge", "upserted": 1, "created": 1, "updated": 0},
     }
-    assert git_service.ensure_repo_calls == [
-        (REPO_URL, Path("/repo"), "main", "feature/a", MERGE_SHA, [], 11, 22)
-    ]
+    assert len(git_clone_service.clone_calls) == 1
+    assert git_clone_service.clone_calls[0]["target_dir"] == str(Path("/repo"))
+    assert len(git_service.fetch_refs_calls) == 1
+    assert git_service.fetch_refs_calls[0]["timeout"] == 22
     assert git_service.merge_base_calls == [(Path("/repo"), "feature/a", MERGE_SHA)]
     assert git_service.rev_list_calls == [(Path("/repo"), "c" * 40 + "..feature/a")]
     assert git_service.changed_file_calls == [(Path("/repo"), "c" * 40, MERGE_SHA)]
@@ -465,6 +478,7 @@ def test_process_next_task_fails_empty_source_shas_when_derivation_returns_no_co
         merge_policy=FakeMergePolicy(),
         ssh_key_service=available_ssh_key_service(),
         config={"repo_path": "/repo"},
+        git_clone_service=FakeGitCloneService(),
     )
 
     result = service.process_next_task()
@@ -491,6 +505,7 @@ def test_process_next_task_marks_failed_when_git_service_raises_without_upsert()
         merge_policy=FakeMergePolicy(),
         ssh_key_service=available_ssh_key_service(),
         config={"repo_path": "/repo"},
+        git_clone_service=FakeGitCloneService(),
     )
 
     result = service.process_next_task()
@@ -514,6 +529,7 @@ def test_process_next_task_standard_merge_marks_success_without_upserting_notes(
         merge_policy=merge_policy,
         ssh_key_service=available_ssh_key_service(),
         config={"repo_path": "/repo"},
+        git_clone_service=FakeGitCloneService(),
     )
 
     result = service.process_next_task()
@@ -549,6 +565,7 @@ def test_process_next_task_fast_forward_marks_skipped_without_upserting_notes():
         merge_policy=merge_policy,
         ssh_key_service=available_ssh_key_service(),
         config={"repo_path": "/repo"},
+        git_clone_service=FakeGitCloneService(),
     )
 
     result = service.process_next_task()
@@ -585,7 +602,8 @@ def test_repo_path_defaults_to_distinct_cache_child_per_repo_url():
     assert first_path != second_path
 
 
-def test_process_next_task_passes_cache_child_path_to_ensure_repo():
+def test_process_next_task_passes_cache_child_path_to_clone():
+    git_clone_service = FakeGitCloneService()
     task_db = FakeTaskDatabase()
     git_service = FakeGitService()
     service = CodeupMergeAuthorshipService(
@@ -593,16 +611,21 @@ def test_process_next_task_passes_cache_child_path_to_ensure_repo():
         git_service=git_service,
         note_provider=FakeNoteProvider(),
         notes_service=FakeNotesService(),
+        merge_resolver=FakeMergeResolver(),
         merge_policy=FakeMergePolicy(),
         ssh_key_service=available_ssh_key_service(),
         config={"repo_cache_dir": "/cache/codeup_repos"},
+        git_clone_service=git_clone_service,
     )
+    service._cleanup_repo_dir = lambda repo_path: None
 
-    service.process_next_task()
+    import unittest.mock
+    with unittest.mock.patch.object(Path, "mkdir"):
+        service.process_next_task()
 
-    repo_dir = git_service.ensure_repo_calls[0][1]
-    assert repo_dir.parent == Path("/cache/codeup_repos")
-    assert repo_dir != Path("/cache/codeup_repos")
+    target_dir = Path(git_clone_service.clone_calls[0]["target_dir"])
+    assert target_dir.parent == Path("/cache/codeup_repos")
+    assert target_dir != Path("/cache/codeup_repos")
 
 
 def test_repo_path_preserves_explicit_repo_path_override():

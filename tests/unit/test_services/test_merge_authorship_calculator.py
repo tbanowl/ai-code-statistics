@@ -59,3 +59,26 @@ def test_missing_source_notes_do_not_fail_or_change_target_output():
     assert "  target_prompt 1-2" in body
     assert "source_prompt" not in body
     assert set(metadata["prompts"].keys()) == {"target_prompt"}
+
+
+def test_parse_note_reads_metadata_when_body_is_empty():
+    calculator = MergeAuthorshipCalculator()
+    note = '---\n{"schema_version":"3","prompts":{"no_ai_prompt":{"agent_id":{"tool":"claude"}}}}'
+
+    attestations, prompts = calculator.parse_note(note)
+
+    assert attestations == {}
+    assert set(prompts.keys()) == {"no_ai_prompt"}
+
+
+def test_merge_notes_serializes_empty_body_without_leading_blank_line():
+    calculator = MergeAuthorshipCalculator()
+    note = '---\n{"schema_version":"3","prompts":{"no_ai_prompt":{"agent_id":{"tool":"claude"}}}}'
+
+    result = calculator.merge_notes(
+        target_note=note,
+        source_notes=[],
+        final_files={"app.py": ["line 1"]},
+    )
+
+    assert result.startswith('---\n')

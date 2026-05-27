@@ -8,7 +8,7 @@ from core.services.codeup_merge_authorship_service import CodeupMergeAuthorshipS
 
 
 @scheduled(
-    cron="*/2 * * * *",
+    cron="*/1 * * * *",
     job_id="codeup_merge_authorship",
     name="Codeup Merge AI归属重算",
 )

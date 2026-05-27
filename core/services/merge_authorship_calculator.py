@@ -78,9 +78,12 @@ class MergeAuthorshipCalculator:
             "schema_version": "3",
             "prompts": prompts,
         }
-        return "\n".join(lines) + "\n---\n" + json.dumps(
+        metadata_json = json.dumps(
             metadata, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         )
+        if not lines:
+            return "---\n" + metadata_json
+        return "\n".join(lines) + "\n---\n" + metadata_json
 
     def _merge_attestations(
         self,
@@ -102,6 +105,9 @@ class MergeAuthorshipCalculator:
                     merged[file_path].setdefault(line_number, prompt_id)
 
     def _split_content(self, content: str) -> tuple[str, dict[str, Any]]:
+        if content.startswith("---\n"):
+            return "", json.loads(content[4:] or "{}")
+
         body, separator, metadata_content = content.partition("\n---\n")
         if not separator:
             return content, {}

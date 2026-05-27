@@ -1,12 +1,15 @@
 import hashlib
 import json
+import shutil
 from importlib import import_module
 from pathlib import Path
 from typing import Any
 
+from core.config.logging import Logger
 from core.database.codeup_merge_authorship_db import CodeupMergeAuthorshipDatabase
 from core.services.codeup_git_service import CodeupGitService
 from core.services.codeup_note_provider import CodeupDatabaseNoteProvider
+from core.services.git_clone_service import GitCloneService
 from core.services.notes_service import NotesRestService
 from core.services.ssh_key_service import SshKeyService
 
@@ -22,6 +25,7 @@ class CodeupMergeAuthorshipService:
         merge_policy: Any | None = None,
         ssh_key_service: Any | None = None,
         config: dict[str, Any] | None = None,
+        git_clone_service: GitCloneService | None = None,
     ):
         self.task_db = task_db or CodeupMergeAuthorshipDatabase()
         self.git_service = git_service or CodeupGitService()
@@ -31,6 +35,8 @@ class CodeupMergeAuthorshipService:
         self.merge_policy = merge_policy or self._default_merge_policy()
         self.ssh_key_service = ssh_key_service or SshKeyService()
         self.config = config or {}
+        self.git_clone_service = git_clone_service or GitCloneService()
+        self.logger = Logger.get_logger("services.codeup_merge_authorship")
 
     def _default_merge_resolver(self) -> Any:
         resolver_module = import_module("core.services.repository_merge_resolver")
@@ -81,73 +87,88 @@ class CodeupMergeAuthorshipService:
     def _process_task(self, task, private_key: str | None = None) -> dict[str, Any]:
         source_shas = json.loads(task.source_commit_shas or "[]")
         repo_path = self._repo_path(task)
-        repo_path = self.git_service.ensure_repo(
+
+        self._cleanup_repo_dir(repo_path)
+        repo_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if not self.git_clone_service.clone_with_ssh_key(
             repo_url=task.repo_url,
-            repo_dir=repo_path,
-            target_branch=task.target_branch,
-            source_branch=task.source_branch,
-            merge_commit_sha=task.merge_commit_sha,
-            source_commit_shas=source_shas,
-            clone_timeout=int(self.config.get("clone_timeout_seconds", 60)),
-            fetch_timeout=int(self.config.get("fetch_timeout_seconds", 60)),
-            private_key=private_key,
-        )
-        merge_base_sha = self._merge_base(repo_path, task) if task.merge_commit_sha else None
+            private_key=private_key or "",
+            target_dir=str(repo_path),
+            depth=50,
+        ):
+            raise RuntimeError(f"仓库克隆失败: {task.repo_url}")
 
-        if not source_shas and merge_base_sha:
-            source_shas = self._source_shas_from_range(
-                repo_path, merge_base_sha, task.source_branch
+        try:
+            fetch_timeout = int(self.config.get("fetch_timeout_seconds", 60))
+            self.git_service._fetch_required_refs(
+                repo_dir=repo_path,
+                target_branch=task.target_branch,
+                source_branch=task.source_branch,
+                merge_commit_sha=task.merge_commit_sha,
+                source_commit_shas=source_shas,
+                timeout=fetch_timeout,
+                private_key=private_key,
             )
 
-        if not source_shas:
-            raise ValueError("source_commit_shas must include at least one source commit")
+            merge_base_sha = self._merge_base(repo_path, task) if task.merge_commit_sha else None
 
-        resolution = self.merge_resolver.resolve(
-            repo_path, task.merge_commit_sha, source_shas
-        )
-        self.task_db.update_merge_type(task.id, resolution.merge_type)
-        source_shas = resolution.source_commit_shas
-        related_shas = self._unique_shas([task.merge_commit_sha, *source_shas])
-        note_map = self.note_provider.batch_get_note_contents(task.repo_url, related_shas)
-        final_files = self._final_files(
-            repo_path, task.merge_commit_sha, source_shas, merge_base_sha
-        )
+            if not source_shas and merge_base_sha:
+                source_shas = self._source_shas_from_range(
+                    repo_path, merge_base_sha, task.source_branch
+                )
 
-        target_note = note_map.get(task.merge_commit_sha)
-        source_notes = [note_map.get(source_sha) for source_sha in source_shas]
-        policy_result = self.merge_policy.apply(
-            resolution=resolution,
-            target_note=target_note,
-            source_notes=source_notes,
-            final_files=final_files,
-            output_commit_sha=task.merge_commit_sha,
-        )
+            if not source_shas:
+                raise ValueError("source_commit_shas must include at least one source commit")
 
-        if policy_result.skipped_reason:
+            resolution = self.merge_resolver.resolve(
+                repo_path, task.merge_commit_sha, source_shas
+            )
+            self.task_db.update_merge_type(task.id, resolution.merge_type)
+            source_shas = resolution.source_commit_shas
+            related_shas = self._unique_shas([task.merge_commit_sha, *source_shas])
+            note_map = self.note_provider.batch_get_note_contents(task.repo_url, related_shas)
+            final_files = self._final_files(
+                repo_path, task.merge_commit_sha, source_shas, merge_base_sha
+            )
+
+            target_note = note_map.get(task.merge_commit_sha)
+            source_notes = [note_map.get(source_sha) for source_sha in source_shas]
+            policy_result = self.merge_policy.apply(
+                resolution=resolution,
+                target_note=target_note,
+                source_notes=source_notes,
+                final_files=final_files,
+                output_commit_sha=task.merge_commit_sha,
+            )
+
+            if policy_result.skipped_reason:
+                return {
+                    "skipped_reason": policy_result.skipped_reason,
+                    "merge_type": resolution.merge_type,
+                }
+
+            if not policy_result.notes_to_upsert:
+                return {"merge_type": resolution.merge_type, "upserted": 0}
+
+            notes_data = [
+                self._note_payload(
+                    task=task,
+                    repo_path=repo_path,
+                    commit_sha=note.commit_sha,
+                    branch=task.target_branch,
+                    content=note.content,
+                )
+                for note in policy_result.notes_to_upsert
+            ]
+            upsert_summary = self.notes_service.batch_push_notes(task.repo_url, notes_data)
             return {
-                "skipped_reason": policy_result.skipped_reason,
                 "merge_type": resolution.merge_type,
+                "upserted": len(policy_result.notes_to_upsert),
+                **upsert_summary,
             }
-
-        if not policy_result.notes_to_upsert:
-            return {"merge_type": resolution.merge_type, "upserted": 0}
-
-        notes_data = [
-            self._note_payload(
-                task=task,
-                repo_path=repo_path,
-                commit_sha=note.commit_sha,
-                branch=task.target_branch,
-                content=note.content,
-            )
-            for note in policy_result.notes_to_upsert
-        ]
-        upsert_summary = self.notes_service.batch_push_notes(task.repo_url, notes_data)
-        return {
-            "merge_type": resolution.merge_type,
-            "upserted": len(policy_result.notes_to_upsert),
-            **upsert_summary,
-        }
+        finally:
+            self._cleanup_repo_dir(repo_path)
 
     def _repo_path(self, task) -> Path:
         if "repo_path" in self.config:
@@ -221,3 +242,8 @@ class CodeupMergeAuthorshipService:
             if sha and sha not in unique:
                 unique.append(sha)
         return unique
+
+    def _cleanup_repo_dir(self, repo_path: Path) -> None:
+        if repo_path.exists():
+            shutil.rmtree(repo_path, ignore_errors=True)
+            self.logger.info(f"已清理仓库目录: {repo_path}")
