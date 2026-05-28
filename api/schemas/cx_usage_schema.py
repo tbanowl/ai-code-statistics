@@ -50,7 +50,7 @@ def validate_event(event):
 
     event_time = None
     try:
-        event_time = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        event_time = datetime.fromisoformat(timestamp.replace("Z", "+08:00"))
     except (ValueError, AttributeError):
         errors.append("invalid timestamp")
 

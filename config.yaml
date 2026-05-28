@@ -33,6 +33,7 @@ scheduler:
     # Git Blame 统计任务
     git_blame_stats:
       enabled: true
+      # cron: "0/1 * * * *"
       cron: "0 */1 * * *"
     # Codeup Merge AI 归属重算任务
     codeup_merge_authorship:

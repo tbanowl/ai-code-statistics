@@ -285,6 +285,12 @@ class StatsRepository(ModelBase):
         String, unique=True, nullable=False, index=True
     )
     repo_name: Mapped[str] = mapped_column(String, nullable=True)
+    name_level1: Mapped[str] = mapped_column(String(50), nullable=True)
+    name_level2: Mapped[str] = mapped_column(String(50), nullable=True)
+    name_level3: Mapped[str] = mapped_column(String(50), nullable=True)
+    name_level4: Mapped[str] = mapped_column(String(50), nullable=True)
+    name_level5: Mapped[str] = mapped_column(String(50), nullable=True)
+    repo_short_name: Mapped[str] = mapped_column(String(50), nullable=True)
     # 是否启用 AI 代码归因统计
     repo_stats_flag: Mapped[int] = mapped_column(Integer, default=1)
     # 关联的 SSH Key ID（为空时使用配置文件默认 Key）

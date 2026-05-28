@@ -11,6 +11,7 @@ from core.database.models import (
     MetricsEventsCheckpoint,
     MetricsEventsCommitted,
     MetricsEventsRaw,
+    StatsRepository,
 )
 from core.database.stats_db import StatsDatabase
 from core.utils.repo_url import UNKNOWN_REPO
@@ -86,6 +87,83 @@ def test_list_repositories_and_contributors(stats_db):
     assert len(repos) == 2
     assert total_contributors == 1
     assert len(contributors) == 1
+
+
+def test_get_or_create_repository_extracts_deep_path_levels(stats_db):
+    repo_id = stats_db.get_or_create_repository("github.com/L5/L4/L3/L2/L1/R1/R2")
+
+    repo = stats_db.get_repository_by_id(repo_id)
+
+    assert repo["repo_path"] == "github.com/L5/L4/L3/L2/L1/R1/R2"
+    assert repo["name_level1"] == "L1"
+    assert repo["name_level2"] == "L2"
+    assert repo["name_level3"] == "L3"
+    assert repo["name_level4"] == "L4"
+    assert repo["name_level5"] == "L5"
+    assert repo["repo_short_name"] == "R1/R2"
+
+
+def test_get_or_create_repository_extracts_single_segment_short_name_after_five_levels(stats_db):
+    repo_id = stats_db.get_or_create_repository("github.com/L5/L4/L3/L2/L1/R1")
+
+    repo = stats_db.get_repository_by_id(repo_id)
+
+    assert repo["name_level1"] == "L1"
+    assert repo["name_level2"] == "L2"
+    assert repo["name_level3"] == "L3"
+    assert repo["name_level4"] == "L4"
+    assert repo["name_level5"] == "L5"
+    assert repo["repo_short_name"] == "R1"
+
+
+def test_get_or_create_repository_extracts_exactly_five_levels(stats_db):
+    repo_id = stats_db.get_or_create_repository("github.com/L5/L4/L3/L2/L1")
+
+    repo = stats_db.get_repository_by_id(repo_id)
+
+    assert repo["name_level1"] == "L1"
+    assert repo["name_level2"] == "L2"
+    assert repo["name_level3"] == "L3"
+    assert repo["name_level4"] == "L4"
+    assert repo["name_level5"] == "L5"
+    assert repo["repo_short_name"] is None
+
+
+def test_get_or_create_repository_extracts_short_path_levels(stats_db):
+    repo_id = stats_db.get_or_create_repository("https://github.com/org/team/repo.git")
+
+    repo = stats_db.get_repository_by_id(repo_id)
+
+    assert repo["repo_path"] == "github.com/org/team/repo"
+    assert repo["name_level1"] == "org"
+    assert repo["name_level2"] == "team"
+    assert repo["name_level3"] is None
+    assert repo["name_level4"] is None
+    assert repo["name_level5"] is None
+    assert repo["repo_short_name"] == "repo"
+
+
+def test_get_or_create_repository_backfills_existing_repository_name_parts(stats_db):
+    with session_scope(stats_db.engine) as session:
+        session.add(
+            StatsRepository(
+                id="repoexisting0000001",
+                repo_path="github.com/L5/L4/L3/L2/L1/R1/R2",
+                repo_name="L5/L4/L3/L2/L1/R1/R2",
+            )
+        )
+
+    repo_id = stats_db.get_or_create_repository("github.com/L5/L4/L3/L2/L1/R1/R2")
+
+    repo = stats_db.get_repository_by_id(repo_id)
+
+    assert repo_id == "repoexisting0000001"
+    assert repo["name_level1"] == "L1"
+    assert repo["name_level2"] == "L2"
+    assert repo["name_level3"] == "L3"
+    assert repo["name_level4"] == "L4"
+    assert repo["name_level5"] == "L5"
+    assert repo["repo_short_name"] == "R1/R2"
 
 
 def test_ensure_repository_branch_upserts_branch(stats_db):

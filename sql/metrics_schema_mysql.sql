@@ -163,6 +163,12 @@ CREATE TABLE IF NOT EXISTS stats_repositories (
     id VARCHAR(20) PRIMARY KEY COMMENT '主键，使用 XID',
     repo_path VARCHAR(200) NOT NULL COMMENT '仓库路径',
     repo_name VARCHAR(100) COMMENT '仓库名称',
+    name_level1 VARCHAR(50) COMMENT '仓库路径一级名称',
+    name_level2 VARCHAR(50) COMMENT '仓库路径二级名称',
+    name_level3 VARCHAR(50) COMMENT '仓库路径三级名称',
+    name_level4 VARCHAR(50) COMMENT '仓库路径四级名称',
+    name_level5 VARCHAR(50) COMMENT '仓库路径五级名称',
+    repo_short_name VARCHAR(50) COMMENT '仓库短名称',
     repo_stats_flag INT DEFAULT 1 COMMENT '是否启用归因统计（0/1）',
     ssh_key_id VARCHAR(20) COMMENT '关联的 SSH Key ID',
     last_blame_commit_sha VARCHAR(40) COMMENT '最近一次 Git Blame 统计成功的提交 SHA',
@@ -493,6 +499,7 @@ CREATE TABLE IF NOT EXISTS cx_command_usage_events (
    schema_version VARCHAR(16) NOT NULL,
    event_type VARCHAR(64) NOT NULL,
    event_time TIMESTAMP(3) NOT NULL,
+   event_day INT NOT NULL,
    command_name VARCHAR(64) NOT NULL,
    spec_id VARCHAR(128) NOT NULL,
    spec_id_source VARCHAR(32),
@@ -512,3 +519,4 @@ CREATE INDEX idx_usage_spec_command ON cx_command_usage_events(spec_id, command_
 CREATE INDEX idx_usage_project_time ON cx_command_usage_events(project_id, event_time);
 CREATE INDEX idx_usage_user_time ON cx_command_usage_events(git_user_email, event_time);
 CREATE INDEX idx_usage_event_time ON cx_command_usage_events(event_time);
+CREATE INDEX idx_usage_event_day ON cx_command_usage_events(event_day);

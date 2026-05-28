@@ -1,8 +1,7 @@
-import json
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
 
-from sqlalchemy import String, BigInteger, DateTime, JSON
+from sqlalchemy import String, BigInteger, DateTime, JSON, Integer
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.exc import IntegrityError
 
@@ -12,28 +11,29 @@ from .base import BaseDatabase, session_scope, Base
 class CxCommandUsageEvent(Base):
     __tablename__ = "cx_command_usage_events"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True,)
     event_id: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
     schema_version: Mapped[str] = mapped_column(String(16), nullable=False)
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)
     event_time: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
+    event_day: Mapped[int] = mapped_column(Integer, nullable=False)
     command_name: Mapped[str] = mapped_column(String(64), nullable=False)
     spec_id: Mapped[str] = mapped_column(String(128), nullable=False)
-    spec_id_source: Mapped[str | None] = mapped_column(String(32))
-    project_id: Mapped[str | None] = mapped_column(String(128))
-    git_user_name: Mapped[str | None] = mapped_column(String(128))
-    git_user_email: Mapped[str | None] = mapped_column(String(256))
-    session_id: Mapped[str | None] = mapped_column(String(128))
-    plugin_version: Mapped[str | None] = mapped_column(String(32))
-    source: Mapped[str | None] = mapped_column(String(64))
-    warning: Mapped[str | None] = mapped_column(String(128))
-    token_name: Mapped[str | None] = mapped_column(String(128))
-    raw_event: Mapped[dict | None] = mapped_column(JSON)
+    spec_id_source: Mapped[str] = mapped_column(String(32), nullable=True)
+    project_id: Mapped[str] = mapped_column(String(128), nullable=True)
+    git_user_name: Mapped[str] = mapped_column(String(128), nullable=True)
+    git_user_email: Mapped[str] = mapped_column(String(256), nullable=True)
+    session_id: Mapped[str] = mapped_column(String(128), nullable=True)
+    plugin_version: Mapped[str] = mapped_column(String(32), nullable=True)
+    source: Mapped[str] = mapped_column(String(64), nullable=True)
+    warning: Mapped[str] = mapped_column(String(128), nullable=True)
+    token_name: Mapped[str] = mapped_column(String(128), nullable=True)
+    raw_event: Mapped[dict] = mapped_column(JSON, nullable=True)
 
 
 class CxUsageDatabase(BaseDatabase):
 
-    def insert_batch(self, events: List[Dict], token_name: str | None = None) -> Dict:
+    def insert_batch(self, events: List[Dict], token_name: Optional[str] = None) -> Dict:
         accepted, duplicated, failed = [], [], []
 
         with session_scope(self.engine) as session:
@@ -44,6 +44,7 @@ class CxUsageDatabase(BaseDatabase):
                         schema_version=event["schemaVersion"],
                         event_type=event["eventType"],
                         event_time=event["eventTime"],
+                        event_day=int(event["eventTime"].strftime("%Y%m%d")),
                         command_name=event["command"],
                         spec_id=event["specId"],
                         spec_id_source=event.get("specIdSource") or None,

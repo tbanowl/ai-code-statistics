@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 import re
 from typing import Dict, List, Optional, Tuple
 
-from sqlalchemy import func, or_, text
+from sqlalchemy import func, or_
 
 from .base import BaseDatabase, now_ts, session_scope
 from core.utils.repo_url import normalize_repo_url, UNKNOWN_REPO
@@ -299,6 +299,46 @@ class StatsDatabase(BaseDatabase):
         return value or UNKNOWN_REPO
 
     @staticmethod
+    def _extract_repo_name_parts(repo_path: str) -> Dict[str, Optional[str]]:
+        repo_name = StatsDatabase._extract_repo_name(repo_path)
+        result = {
+            "name_level1": None,
+            "name_level2": None,
+            "name_level3": None,
+            "name_level4": None,
+            "name_level5": None,
+            "repo_short_name": None,
+        }
+        if not repo_name or repo_name == UNKNOWN_REPO:
+            result["repo_short_name"] = repo_name
+            return result
+
+        parts = [part for part in repo_name.split("/") if part]
+        if not parts:
+            result["repo_short_name"] = UNKNOWN_REPO
+            return result
+
+        if len(parts) >= 5:
+            level_parts = parts[:5]
+            result["name_level1"] = level_parts[-1]
+            result["name_level2"] = level_parts[-2]
+            result["name_level3"] = level_parts[-3]
+            result["name_level4"] = level_parts[-4]
+            result["name_level5"] = level_parts[-5]
+            result["repo_short_name"] = "/".join(parts[5:]) or None
+            return result
+
+        for index, part in enumerate(parts[:-1], start=1):
+            result[f"name_level{index}"] = part
+        result["repo_short_name"] = parts[-1]
+        return result
+
+    @staticmethod
+    def _apply_repo_name_parts(row: StatsRepository, parts: Dict[str, Optional[str]]) -> None:
+        for field, value in parts.items():
+            setattr(row, field, value)
+
+    @staticmethod
     def _parse_author(author: Optional[str]) -> Tuple[str, Optional[str]]:
         raw = (author or "").strip()
         if not raw:
@@ -497,6 +537,7 @@ class StatsDatabase(BaseDatabase):
         self.consolidate_unknown_repositories()
         normalized_path = normalize_repo_url(repo_path)
         extracted_name = self._extract_repo_name(normalized_path)
+        name_parts = self._extract_repo_name_parts(normalized_path)
 
         with session_scope(self.engine) as session:
             row = (
@@ -508,12 +549,13 @@ class StatsDatabase(BaseDatabase):
                 current_name = (row.repo_name or "").strip()
                 if not current_name or current_name == row.repo_path:
                     row.repo_name = extracted_name
-                    row.updated_at = now_ts()
-                    session.flush()
+                self._apply_repo_name_parts(row, name_parts)
+                row.updated_at = now_ts()
+                session.flush()
                 return row.id
 
             record = StatsRepository(
-                repo_path=normalized_path, repo_name=extracted_name
+                repo_path=normalized_path, repo_name=extracted_name, **name_parts
             )
             session.add(record)
             session.flush()
