@@ -1,0 +1,28 @@
+stats_repositories 再添加 4 个字段
+```sql
+ALTER TABLE stats_repositories ADD COLUMN dept_level2_id VARCHAR(50) COMMENT '二级部门id' AFTER repo_short_name;
+ALTER TABLE stats_repositories ADD COLUMN dept_level2 VARCHAR(50) COMMENT '二级部门' AFTER dept_level2_id;
+ALTER TABLE stats_repositories ADD COLUMN dept_level3_id VARCHAR(50) COMMENT '三级部门id' AFTER dept_level2;
+ALTER TABLE stats_repositories ADD COLUMN dept_level3 VARCHAR(50) COMMENT '三级部门' AFTER dept_level3_id;
+```
+
+创建一张部门表
+```sql
+CREATE TABLE stats_dept
+(
+    dept_id      VARCHAR(20) PRIMARY KEY,
+    dept_abbr    VARCHAR(100),
+    display_name VARCHAR(100),
+    admin_id     VARCHAR(100),
+    INDEX idx_dept_abbr (dept_abbr)
+)
+```
+
+name_level5 到 name_level1 字段中出现 EagleIT，二级部门（dept_level2）就是 `T1 IT`,
+name_level5 到 name_level1 字段中出现 D1IT，二级部门（dept_level2）就是 `D1 IT`,
+name_level5 到 name_level1 字段中出现 RDIT，二级部门（dept_level2）就是 `YMS`,
+其他就将二级部门（dept_level2）判断为 `CIMDEV`,
+
+
+
+
