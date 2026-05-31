@@ -119,7 +119,6 @@ export type BlameRepoStatItem = {
   ai_lines: number;
   non_ai_lines: number;
   total_lines: number;
-  ai_ratio: number;
 };
 
 /** 获取整体统计数据 */

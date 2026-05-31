@@ -251,32 +251,6 @@ def get_repo_blame_stats(repo_id):
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-@stats_repo_bp.route("/blame/file/<repo_id>", methods=["GET"])
-def get_file_blame_stats(repo_id):
-    """获取文件归因统计数据"""
-    try:
-        if not repo_id:
-            return jsonify({"success": False, "error": "repo_id 不能为空"}), 400
-
-        # 获取查询参数
-        stat_date = request.args.get("stat_date", type=str)
-
-        stats_db, blame_stats_db = get_database()
-
-        stats = blame_stats_db.get_file_blame_stats(repo_id, stat_date)
-
-        return jsonify(
-            {
-                "success": True,
-                "data": {"stats": stats, "count": len(stats), "repo_id": repo_id},
-            }
-        )
-
-    except Exception as e:
-        logging.error("获取文件归因统计数据失败", exc_info=e)
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
 @stats_repo_bp.route("/blame/repo/<repo_id>/contributors", methods=["GET"])
 def get_repo_contributor_stats(repo_id):
     """获取仓库贡献者归因统计数据"""

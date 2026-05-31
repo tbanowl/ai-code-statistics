@@ -54,5 +54,5 @@ author Bob
     assert result.total_lines == 3
     assert result.ai_lines == 2
     assert result.non_ai_lines == 1
-    assert result.contributor_stats["claude"]["ai_lines"] == 2
+    assert result.contributor_stats["Alice"]["ai_lines"] == 2
     assert result.contributor_stats["Bob"]["non_ai_lines"] == 1

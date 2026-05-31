@@ -32,7 +32,7 @@ class FileBlameResult:
     # 按贡献者统计
     contributor_stats: Dict[
         str, Dict[str, int]
-    ]  # {contributor_id: {ai: n, non_ai: m, total: t}}
+    ]
 
 
 @dataclass
@@ -171,6 +171,7 @@ class BlameStatsService:
                                 "ai_lines": 0,
                                 "non_ai_lines": 0,
                                 "total_lines": 0,
+                                "email": stats.get("email")
                             }
                         contributor_stats[contrib_id]["ai_lines"] += stats["ai_lines"]
                         contributor_stats[contrib_id]["non_ai_lines"] += stats[
@@ -179,8 +180,6 @@ class BlameStatsService:
                         contributor_stats[contrib_id]["total_lines"] += stats[
                             "total_lines"
                         ]
-
-            # ai_ratio = (total_ai_lines / total_lines * 100) if total_lines > 0 else 0.0
 
             self.logger.info(
                 f"统计完成: 总行数 {total_lines}, AI 行数 {total_ai_lines}, 非 AI 行数 {total_non_ai_lines}"
@@ -491,10 +490,10 @@ class BlameStatsService:
                     continue
 
                 total_lines += 1
-                is_ai, ai_author = self._is_ai_line(
+                is_ai, _ai_author = self._is_ai_line(
                     line_num, rel_path, line_info["commit"], new_notes_cache
                 )
-                author = ai_author if is_ai else line_info["author"]
+                author = line_info["author"]
                 author_mail = line_info["author_mail"]
 
                 if is_ai:
@@ -507,7 +506,7 @@ class BlameStatsService:
                         "ai_lines": 0,
                         "non_ai_lines": 0,
                         "total_lines": 0,
-                        "mail": author_mail
+                        "email": author_mail
                     }
 
                 if is_ai:
@@ -570,6 +569,10 @@ class BlameStatsService:
                     if lines[i].startswith("author "):
                         author = lines[i][7:]
                     if lines[i].startswith("author-mail "):
+                        author_mail = lines[i][13:-1]
+                    if lines[i].startswith("commiter ") and author == "Unknown":
+                        author = lines[i][7:]
+                    if lines[i].startswith("commiter-mail ") and author_mail == "":
                         author_mail = lines[i][13:-1]
                     i += 1
 

@@ -2,6 +2,15 @@ from unittest.mock import MagicMock
 
 from core.services.blame_stats_service import RepoBlameResult
 from core.scheduler.tasks.git_blame_stats_task import GitBlameStatsTask
+import core.scheduler.tasks.git_blame_stats_task as git_blame_stats_task
+
+
+class FrozenDateTime:
+    @classmethod
+    def now(cls):
+        from datetime import datetime
+
+        return datetime(2026, 5, 30, 12, 0, 0)
 
 
 def test_stat_repository_reads_branches_from_repository_branch_table(tmp_path):
@@ -72,6 +81,21 @@ def test_execute_counts_repository_without_branches_as_skipped():
     assert result["skipped_repos"] == 1
 
 
+def test_execute_defaults_stat_date_to_today(monkeypatch):
+    monkeypatch.setattr(git_blame_stats_task, "datetime", FrozenDateTime)
+    task = GitBlameStatsTask.__new__(GitBlameStatsTask)
+    task.logger = MagicMock()
+    task.ssh_key_service = MagicMock()
+    task.blame_stats_db = MagicMock()
+
+    task.ssh_key_service.load_default_ssh_key_from_config.return_value = None
+    task.blame_stats_db.get_repositories_to_stat.return_value = []
+
+    result = task.execute()
+
+    assert result["stat_date"] == "20260530"
+
+
 def test_stat_repository_skips_when_repository_branch_table_is_empty():
     task = GitBlameStatsTask.__new__(GitBlameStatsTask)
     task.logger = MagicMock()
@@ -129,7 +153,7 @@ def test_stat_repository_marks_missing_branch_deleted():
     task.blame_stats_service.analyze_repository.assert_not_called()
 
 
-def test_stat_repository_records_last_blame_commit_sha_after_success():
+def test_stat_repository_records_last_blame_commit_sha_and_stat_date_after_success():
     task = GitBlameStatsTask.__new__(GitBlameStatsTask)
     task.logger = MagicMock()
     task.blame_stats_db = MagicMock()
@@ -164,6 +188,57 @@ def test_stat_repository_records_last_blame_commit_sha_after_success():
     )
 
     assert result["success_branches"] == 1
-    task.blame_stats_db.update_repository_last_blame_commit_sha.assert_called_once_with(
-        "repo-1", "abc123def456"
+    task.blame_stats_db.update_repository_last_blame_stats.assert_called_once_with(
+        "repo-1", "abc123def456", "20260517"
     )
+
+
+def test_save_branch_stats_saves_only_repo_and_person_rows():
+    task = GitBlameStatsTask.__new__(GitBlameStatsTask)
+    task.blame_stats_db = MagicMock()
+
+    class FileResult:
+        file_path = "src/app.py"
+        total_lines = 10
+        ai_lines = 4
+        non_ai_lines = 6
+        commit_sha = "abc123def456"
+        contributor_stats = {
+            "Alice": {
+                "ai_lines": 4,
+                "non_ai_lines": 6,
+                "total_lines": 10,
+                "email": None,
+            }
+        }
+
+    result = RepoBlameResult(
+        stat_date="20260530",
+        commit_sha="abc123def456",
+        branch="main",
+        total_lines=10,
+        ai_lines=4,
+        non_ai_lines=6,
+        total_files=1,
+        files_results=[FileResult()],
+        contributor_stats={
+            "Alice": {
+                "ai_lines": 4,
+                "non_ai_lines": 6,
+                "total_lines": 10,
+                "email": None,
+            }
+        },
+    )
+
+    task._save_branch_stats("repo-1", "20260530", result)
+
+    args = task.blame_stats_db.save_branch_stats_batch.call_args.args
+    assert len(args) == 5
+    assert args[0:3] == ("repo-1", "main", "20260530")
+    repo_obj = args[3]
+    contributor_objs = args[4]
+    assert repo_obj.total_lines == 10
+    assert len(contributor_objs) == 1
+    assert contributor_objs[0].contributor_name == "Alice"
+    assert contributor_objs[0].contributor_email == ""

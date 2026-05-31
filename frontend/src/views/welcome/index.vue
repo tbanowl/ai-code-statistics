@@ -721,7 +721,7 @@ function getErrorMessage(error: unknown, fallback: string) {
         <div class="card-header">
           <div>
             <span class="card-title">仓库代码归因统计</span>
-            <p class="card-tip">以仓库、分支、日期为维度的 AI 代码占比报表</p>
+            <p class="card-tip">以仓库、分支、日期为维度的代码行数归因报表</p>
           </div>
           <el-tag effect="plain" round type="info">
             共 {{ formatNumber(blameTotal) }} 条
@@ -753,13 +753,6 @@ function getErrorMessage(error: unknown, fallback: string) {
           <el-table-column prop="non_ai_lines" label="人工代码行数" min-width="130">
             <template #default="{ row }">
               {{ formatNumber(row.non_ai_lines) }}
-            </template>
-          </el-table-column>
-          <el-table-column prop="ai_ratio" label="AI 占比" width="100">
-            <template #default="{ row }">
-              <el-tag effect="plain" round type="primary">
-                {{ formatPercent(row.ai_ratio) }}
-              </el-tag>
             </template>
           </el-table-column>
         </el-table>

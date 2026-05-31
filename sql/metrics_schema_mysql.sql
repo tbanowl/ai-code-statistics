@@ -172,6 +172,7 @@ CREATE TABLE IF NOT EXISTS stats_repositories (
     repo_stats_flag INT DEFAULT 1 COMMENT '是否启用归因统计（0/1）',
     ssh_key_id VARCHAR(20) COMMENT '关联的 SSH Key ID',
     last_blame_commit_sha VARCHAR(40) COMMENT '最近一次 Git Blame 统计成功的提交 SHA',
+    last_stat_date BIGINT COMMENT '最后统计日期，格式 yyyyMMdd',
     created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
     updated_at BIGINT NOT NULL COMMENT '更新时间戳（毫秒）',
     INDEX idx_stats_repositories_name (repo_name)
@@ -301,7 +302,6 @@ CREATE TABLE IF NOT EXISTS stats_blame_repo (
     total_lines INT NOT NULL COMMENT '总行数',
     ai_lines INT NOT NULL COMMENT 'AI 代码行数',
     non_ai_lines INT NOT NULL COMMENT '非 AI 代码行数',
-    ai_ratio DECIMAL(5, 2) NOT NULL COMMENT 'AI 代码占比',
     total_files INT NOT NULL COMMENT '文件总数',
     created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
     updated_at BIGINT NOT NULL COMMENT '更新时间戳（毫秒）',
@@ -310,64 +310,23 @@ CREATE TABLE IF NOT EXISTS stats_blame_repo (
     INDEX idx_blame_stat_date (stat_date)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='仓库级归因统计表';
 
--- 文件级归因统计表
-CREATE TABLE IF NOT EXISTS stats_blame_file (
-    id VARCHAR(20) PRIMARY KEY COMMENT '主键，使用 XID',
-    repo_id VARCHAR(20) NOT NULL COMMENT '仓库 ID',
-    branch VARCHAR(100) NOT NULL COMMENT '分支名称',
-    stat_date BIGINT NOT NULL COMMENT '统计日期（毫秒时间戳）',
-    file_path VARCHAR(500) NOT NULL COMMENT '文件路径',
-    commit_sha VARCHAR(40) NOT NULL COMMENT '当前统计提交 SHA',
-    total_lines INT NOT NULL COMMENT '总行数',
-    ai_lines INT NOT NULL COMMENT 'AI 代码行数',
-    non_ai_lines INT NOT NULL COMMENT '非 AI 代码行数',
-    ai_ratio DECIMAL(5, 2) NOT NULL COMMENT 'AI 代码占比',
-    created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
-    updated_at BIGINT NOT NULL COMMENT '更新时间戳（毫秒）',
-    UNIQUE KEY uk_blame_file_branch_path (repo_id, stat_date, branch, file_path),
-    INDEX idx_blame_file_repo (repo_id, stat_date),
-    INDEX idx_blame_file_date (stat_date)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='文件级归因统计表';
-
 -- 仓库贡献者归因统计表
 CREATE TABLE IF NOT EXISTS stats_blame_repo_contributor (
     id VARCHAR(20) PRIMARY KEY COMMENT '主键，使用 XID',
     repo_id VARCHAR(20) NOT NULL COMMENT '仓库 ID',
     branch VARCHAR(100) NOT NULL COMMENT '分支名称',
     stat_date BIGINT NOT NULL COMMENT '统计日期（毫秒时间戳）',
-    contributor_id VARCHAR(20) NOT NULL COMMENT '贡献者 ID',
     contributor_name VARCHAR(100) NOT NULL COMMENT '贡献者名称',
-    contributor_email VARCHAR(100) COMMENT '贡献者邮箱',
+    contributor_email VARCHAR(100) NOT NULL DEFAULT '' COMMENT '贡献者邮箱',
     ai_lines INT NOT NULL DEFAULT 0 COMMENT 'AI 代码行数',
     non_ai_lines INT NOT NULL DEFAULT 0 COMMENT '非 AI 代码行数',
     total_lines INT NOT NULL DEFAULT 0 COMMENT '总行数',
     created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
     updated_at BIGINT NOT NULL COMMENT '更新时间戳（毫秒）',
-    UNIQUE KEY uk_blame_rc_branch_contributor (repo_id, stat_date, branch, contributor_id),
+    UNIQUE KEY uk_blame_rc_branch_contributor_identity (repo_id, stat_date, branch, contributor_name, contributor_email),
     INDEX idx_blame_rc_repo (repo_id, stat_date),
     INDEX idx_blame_rc_date (stat_date)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='仓库贡献者归因统计表';
-
--- 文件贡献者归因统计表
-CREATE TABLE IF NOT EXISTS stats_blame_file_contributor (
-    id VARCHAR(20) PRIMARY KEY COMMENT '主键，使用 XID',
-    file_id VARCHAR(20) NOT NULL COMMENT '文件级统计 ID',
-    stat_date BIGINT NOT NULL COMMENT '统计日期（毫秒时间戳）',
-    repo_id VARCHAR(20) NOT NULL COMMENT '仓库 ID',
-    branch VARCHAR(100) NOT NULL COMMENT '分支名称',
-    file_path VARCHAR(500) NOT NULL COMMENT '文件路径',
-    contributor_id VARCHAR(20) NOT NULL COMMENT '贡献者 ID',
-    contributor_name VARCHAR(100) NOT NULL COMMENT '贡献者名称',
-    contributor_email VARCHAR(100) COMMENT '贡献者邮箱',
-    ai_lines INT NOT NULL DEFAULT 0 COMMENT 'AI 代码行数',
-    non_ai_lines INT NOT NULL DEFAULT 0 COMMENT '非 AI 代码行数',
-    total_lines INT NOT NULL DEFAULT 0 COMMENT '总行数',
-    created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
-    updated_at BIGINT NOT NULL COMMENT '更新时间戳（毫秒）',
-    UNIQUE KEY uk_blame_fc_branch_contributor (file_id, stat_date, branch, contributor_id),
-    INDEX idx_blame_fc_file (repo_id, stat_date, file_path),
-    INDEX idx_blame_fc_date (stat_date)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='文件贡献者归因统计表';
 
 -- APScheduler JobStore 表
 CREATE TABLE IF NOT EXISTS apscheduler_jobs (

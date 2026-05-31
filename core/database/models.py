@@ -297,6 +297,7 @@ class StatsRepository(ModelBase):
     ssh_key_id: Mapped[str] = mapped_column(String(20), nullable=True)
     # 最近一次 Git Blame 统计成功的提交 SHA
     last_blame_commit_sha: Mapped[str] = mapped_column(String(40), nullable=True)
+    last_stat_date: Mapped[int] = mapped_column(BigInteger, nullable=True)
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
     updated_at: Mapped[int] = mapped_column(
         BigInteger, nullable=False, default=now_ts, onupdate=now_ts
@@ -590,35 +591,7 @@ class StatsBlameRepo(ModelBase):
     total_lines: Mapped[int] = mapped_column(Integer, nullable=False)
     ai_lines: Mapped[int] = mapped_column(Integer, nullable=False)
     non_ai_lines: Mapped[int] = mapped_column(Integer, nullable=False)
-    ai_ratio: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False)
     total_files: Mapped[int] = mapped_column(Integer, nullable=False)
-    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
-    updated_at: Mapped[int] = mapped_column(
-        BigInteger, nullable=False, default=now_ts, onupdate=now_ts
-    )
-
-
-class StatsBlameFile(ModelBase):
-    """文件级归因统计表"""
-
-    __tablename__ = "stats_blame_file"
-
-    __table_args__ = (
-        UniqueConstraint("repo_id", "stat_date", "branch", "file_path"),
-        Index("idx_blame_file_repo", "repo_id", "stat_date"),
-        Index("idx_blame_file_date", "stat_date"),
-    )
-
-    id: Mapped[str] = mapped_column(String(20), primary_key=True, default=gen_xid)
-    repo_id: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
-    branch: Mapped[str] = mapped_column(String(40), nullable=False)
-    stat_date: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    file_path: Mapped[str] = mapped_column(Text, nullable=False)
-    commit_sha: Mapped[str] = mapped_column(String(40), nullable=False)
-    total_lines: Mapped[int] = mapped_column(Integer, nullable=False)
-    ai_lines: Mapped[int] = mapped_column(Integer, nullable=False)
-    non_ai_lines: Mapped[int] = mapped_column(Integer, nullable=False)
-    ai_ratio: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False)
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
     updated_at: Mapped[int] = mapped_column(
         BigInteger, nullable=False, default=now_ts, onupdate=now_ts
@@ -630,48 +603,12 @@ class StatsBlameRepoContributor(ModelBase):
 
     __tablename__ = "stats_blame_repo_contributor"
 
-    __table_args__ = (
-        UniqueConstraint("repo_id", "stat_date", "branch", "contributor_id"),
-        Index("idx_blame_rc_repo", "repo_id", "stat_date"),
-        Index("idx_blame_rc_date", "stat_date"),
-    )
-
     id: Mapped[str] = mapped_column(String(20), primary_key=True, default=gen_xid)
     repo_id: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     branch: Mapped[str] = mapped_column(String(40), nullable=False)
     stat_date: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    contributor_id: Mapped[str] = mapped_column(String(20), nullable=False)
     contributor_name: Mapped[str] = mapped_column(Text, nullable=False)
-    contributor_email: Mapped[str] = mapped_column(Text, nullable=True)
-    ai_lines: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    non_ai_lines: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    total_lines: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
-    updated_at: Mapped[int] = mapped_column(
-        BigInteger, nullable=False, default=now_ts, onupdate=now_ts
-    )
-
-
-class StatsBlameFileContributor(ModelBase):
-    """文件贡献者归因统计表"""
-
-    __tablename__ = "stats_blame_file_contributor"
-
-    __table_args__ = (
-        UniqueConstraint("file_id", "stat_date", "branch", "contributor_id"),
-        Index("idx_blame_fc_file", "repo_id", "stat_date", "file_path"),
-        Index("idx_blame_fc_date", "stat_date"),
-    )
-
-    id: Mapped[str] = mapped_column(String(20), primary_key=True, default=gen_xid)
-    file_id: Mapped[str] = mapped_column(String(20), nullable=False)
-    stat_date: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    repo_id: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
-    branch: Mapped[str] = mapped_column(String(40), nullable=False)
-    file_path: Mapped[str] = mapped_column(Text, nullable=False)
-    contributor_id: Mapped[str] = mapped_column(String(20), nullable=False)
-    contributor_name: Mapped[str] = mapped_column(Text, nullable=False)
-    contributor_email: Mapped[str] = mapped_column(Text, nullable=True)
+    contributor_email: Mapped[str] = mapped_column(String(100), nullable=False, default="")
     ai_lines: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     non_ai_lines: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_lines: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

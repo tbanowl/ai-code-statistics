@@ -11,7 +11,7 @@ from core.database.authorship_notes_db import compute_note_content_hash
 from core.database.blame_stats_db import BlameStatsDatabase
 from core.database.base import session_scope
 from core.database.models import AuthorshipNotes
-from core.database.models import StatsBlameRepo, StatsBlameFile, StatsBlameRepoContributor
+from core.database.models import StatsBlameRepo, StatsBlameRepoContributor
 from core.database.models import StatsRepository, StatsRepositoryBranch
 
 
@@ -126,6 +126,27 @@ def test_update_repository_last_blame_commit_sha(blame_stats_db):
         assert repo.last_blame_commit_sha == "abc123def456"
 
 
+def test_update_repository_last_blame_stats_records_commit_and_stat_date(blame_stats_db):
+    stats_db = StatsDatabase()
+    repo_id = stats_db.get_or_create_repository("https://example.com/repo.git")
+
+    assert (
+        blame_stats_db.update_repository_last_blame_stats(
+            repo_id, "abc123def456", "20260530"
+        )
+        is True
+    )
+
+    with session_scope(blame_stats_db.engine) as session:
+        repo = (
+            session.query(StatsRepository)
+            .filter(StatsRepository.id == repo_id)
+            .one()
+        )
+        assert repo.last_blame_commit_sha == "abc123def456"
+        assert repo.last_stat_date == 20260530
+
+
 def test_save_branch_stats_batch_keeps_multiple_branches(blame_stats_db):
     repo_id = "repo-branch-stats-1"
     stat_date = "20260517"
@@ -140,22 +161,7 @@ def test_save_branch_stats_batch_keeps_multiple_branches(blame_stats_db):
             total_lines=10,
             ai_lines=4,
             non_ai_lines=6,
-            ai_ratio=40,
             total_files=1,
-        )
-
-    def file_obj(branch: str) -> StatsBlameFile:
-        return StatsBlameFile(
-            id=f"file-{branch}",
-            repo_id=repo_id,
-            branch=branch,
-            stat_date=stat_date,
-            file_path="src/app.py",
-            commit_sha=f"{branch[:4]}123",
-            total_lines=10,
-            ai_lines=4,
-            non_ai_lines=6,
-            ai_ratio=40,
         )
 
     def contributor_obj(branch: str) -> StatsBlameRepoContributor:
@@ -164,7 +170,6 @@ def test_save_branch_stats_batch_keeps_multiple_branches(blame_stats_db):
             repo_id=repo_id,
             branch=branch,
             stat_date=stat_date,
-            contributor_id="contributor-1",
             contributor_name="Alice",
             contributor_email="alice@example.com",
             ai_lines=4,
@@ -177,18 +182,14 @@ def test_save_branch_stats_batch_keeps_multiple_branches(blame_stats_db):
         "main",
         stat_date,
         repo_obj("main"),
-        [file_obj("main")],
         [contributor_obj("main")],
-        [],
     )
     blame_stats_db.save_branch_stats_batch(
         repo_id,
         "release",
         stat_date,
         repo_obj("release"),
-        [file_obj("release")],
         [contributor_obj("release")],
-        [],
     )
 
     with session_scope(blame_stats_db.engine) as session:
@@ -197,13 +198,6 @@ def test_save_branch_stats_batch_keeps_multiple_branches(blame_stats_db):
             for row in session.query(StatsBlameRepo)
             .filter(StatsBlameRepo.repo_id == repo_id)
             .order_by(StatsBlameRepo.branch.asc())
-            .all()
-        ]
-        file_branches = [
-            row.branch
-            for row in session.query(StatsBlameFile)
-            .filter(StatsBlameFile.repo_id == repo_id)
-            .order_by(StatsBlameFile.branch.asc())
             .all()
         ]
         contributor_branches = [
@@ -215,5 +209,108 @@ def test_save_branch_stats_batch_keeps_multiple_branches(blame_stats_db):
         ]
 
     assert branches == ["main", "release"]
-    assert file_branches == ["main", "release"]
     assert contributor_branches == ["main", "release"]
+
+
+def test_save_branch_stats_batch_replaces_repo_and_person_rows_without_file_rows(blame_stats_db):
+    repo_id = "repo-person-stats-1"
+    stat_date = "20260530"
+
+    def repo_obj(total_lines: int) -> StatsBlameRepo:
+        return StatsBlameRepo(
+            id=f"repo-{total_lines}",
+            repo_id=repo_id,
+            stat_date=stat_date,
+            commit_sha=f"abc{total_lines}",
+            branch="main",
+            total_lines=total_lines,
+            ai_lines=4,
+            non_ai_lines=total_lines - 4,
+            total_files=1,
+        )
+
+    def contributor_obj(total_lines: int) -> StatsBlameRepoContributor:
+        return StatsBlameRepoContributor(
+            id=f"contrib-{total_lines}",
+            repo_id=repo_id,
+            branch="main",
+            stat_date=stat_date,
+            contributor_name="Alice",
+            contributor_email="",
+            ai_lines=4,
+            non_ai_lines=total_lines - 4,
+            total_lines=total_lines,
+        )
+
+    blame_stats_db.save_branch_stats_batch(
+        repo_id,
+        "main",
+        stat_date,
+        repo_obj(10),
+        [contributor_obj(10)],
+    )
+    blame_stats_db.save_branch_stats_batch(
+        repo_id,
+        "main",
+        stat_date,
+        repo_obj(12),
+        [contributor_obj(12)],
+    )
+
+    with session_scope(blame_stats_db.engine) as session:
+        repo_rows = (
+            session.query(StatsBlameRepo)
+            .filter(StatsBlameRepo.repo_id == repo_id)
+            .all()
+        )
+        contributor_rows = (
+            session.query(StatsBlameRepoContributor)
+            .filter(StatsBlameRepoContributor.repo_id == repo_id)
+            .all()
+        )
+
+    assert len(repo_rows) == 1
+    assert repo_rows[0].total_lines == 12
+    assert len(contributor_rows) == 1
+    assert contributor_rows[0].total_lines == 12
+
+
+def test_repo_and_contributor_query_payloads_exclude_removed_fields(blame_stats_db):
+    repo_id = "repo-query-fields-1"
+    stat_date = "20260530"
+
+    blame_stats_db.save_branch_stats_batch(
+        repo_id,
+        "main",
+        stat_date,
+        StatsBlameRepo(
+            id="repo-query-row-1",
+            repo_id=repo_id,
+            stat_date=stat_date,
+            commit_sha="abc123",
+            branch="main",
+            total_lines=10,
+            ai_lines=4,
+            non_ai_lines=6,
+            total_files=1,
+        ),
+        [
+            StatsBlameRepoContributor(
+                id="contrib-query-row-1",
+                repo_id=repo_id,
+                branch="main",
+                stat_date=stat_date,
+                contributor_name="Alice",
+                contributor_email="",
+                ai_lines=4,
+                non_ai_lines=6,
+                total_lines=10,
+            )
+        ],
+    )
+
+    repo_payload = blame_stats_db.get_repo_blame_stats(repo_id, None, None)[0]
+    contributor_payload = blame_stats_db.get_repo_contributor_stats(repo_id, 20260530)[0]
+
+    assert "ai_ratio" not in repo_payload
+    assert "contributor_id" not in contributor_payload

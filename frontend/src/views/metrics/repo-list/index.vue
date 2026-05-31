@@ -33,8 +33,7 @@ const columns = computed(() => [
   { label: "分支", prop: "branch", minWidth: 140 },
   { label: "AI 代码行数", prop: "ai_lines", width: 130 },
   { label: "人工代码行数", prop: "non_ai_lines", width: 130 },
-  { label: "总代码行数", prop: "total_lines", width: 130 },
-  { label: "AI 占比", prop: "ai_ratio", width: 100, slot: "aiRatio" }
+  { label: "总代码行数", prop: "total_lines", width: 130 }
 ]);
 
 const defaultDateRange = (): [Date, Date] => {
@@ -63,10 +62,6 @@ const formatStatDate = (value: number) => {
 
 const formatNumber = (value: number) => {
   return new Intl.NumberFormat("en-US").format(value);
-};
-
-const formatPercent = (value: number) => {
-  return `${value.toFixed(2)}%`;
 };
 
 const buildParams = () => {
@@ -198,11 +193,6 @@ onMounted(async () => {
             <span class="single-line-cell">{{
               formatStatDate(row.stat_date)
             }}</span>
-          </template>
-          <template #aiRatio="{ row }">
-            <el-tag effect="plain" round type="primary">
-              {{ formatPercent(row.ai_ratio) }}
-            </el-tag>
           </template>
         </pure-table>
       </template>

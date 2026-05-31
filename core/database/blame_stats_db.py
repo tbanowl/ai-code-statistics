@@ -5,8 +5,6 @@ from core.config.logging import Logger
 from core.database.base import BaseDatabase, session_scope
 from core.database.models import (
     AuthorshipNotes,
-    StatsBlameFile,
-    StatsBlameFileContributor,
     StatsBlameRepo,
     StatsBlameRepoContributor,
     StatsRepoBranchConfig,
@@ -87,6 +85,11 @@ class BlameStatsDatabase(BaseDatabase):
         self, repo_id: str, commit_sha: str
     ) -> bool:
         """更新仓库最近一次 Git Blame 统计成功的提交 SHA。"""
+        return self.update_repository_last_blame_stats(repo_id, commit_sha, None)
+
+    def update_repository_last_blame_stats(
+        self, repo_id: str, commit_sha: str, stat_date: str | int | None
+    ) -> bool:
         with session_scope(self.engine) as session:
             repo = (
                 session.query(StatsRepository)
@@ -98,6 +101,8 @@ class BlameStatsDatabase(BaseDatabase):
                 return False
 
             repo.last_blame_commit_sha = commit_sha
+            if stat_date is not None:
+                repo.last_stat_date = int(stat_date)
             repo.updated_at = int(time.time() * 1000)
             return True
 
@@ -364,19 +369,6 @@ class BlameStatsDatabase(BaseDatabase):
                 StatsBlameRepo.repo_id == repo_id, StatsBlameRepo.stat_date == stat_date
             ).delete()
 
-    def delete_daily_file_stats(self, repo_id: str, stat_date: int) -> None:
-        """
-        删除文件级别的当天统计结果
-
-        Args:
-            repo_id: 仓库 ID
-            stat_date: 统计日期
-        """
-        with session_scope(self.engine) as session:
-            session.query(StatsBlameFile).filter(
-                StatsBlameFile.repo_id == repo_id, StatsBlameFile.stat_date == stat_date
-            ).delete()
-
     def delete_daily_repo_contributor_stats(self, repo_id: str, stat_date: int) -> None:
         """
         删除仓库贡献者级别的当天统计结果
@@ -389,20 +381,6 @@ class BlameStatsDatabase(BaseDatabase):
             session.query(StatsBlameRepoContributor).filter(
                 StatsBlameRepoContributor.repo_id == repo_id,
                 StatsBlameRepoContributor.stat_date == stat_date,
-            ).delete()
-
-    def delete_daily_file_contributor_stats(self, repo_id: str, stat_date: int) -> None:
-        """
-        删除文件贡献者级别的当天统计结果
-
-        Args:
-            repo_id: 仓库 ID
-            stat_date: 统计日期
-        """
-        with session_scope(self.engine) as session:
-            session.query(StatsBlameFileContributor).filter(
-                StatsBlameFileContributor.repo_id == repo_id,
-                StatsBlameFileContributor.stat_date == stat_date,
             ).delete()
 
     # ============================================================================
@@ -426,7 +404,6 @@ class BlameStatsDatabase(BaseDatabase):
         Returns:
             统计记录 ID
         """
-        ai_ratio = (ai_lines / total_lines * 100) if total_lines > 0 else 0.0
         now = int(time.time() * 1000)
 
         with session_scope(self.engine) as session:
@@ -447,57 +424,7 @@ class BlameStatsDatabase(BaseDatabase):
                 total_lines=total_lines,
                 ai_lines=ai_lines,
                 non_ai_lines=non_ai_lines,
-                ai_ratio=ai_ratio,
                 total_files=total_files,
-                created_at=now,
-                updated_at=now,
-            )
-            session.add(stats)
-            session.flush()
-
-            return stats.id
-
-    def save_file_blame_stats(
-        self,
-        repo_id: str,
-        branch: str,
-        stat_date: str,
-        file_path: str,
-        commit_sha: str,
-        total_lines: int,
-        ai_lines: int,
-        non_ai_lines: int,
-    ) -> str:
-        """
-        保存文件级 blame 统计结果
-
-        Returns:
-            文件统计记录 ID
-        """
-        ai_ratio = (ai_lines / total_lines * 100) if total_lines > 0 else 0.0
-        now = int(time.time() * 1000)
-
-        with session_scope(self.engine) as session:
-            # 先删除当天旧数据
-            session.query(StatsBlameFile).filter(
-                StatsBlameFile.repo_id == repo_id,
-                StatsBlameFile.stat_date == stat_date,
-                StatsBlameFile.file_path == file_path,
-                StatsBlameFile.branch == branch,
-            ).delete()
-
-            # 插入新数据
-            stats = StatsBlameFile(
-                id=gen_xid(),
-                repo_id=repo_id,
-                branch=branch,
-                stat_date=stat_date,
-                file_path=file_path,
-                commit_sha=commit_sha,
-                total_lines=total_lines,
-                ai_lines=ai_lines,
-                non_ai_lines=non_ai_lines,
-                ai_ratio=ai_ratio,
                 created_at=now,
                 updated_at=now,
             )
@@ -511,7 +438,6 @@ class BlameStatsDatabase(BaseDatabase):
         repo_id: str,
         branch: str,
         stat_date: str,
-        contributor_id: str,
         contributor_name: str,
         contributor_email: str,
         ai_lines: int,
@@ -531,7 +457,8 @@ class BlameStatsDatabase(BaseDatabase):
             session.query(StatsBlameRepoContributor).filter(
                 StatsBlameRepoContributor.repo_id == repo_id,
                 StatsBlameRepoContributor.stat_date == stat_date,
-                StatsBlameRepoContributor.contributor_id == contributor_id,
+                StatsBlameRepoContributor.contributor_name == contributor_name,
+                StatsBlameRepoContributor.contributor_email == (contributor_email or ""),
                 StatsBlameRepoContributor.branch == branch,
             ).delete()
 
@@ -541,9 +468,8 @@ class BlameStatsDatabase(BaseDatabase):
                 repo_id=repo_id,
                 branch=branch,
                 stat_date=stat_date,
-                contributor_id=contributor_id,
                 contributor_name=contributor_name,
-                contributor_email=contributor_email,
+                contributor_email=contributor_email or "",
                 ai_lines=ai_lines,
                 non_ai_lines=non_ai_lines,
                 total_lines=total_lines,
@@ -555,60 +481,7 @@ class BlameStatsDatabase(BaseDatabase):
 
             return stats.id
 
-    def save_file_contributor_stats(
-        self,
-        file_id: str,
-        stat_date: int,
-        repo_id: str,
-        branch: str,
-        file_path: str,
-        contributor_id: str,
-        contributor_name: str,
-        contributor_email: str,
-        ai_lines: int,
-        non_ai_lines: int,
-        total_lines: int,
-    ) -> str:
-        """
-        保存文件贡献者 blame 统计结果
-
-        Returns:
-            贡献者统计记录 ID
-        """
-        now = int(time.time() * 1000)
-
-        with session_scope(self.engine) as session:
-            # 先删除当天旧数据
-            session.query(StatsBlameFileContributor).filter(
-                StatsBlameFileContributor.file_id == file_id,
-                StatsBlameFileContributor.stat_date == stat_date,
-                StatsBlameFileContributor.contributor_id == contributor_id,
-                StatsBlameFileContributor.branch == branch,
-            ).delete()
-
-            # 插入新数据
-            stats = StatsBlameFileContributor(
-                id=gen_xid(),
-                file_id=file_id,
-                stat_date=stat_date,
-                repo_id=repo_id,
-                branch=branch,
-                file_path=file_path,
-                contributor_id=contributor_id,
-                contributor_name=contributor_name,
-                contributor_email=contributor_email,
-                ai_lines=ai_lines,
-                non_ai_lines=non_ai_lines,
-                total_lines=total_lines,
-                created_at=now,
-                updated_at=now,
-            )
-            session.add(stats)
-            session.flush()
-
-            return stats.id
-
-    def save_branch_stats_batch(self, repo_id: str, branch: str, stat_date: str, repo_obj, file_objs, rc_objs, fc_objs) -> None:
+    def save_branch_stats_batch(self, repo_id: str, branch: str, stat_date: str, repo_obj, rc_objs) -> None:
         """
         以仓库+分支为维度，在单个事务内保存所有统计数据。
         先检查当天数据是否存在，存在则删除，再批量插入（每批 1000 条）。
@@ -632,74 +505,17 @@ class BlameStatsDatabase(BaseDatabase):
                     StatsBlameRepo.stat_date == stat_date,
                     StatsBlameRepo.branch == branch,
                 ).delete()
-                session.query(StatsBlameFile).filter(
-                    StatsBlameFile.repo_id == repo_id,
-                    StatsBlameFile.stat_date == stat_date,
-                    StatsBlameFile.branch == branch,
-                ).delete()
                 session.query(StatsBlameRepoContributor).filter(
                     StatsBlameRepoContributor.repo_id == repo_id,
                     StatsBlameRepoContributor.stat_date == stat_date,
                     StatsBlameRepoContributor.branch == branch,
                 ).delete()
-                session.query(StatsBlameFileContributor).filter(
-                    StatsBlameFileContributor.repo_id == repo_id,
-                    StatsBlameFileContributor.stat_date == stat_date,
-                    StatsBlameFileContributor.branch == branch,
-                ).delete()
 
             session.add(repo_obj)
-            for i in range(0, len(file_objs), BATCH_SIZE):
-                session.bulk_save_objects(file_objs[i : i + BATCH_SIZE])
+            for obj in rc_objs:
+                obj.contributor_email = obj.contributor_email or ""
             for i in range(0, len(rc_objs), BATCH_SIZE):
                 session.bulk_save_objects(rc_objs[i : i + BATCH_SIZE])
-            for i in range(0, len(fc_objs), BATCH_SIZE):
-                session.bulk_save_objects(fc_objs[i : i + BATCH_SIZE])
-
-    def save_batch_file_contributor_stats(self, stats_list: list) -> int:
-        """
-        批量保存文件贡献者统计结果
-
-        Args:
-            stats_list: 统计结果列表
-
-        Returns:
-            保存的记录数量
-        """
-        now = int(time.time() * 1000)
-
-        with session_scope(self.engine) as session:
-            count = 0
-            for stats in stats_list:
-                # 先删除当天旧数据
-                session.query(StatsBlameFileContributor).filter(
-                    StatsBlameFileContributor.file_id == stats["file_id"],
-                    StatsBlameFileContributor.stat_date == stats["stat_date"],
-                    StatsBlameFileContributor.contributor_id == stats["contributor_id"],
-                    StatsBlameFileContributor.branch == stats["branch"],
-                ).delete()
-
-                # 插入新数据
-                stat = StatsBlameFileContributor(
-                    id=gen_xid(),
-                    file_id=stats["file_id"],
-                    stat_date=stats["stat_date"],
-                    repo_id=stats["repo_id"],
-                    branch=stats["branch"],
-                    file_path=stats["file_path"],
-                    contributor_id=stats["contributor_id"],
-                    contributor_name=stats["contributor_name"],
-                    contributor_email=stats["contributor_email"],
-                    ai_lines=stats["ai_lines"],
-                    non_ai_lines=stats["non_ai_lines"],
-                    total_lines=stats["total_lines"],
-                    created_at=now,
-                    updated_at=now,
-                )
-                session.add(stat)
-                count += 1
-
-            return count
 
     # ============================================================================
     # 贡献者管理
@@ -794,49 +610,7 @@ class BlameStatsDatabase(BaseDatabase):
                     "total_lines": s.total_lines,
                     "ai_lines": s.ai_lines,
                     "non_ai_lines": s.non_ai_lines,
-                    "ai_ratio": float(s.ai_ratio) if s.ai_ratio else 0.0,
                     "total_files": s.total_files,
-                    "created_at": s.created_at,
-                    "updated_at": s.updated_at,
-                }
-                for s in stats
-            ]
-
-    def get_file_blame_stats(self, repo_id: str, stat_date: str | None) -> list:
-        """
-        查询文件归因统计数据
-
-        Args:
-            repo_id: 仓库 ID
-            stat_date: 统计日期（可选）
-
-        Returns:
-            文件统计数据列表
-        """
-        with session_scope(self.engine) as session:
-            query = session.query(StatsBlameFile).filter(
-                StatsBlameFile.repo_id == repo_id
-            )
-
-            if stat_date:
-                query = query.filter(StatsBlameFile.stat_date == stat_date)
-
-            query = query.order_by(StatsBlameFile.ai_lines.desc())
-
-            stats = query.all()
-
-            return [
-                {
-                    "id": s.id,
-                    "repo_id": s.repo_id,
-                    "branch": s.branch,
-                    "stat_date": s.stat_date,
-                    "file_path": s.file_path,
-                    "commit_sha": s.commit_sha,
-                    "total_lines": s.total_lines,
-                    "ai_lines": s.ai_lines,
-                    "non_ai_lines": s.non_ai_lines,
-                    "ai_ratio": float(s.ai_ratio) if s.ai_ratio else 0.0,
                     "created_at": s.created_at,
                     "updated_at": s.updated_at,
                 }
@@ -886,7 +660,6 @@ class BlameStatsDatabase(BaseDatabase):
                     "repo_id": s.repo_id,
                     "branch": s.branch,
                     "stat_date": s.stat_date,
-                    "contributor_id": s.contributor_id,
                     "contributor_name": s.contributor_name,
                     "contributor_email": s.contributor_email,
                     "ai_lines": s.ai_lines,
@@ -941,7 +714,6 @@ class BlameStatsDatabase(BaseDatabase):
                         "ai_lines": s.ai_lines,
                         "non_ai_lines": s.non_ai_lines,
                         "total_lines": s.total_lines,
-                        "ai_ratio": float(s.ai_ratio) if s.ai_ratio else 0.0,
                     }
                     for s, repo_name in rows
                 ],

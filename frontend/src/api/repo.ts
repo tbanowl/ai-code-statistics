@@ -27,7 +27,6 @@ export type BranchConfig = {
 };
 
 export type ContributorStat = {
-  contributor_id: string;
   contributor_name: string;
   ai_lines: number;
   non_ai_lines: number;

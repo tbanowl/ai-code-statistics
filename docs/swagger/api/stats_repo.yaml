@@ -218,38 +218,6 @@ endpoints:
                   repo_id:
                     type: string
 
-  /api/stats/repo/blame/file/<repo_id>:
-    GET:
-      summary: 获取文件归因统计数据
-      parameters:
-        - name: repo_id
-          in: path
-          required: true
-          type: string
-        - name: stat_date
-          in: query
-          type: integer
-          description: 统计日期时间戳
-      responses:
-        '200':
-          description: 文件归因统计数据
-          schema:
-            type: object
-            properties:
-              success:
-                type: boolean
-              data:
-                type: object
-                properties:
-                  stats:
-                    type: array
-                    items:
-                      type: object
-                  count:
-                    type: integer
-                  repo_id:
-                    type: string
-
   /api/stats/repo/blame/repo/<repo_id>/contributors:
     GET:
       summary: 获取仓库贡献者归因统计数据
