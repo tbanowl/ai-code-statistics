@@ -1,10 +1,10 @@
 """Git Blame 统计定时任务"""
 
-import os
+import hashlib
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, Optional
-from uuid import uuid4
 from core.scheduler.tasks.base import BaseTask
 from core.scheduler.scheduled import scheduled
 from core.database import BlameStatsDatabase
@@ -151,20 +151,18 @@ class GitBlameStatsTask(BaseTask):
         Returns:
             统计结果或 None
         """
-        temp_dir = None
+        repo_dir = self._repo_path(repo_path)
         try:
-            # 创建临时目录 - 使用项目目录下的 code-metrics 目录
-            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            temp_dir = os.path.join(os.path.join(project_root, ".code-metrics"), f"git_blame_{uuid4()}")
-            os.makedirs(temp_dir, exist_ok=True)
+            self.git_clone_service.cleanup_temp_dir(str(repo_dir))
+            repo_dir.parent.mkdir(parents=True, exist_ok=True)
 
             # 克隆仓库
-            self.logger.info(f"克隆仓库到临时目录: {temp_dir}")
+            self.logger.info(f"克隆仓库到统计缓存目录: {repo_dir}")
 
             if not self.git_clone_service.clone_with_ssh_key(
                 repo_path,
                 ssh_key_info["private_key"],
-                temp_dir,
+                str(repo_dir),
                 depth=1,
             ):
                 self.logger.error("仓库克隆失败")
@@ -188,8 +186,7 @@ class GitBlameStatsTask(BaseTask):
                 }
 
             # 获取统计配置
-            config = load_config()
-            file_filter = config.get("blame_stats", {}).get("file_filter", {})
+            file_filter = self._blame_stats_config().get("file_filter", {})
             repo_url = self.blame_stats_db.get_repository_repo_url(repo_id)
 
             # 遍历每个分支进行统计
@@ -201,7 +198,7 @@ class GitBlameStatsTask(BaseTask):
                 self.logger.info(f"开始统计分支: {branch}")
 
                 # 切换分支
-                if not self.git_clone_service.checkout_branch(temp_dir, branch):
+                if not self.git_clone_service.checkout_branch(str(repo_dir), branch):
                     self.logger.warning(f"分支 {branch} 切换失败，跳过")
                     self.blame_stats_db.mark_repository_branch_deleted(repo_id, branch)
                     failed_count += 1
@@ -209,7 +206,7 @@ class GitBlameStatsTask(BaseTask):
 
                 # 统计该分支
                 result = self.blame_stats_service.analyze_repository(
-                    repo_url, temp_dir, stat_date, file_filter
+                    repo_url, str(repo_dir), stat_date, file_filter
                 )
 
                 if not result:
@@ -250,9 +247,20 @@ class GitBlameStatsTask(BaseTask):
             return None
 
         finally:
-            # 清理临时目录
-            if temp_dir and os.path.exists(temp_dir):
-                self.git_clone_service.cleanup_temp_dir(temp_dir)
+            self.git_clone_service.cleanup_temp_dir(str(repo_dir))
+
+    def _blame_stats_config(self) -> Dict:
+        config = getattr(self, "config", None) or load_config()
+        blame_stats_config = config.get("blame_stats", {})
+        return blame_stats_config if isinstance(blame_stats_config, dict) else {}
+
+    def _repo_path(self, repo_url: str) -> Path:
+        blame_stats_config = self._blame_stats_config()
+        repo_paths = blame_stats_config.get("repo_paths", {})
+        if repo_url in repo_paths:
+            return Path(repo_paths[repo_url])
+        repo_hash = hashlib.sha256(repo_url.encode("utf-8")).hexdigest()[:16]
+        return Path(blame_stats_config.get("repo_cache_dir", ".cache/stats_repos")) / repo_hash
 
     def _save_branch_stats(self, repo_id: str, stat_date: str, result) -> None:
 

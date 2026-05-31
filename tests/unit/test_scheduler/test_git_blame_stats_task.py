@@ -1,3 +1,4 @@
+from pathlib import Path
 from unittest.mock import MagicMock
 
 from core.services.blame_stats_service import RepoBlameResult
@@ -21,6 +22,7 @@ def test_stat_repository_reads_branches_from_repository_branch_table(tmp_path):
     task.ssh_key_service = MagicMock()
     task.git_clone_service = MagicMock()
     task.blame_stats_service = MagicMock()
+    task.config = {"blame_stats": {"repo_cache_dir": str(tmp_path / "stats_repos")}}
 
     task.git_clone_service.clone_with_ssh_key.return_value = True
     task.blame_stats_db.get_repository_branches.return_value = ["main", "release"]
@@ -42,6 +44,9 @@ def test_stat_repository_reads_branches_from_repository_branch_table(tmp_path):
         task.git_clone_service.clone_with_ssh_key.call_args.args[2],
         depth=1,
     )
+    clone_target = Path(task.git_clone_service.clone_with_ssh_key.call_args.args[2])
+    assert clone_target.parent == tmp_path / "stats_repos"
+    assert clone_target != tmp_path / "stats_repos"
 
 
 def test_execute_counts_repository_without_branches_as_skipped():
@@ -96,13 +101,14 @@ def test_execute_defaults_stat_date_to_today(monkeypatch):
     assert result["stat_date"] == "20260530"
 
 
-def test_stat_repository_skips_when_repository_branch_table_is_empty():
+def test_stat_repository_skips_when_repository_branch_table_is_empty(tmp_path):
     task = GitBlameStatsTask.__new__(GitBlameStatsTask)
     task.logger = MagicMock()
     task.blame_stats_db = MagicMock()
     task.ssh_key_service = MagicMock()
     task.git_clone_service = MagicMock()
     task.blame_stats_service = MagicMock()
+    task.config = {"blame_stats": {"repo_cache_dir": str(tmp_path / "stats_repos")}}
 
     task.git_clone_service.clone_with_ssh_key.return_value = True
     task.blame_stats_db.get_repository_branches.return_value = []
@@ -127,13 +133,14 @@ def test_stat_repository_skips_when_repository_branch_table_is_empty():
     task.blame_stats_service.analyze_repository.assert_not_called()
 
 
-def test_stat_repository_marks_missing_branch_deleted():
+def test_stat_repository_marks_missing_branch_deleted(tmp_path):
     task = GitBlameStatsTask.__new__(GitBlameStatsTask)
     task.logger = MagicMock()
     task.blame_stats_db = MagicMock()
     task.ssh_key_service = MagicMock()
     task.git_clone_service = MagicMock()
     task.blame_stats_service = MagicMock()
+    task.config = {"blame_stats": {"repo_cache_dir": str(tmp_path / "stats_repos")}}
 
     task.git_clone_service.clone_with_ssh_key.return_value = True
     task.blame_stats_db.get_repository_branches.return_value = ["main"]
@@ -153,7 +160,7 @@ def test_stat_repository_marks_missing_branch_deleted():
     task.blame_stats_service.analyze_repository.assert_not_called()
 
 
-def test_stat_repository_records_last_blame_commit_sha_and_stat_date_after_success():
+def test_stat_repository_records_last_blame_commit_sha_and_stat_date_after_success(tmp_path):
     task = GitBlameStatsTask.__new__(GitBlameStatsTask)
     task.logger = MagicMock()
     task.blame_stats_db = MagicMock()
@@ -161,6 +168,7 @@ def test_stat_repository_records_last_blame_commit_sha_and_stat_date_after_succe
     task.git_clone_service = MagicMock()
     task.blame_stats_service = MagicMock()
     task._save_branch_stats = MagicMock()
+    task.config = {"blame_stats": {"repo_cache_dir": str(tmp_path / "stats_repos")}}
 
     task.git_clone_service.clone_with_ssh_key.return_value = True
     task.blame_stats_db.get_repository_branches.return_value = ["main"]
@@ -191,6 +199,19 @@ def test_stat_repository_records_last_blame_commit_sha_and_stat_date_after_succe
     task.blame_stats_db.update_repository_last_blame_stats.assert_called_once_with(
         "repo-1", "abc123def456", "20260517"
     )
+
+
+def test_repo_path_defaults_to_stats_repos_cache_child():
+    task = GitBlameStatsTask.__new__(GitBlameStatsTask)
+    task.config = {"blame_stats": {"repo_cache_dir": ".cache/stats_repos"}}
+
+    first_path = task._repo_path("ssh://git@example.com/repo.git")
+    second_path = task._repo_path("ssh://git@example.com/other.git")
+
+    assert first_path.parent == Path(".cache/stats_repos")
+    assert second_path.parent == Path(".cache/stats_repos")
+    assert first_path != Path(".cache/stats_repos")
+    assert first_path != second_path
 
 
 def test_save_branch_stats_saves_only_repo_and_person_rows():

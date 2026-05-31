@@ -44,6 +44,8 @@ scheduler:
 
 # Git Blame 统计配置
 blame_stats:
+  repo_cache_dir: .cache/stats_repos
+
   # 默认 SSH Key 配置（可选）
   default_ssh_key_name: "default-git-blame"
   default_ssh_key_public: "${DEFAULT_SSH_PUBLIC_KEY}"

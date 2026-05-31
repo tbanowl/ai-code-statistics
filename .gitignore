@@ -41,6 +41,8 @@ frontend/dist
 # claude
 .claude/
 .claude/settings.local.json
+.omo
+.cache
 
 # git worktrees
 .worktrees/
