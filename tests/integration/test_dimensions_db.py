@@ -165,6 +165,54 @@ def test_query_committed_events_can_require_authorship_notes(setup_dbs):
     assert filtered[0]["timestamp"] == 1710000000001
 
 
+def test_query_committed_events_authorship_notes_match_normalized_repo_url(setup_dbs):
+    metrics_db, stats_db = setup_dbs
+
+    raw_id = metrics_db.save_metrics_raw(
+        version=1,
+        event_count=1,
+        payload_json="{}",
+        received_at=1710000000000,
+    )
+
+    committed = MetricsEventsCommitted(
+        raw_id=raw_id,
+        timestamp=1710000000001,
+        repo_url="https://example.com/org/repo.git",
+        author="alice <alice@example.com>",
+        commit_sha="abc123",
+        human_additions=6,
+        git_diff_added_lines=10,
+        ai_additions=[3, 1],
+        ai_accepted=[3, 1],
+        total_ai_additions=[3, 1],
+    )
+    committed.uid = gen_commited_uid(committed)
+    metrics_db.upsert_committed_event(committed)
+
+    with session_scope(stats_db.engine) as session:
+        session.add(
+            AuthorshipNotes(
+                repo_url="example.com/org/repo",
+                branch="main",
+                commit_sha="abc123",
+                note_blob_oid=None,
+                author_name="alice",
+                author_email="alice@example.com",
+                note_content="note-a",
+                content_hash=compute_note_content_hash("note-a"),
+                change_seq=1,
+            )
+        )
+
+    filtered = stats_db.query_committed_events(
+        1710000000000, 1710000000010, require_authorship_notes=True
+    )
+
+    assert [row["commit_sha"] for row in filtered] == ["abc123"]
+    assert filtered[0]["repo_url"] == "example.com/org/repo"
+
+
 def test_update_repository_last_daily_aggregation_commit_sha(setup_dbs):
     _, stats_db = setup_dbs
     repo_id = stats_db.get_or_create_repository("https://example.com/org/repo.git")

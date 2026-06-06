@@ -1,6 +1,8 @@
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from core.scheduler.tasks.daily_aggregation_task import DailyAggregationTask
 from core.utils.repo_url import UNKNOWN_REPO
 
@@ -51,6 +53,13 @@ def test_aggregate_by_repo_contributor():
     assert "ai_percentage" not in data[key]
     assert "git_ai_version" not in data[key]
     assert latest_commits == {}
+
+
+def test_event_stat_date_rejects_missing_timestamp():
+    task = DailyAggregationTask.__new__(DailyAggregationTask)
+
+    with pytest.raises(ValueError, match="timestamp"):
+        task._event_stat_date({})
 
 
 @patch("core.scheduler.tasks.daily_aggregation_task.StatsDatabase")
@@ -313,3 +322,38 @@ def test_execute_updates_repository_progress_to_latest_commit(mock_stats_db_cls)
     stats_db.update_repository_last_daily_aggregation_commit_sha.assert_called_once_with(
         "r1", "newer456"
     )
+
+
+@patch("core.scheduler.tasks.daily_aggregation_task.StatsDatabase")
+def test_execute_fails_when_repository_progress_update_fails(mock_stats_db_cls):
+    stats_db = MagicMock()
+    stats_db.query_committed_events.return_value = [
+        {
+            "repo_url": "repo/a",
+            "author": "alice",
+            "author_uid": "alice <a@example.com>",
+            "author_email": "a@example.com",
+            "human_additions": 5,
+            "git_diff_added_lines": 15,
+            "ai_additions": 4,
+            "total_ai_additions_total": 6,
+            "ai_accepted_lines": 10,
+            "commit_sha": "abc123",
+            "timestamp": _millis(2026, 6, 5, 10, 30),
+        }
+    ]
+    stats_db.get_or_create_repository.return_value = "r1"
+    stats_db.update_repository_last_daily_aggregation_commit_sha.return_value = False
+    mock_stats_db_cls.return_value = stats_db
+
+    task = DailyAggregationTask.__new__(DailyAggregationTask)
+    task.config = {}
+    task.logger = MagicMock()
+
+    with pytest.raises(RuntimeError, match="commit.*abc123"):
+        task.execute(
+            {
+                "start_date": _millis(2026, 6, 5),
+                "end_date": _millis(2026, 6, 5),
+            }
+        )

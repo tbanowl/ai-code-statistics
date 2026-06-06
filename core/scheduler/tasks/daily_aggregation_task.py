@@ -103,9 +103,14 @@ class DailyAggregationTask(BaseTask):
                 if repo_id is None:
                     repo_id = stats_db.get_or_create_repository(repo_path)
                     repo_ids[repo_path] = repo_id
-                stats_db.update_repository_last_daily_aggregation_commit_sha(
+                updated = stats_db.update_repository_last_daily_aggregation_commit_sha(
                     repo_id, commit_sha
                 )
+                if updated is False:
+                    raise RuntimeError(
+                        "Failed to update repository daily aggregation commit marker "
+                        f"for repo_id={repo_id} commit_sha={commit_sha}"
+                    )
 
             total_records += len(aggregated)
             cursor = cursor + timedelta(days=1)
@@ -127,9 +132,17 @@ class DailyAggregationTask(BaseTask):
 
     @staticmethod
     def _event_stat_date(event: Dict) -> int:
-        timestamp = int(event.get("timestamp") or 0)
+        raw_timestamp = event.get("timestamp")
+        try:
+            timestamp = int(raw_timestamp)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Invalid committed event timestamp: {raw_timestamp!r}"
+            ) from exc
         if timestamp <= 0:
-            return int(datetime.now().strftime("%Y%m%d"))
+            raise ValueError(
+                f"Invalid committed event timestamp: {raw_timestamp!r}"
+            )
         return int(datetime.fromtimestamp(timestamp / 1000).strftime("%Y%m%d"))
 
     def _aggregate_by_repo_contributor(

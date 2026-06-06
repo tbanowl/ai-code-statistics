@@ -369,13 +369,38 @@ class StatsDatabase(BaseDatabase):
             if require_authorship_notes:
                 query = query.filter(MetricsEventsCommitted.commit_sha.isnot(None))
                 query = query.filter(func.trim(MetricsEventsCommitted.commit_sha) != "")
-                query = query.filter(
-                    session.query(AuthorshipNotes.id)
-                    .filter(AuthorshipNotes.repo_url == MetricsEventsCommitted.repo_url)
-                    .filter(AuthorshipNotes.commit_sha == MetricsEventsCommitted.commit_sha)
-                    .exists()
-                )
             rows = query.all()
+
+            if require_authorship_notes:
+                note_keys = {
+                    (normalize_repo_url(row.repo_url), (row.commit_sha or "").strip())
+                    for row in rows
+                    if (row.commit_sha or "").strip()
+                }
+                if not note_keys:
+                    rows = []
+                else:
+                    note_repo_urls = {repo_url for repo_url, _commit_sha in note_keys}
+                    note_commit_shas = {commit_sha for _repo_url, commit_sha in note_keys}
+                    matching_notes = (
+                        session.query(AuthorshipNotes.repo_url, AuthorshipNotes.commit_sha)
+                        .filter(AuthorshipNotes.repo_url.in_(note_repo_urls))
+                        .filter(AuthorshipNotes.commit_sha.in_(note_commit_shas))
+                        .all()
+                    )
+                    matching_note_keys = {
+                        (normalize_repo_url(repo_url), (commit_sha or "").strip())
+                        for repo_url, commit_sha in matching_notes
+                    }
+                    rows = [
+                        row
+                        for row in rows
+                        if (
+                            normalize_repo_url(row.repo_url),
+                            (row.commit_sha or "").strip(),
+                        )
+                        in matching_note_keys
+                    ]
 
             items: List[Dict] = []
             for row in rows:
