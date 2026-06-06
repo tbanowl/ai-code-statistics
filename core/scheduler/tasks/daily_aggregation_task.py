@@ -1,7 +1,7 @@
 """每日统计聚合任务"""
 
 from datetime import datetime, timedelta
-from typing import Dict, List
+from typing import Dict, List, Tuple
 from core.scheduler.tasks.base import BaseTask
 from core.scheduler.scheduled import scheduled
 from core.database import StatsDatabase
@@ -23,6 +23,7 @@ class DailyAggregationTask(BaseTask):
         end_ts = context.get("end_date")
         repo_url = context.get("repo_url")
         contributor = context.get("contributor")
+        require_authorship_notes = self._require_authorship_notes(context)
 
         if start_ts is None or end_ts is None:
             today = datetime.now()
@@ -71,19 +72,39 @@ class DailyAggregationTask(BaseTask):
                 day_end_ts,
                 repo_url=repo_url,
                 author=contributor,
+                require_authorship_notes=require_authorship_notes,
             )
             self.logger.info(
                 f"查询到 {len(committed_events)} 个 Committed 事件"
             )
 
-            aggregated = self._aggregate_by_repo_contributor(committed_events)
+            aggregated, latest_commits = self._aggregate_by_repo_contributor(
+                committed_events
+            )
+            repo_ids: Dict[str, str] = {}
 
             for key, stats in aggregated.items():
-                repo_path, author_name, author_email = key
+                stat_date, repo_path, author_name, author_email = key
 
-                repo_id = stats_db.get_or_create_repository(repo_path)
+                repo_id = repo_ids.get(repo_path)
+                if repo_id is None:
+                    repo_id = stats_db.get_or_create_repository(repo_path)
+                    repo_ids[repo_path] = repo_id
                 stats_db.upsert_daily_stat(
                     stat_date, repo_id, author_name, author_email, stats
+                )
+
+            for repo_path, latest_commit in latest_commits.items():
+                commit_sha = (latest_commit.get("commit_sha") or "").strip()
+                if not commit_sha:
+                    continue
+
+                repo_id = repo_ids.get(repo_path)
+                if repo_id is None:
+                    repo_id = stats_db.get_or_create_repository(repo_path)
+                    repo_ids[repo_path] = repo_id
+                stats_db.update_repository_last_daily_aggregation_commit_sha(
+                    repo_id, commit_sha
                 )
 
             total_records += len(aggregated)
@@ -92,14 +113,37 @@ class DailyAggregationTask(BaseTask):
         self.logger.info(f"聚合完成，共处理 {total_records} 条记录")
         return {"success": True, "records": total_records}
 
-    def _aggregate_by_repo_contributor(self, committed_events: List[Dict]) -> Dict:
+    def _require_authorship_notes(self, context: Dict) -> bool:
+        if "require_authorship_notes" in context:
+            return bool(context.get("require_authorship_notes"))
+
+        config = getattr(self, "config", None) or {}
+        job_config = (
+            config.get("scheduler", {})
+            .get("jobs", {})
+            .get("daily_aggregation", {})
+        )
+        return bool(job_config.get("require_authorship_notes", False))
+
+    @staticmethod
+    def _event_stat_date(event: Dict) -> int:
+        timestamp = int(event.get("timestamp") or 0)
+        if timestamp <= 0:
+            return int(datetime.now().strftime("%Y%m%d"))
+        return int(datetime.fromtimestamp(timestamp / 1000).strftime("%Y%m%d"))
+
+    def _aggregate_by_repo_contributor(
+        self, committed_events: List[Dict]
+    ) -> Tuple[Dict, Dict]:
         aggregated = {}
+        latest_commits = {}
 
         for event in committed_events:
+            stat_date = self._event_stat_date(event)
             repo_path = normalize_repo_url(event.get("repo_url"))
             author_name = event.get("author", "")
             author_email = event.get("author_email")
-            key = (repo_path, author_name, author_email)
+            key = (stat_date, repo_path, author_name, author_email)
 
             if key not in aggregated:
                 aggregated[key] = {
@@ -120,4 +164,14 @@ class DailyAggregationTask(BaseTask):
             stats["human_lines"] += int(event.get("human_additions", 0))
             stats["total_lines"] += int(event.get("git_diff_added_lines", 0))
 
-        return aggregated
+            commit_sha = (event.get("commit_sha") or "").strip()
+            timestamp = int(event.get("timestamp") or 0)
+            if commit_sha:
+                current = latest_commits.get(repo_path)
+                if current is None or timestamp >= int(current.get("timestamp") or 0):
+                    latest_commits[repo_path] = {
+                        "commit_sha": commit_sha,
+                        "timestamp": timestamp,
+                    }
+
+        return aggregated, latest_commits
