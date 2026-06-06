@@ -172,6 +172,7 @@ CREATE TABLE IF NOT EXISTS stats_repositories (
     repo_stats_flag INT DEFAULT 1 COMMENT '是否启用归因统计（0/1）',
     ssh_key_id VARCHAR(20) COMMENT '关联的 SSH Key ID',
     last_blame_commit_sha VARCHAR(40) COMMENT '最近一次 Git Blame 统计成功的提交 SHA',
+    last_daily_aggregation_commit_sha VARCHAR(40) COMMENT '最近一次每日聚合成功统计到的提交 SHA',
     last_stat_date BIGINT COMMENT '最后统计日期，格式 yyyyMMdd',
     created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
     updated_at BIGINT NOT NULL COMMENT '更新时间戳（毫秒）',

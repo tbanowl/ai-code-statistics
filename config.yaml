@@ -24,6 +24,7 @@ scheduler:
     daily_aggregation:
       enabled: true
       cron: "*/10 * * * *"
+      require_authorship_notes: false
     # Metrics 事件处理任务
     metrics_event_processor:
       enabled: true
