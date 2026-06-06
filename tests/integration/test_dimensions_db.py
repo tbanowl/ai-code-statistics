@@ -104,14 +104,17 @@ def test_repository_contributor_and_daily_stats_flow(setup_dbs):
     stats_db.upsert_daily_stat(
         1710000000000,
         repo_id,
-        contributor_id,
+        "alice",
+        "alice@example.com",
         {
             "repo_name": "org/repo-a",
             "contributor_name": "alice",
-            "ai_generated_lines": 20,
-            "ai_generated_lines_total": 24,
+            "contributor_email": "alice@example.com",
+            "ai_lines": 20,
+            "ai_total_lines": 24,
             "ai_accepted_lines": 60,
             "human_lines": 40,
+            "total_lines": 100,
         },
     )
 
@@ -121,7 +124,7 @@ def test_repository_contributor_and_daily_stats_flow(setup_dbs):
         start_date=1709999999000,
         end_date=1710000001000,
         repo_id=repo_id,
-        contributor_id=contributor_id,
+        contributor_email="alice@example.com",
         limit=10,
         offset=0,
     )
@@ -132,9 +135,13 @@ def test_repository_contributor_and_daily_stats_flow(setup_dbs):
     assert repos[0]["repo_name"] == "org/repo-a"
     assert contributors[0]["name"] == "alice"
     assert len(daily) == 1
+    assert daily[0]["ai_lines"] == 20
+    assert daily[0]["ai_total_lines"] == 24
     assert daily[0]["ai_accepted_lines"] == 60
+    assert daily[0]["total_lines"] == 100
     assert daily[0]["repo_name"] == "org/repo-a"
     assert daily[0]["contributor_name"] == "alice"
+    assert daily[0]["contributor_email"] == "alice@example.com"
 
 
 def test_repository_fallback_unknown(setup_dbs):
@@ -162,11 +169,13 @@ def test_consolidate_empty_repository_rows(setup_dbs):
             StatsDailyStat(
                 stat_date=1710000000000,
                 repo_id=bad_repo.id,
-                contributor_id=contributor.id,
-                ai_generated_lines=1,
-                ai_generated_lines_total=2,
+                contributor_name=contributor.name,
+                contributor_email=contributor.email,
+                ai_lines=1,
+                ai_total_lines=2,
                 ai_accepted_lines=3,
                 human_lines=4,
+                total_lines=7,
             )
         )
         session.add(

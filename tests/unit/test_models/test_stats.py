@@ -30,9 +30,15 @@ def test_stats_contributor_defaults_and_dict():
 def test_stats_repo_contributor_and_daily_stat_fields():
     link = StatsRepoContributor(repo_id="repo-id", contributor_id="contrib-id")
     daily = StatsDailyStat(
-        stat_date=1710000000000, repo_id="repo-id", contributor_id="contrib-id"
+        stat_date=1710000000000,
+        repo_id="repo-id",
+        contributor_name="alice",
+        contributor_email="alice@example.com",
     )
     assert link.repo_id == "repo-id"
     assert link.contributor_id == "contrib-id"
-    assert daily.ai_generated_lines in (None, 0)
+    assert daily.contributor_email == "alice@example.com"
+    assert daily.ai_lines in (None, 0)
+    assert daily.ai_total_lines in (None, 0)
     assert daily.ai_accepted_lines in (None, 0)
+    assert daily.total_lines in (None, 0)

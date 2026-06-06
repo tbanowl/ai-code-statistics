@@ -16,10 +16,10 @@ export type PaginationData = NonNullable<ApiResponse<unknown>["pagination"]>;
 // 统计项类型
 export type StatItem = {
   stat_date: number;
-  ai_generated_lines: number;
+  ai_lines: number;
   ai_accepted_lines: number;
   human_lines: number;
-  ai_percentage: number;
+  total_lines: number;
 };
 
 // 统计汇总类型
@@ -27,6 +27,7 @@ export type StatSummary = {
   total_ai_generated: number;
   total_ai_accepted: number;
   total_human: number;
+  total_lines: number;
   avg_ai_percentage: number;
 };
 
@@ -71,14 +72,13 @@ export type DailyStatItem = {
   stat_date: number;
   repo_id: string;
   repo_name: string | null;
-  contributor_id: string;
   contributor_name: string | null;
-  ai_generated_lines: number;
-  ai_generated_lines_total: number;
+  contributor_email: string | null;
+  ai_lines: number;
+  ai_total_lines: number;
   ai_accepted_lines: number;
   human_lines: number;
-  ai_percentage: number | string;
-  git_ai_version?: string | null;
+  total_lines: number;
   created_at: number;
   updated_at: number;
 };
@@ -211,8 +211,8 @@ export const triggerStatsAggregate = (payload?: {
 export const getBlameRepoStats = (params?: {
   page?: number;
   page_size?: number;
-  start_date?: string;
-  end_date?: string;
+  start_date?: number | string;
+  end_date?: number | string;
   repo_id?: string;
 }) => {
   return http.request<ApiResponse<BlameRepoStatItem[]>>(

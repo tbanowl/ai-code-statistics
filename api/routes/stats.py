@@ -1,5 +1,3 @@
-import logging
-
 from flask import Blueprint, current_app, jsonify, request
 
 from core.database import BlameStatsDatabase, StatsDatabase
@@ -43,16 +41,17 @@ def _build_summary(items: list[dict]) -> dict:
             return int(value) if value.isdigit() else 0
         return 0
 
-    total_generated = sum(_to_int(i.get("ai_generated_lines")) for i in items)
+    total_generated = sum(_to_int(i.get("ai_lines")) for i in items)
     total_accepted = sum(_to_int(i.get("ai_accepted_lines")) for i in items)
     total_human = sum(_to_int(i.get("human_lines")) for i in items)
-    total = total_accepted + total_human
-    avg_pct = round((total_accepted / total) * 100, 2) if total > 0 else 0
+    total_lines = sum(_to_int(i.get("total_lines")) for i in items)
+    avg_pct = round((total_accepted / total_lines) * 100, 2) if total_lines > 0 else 0
 
     return {
         "total_ai_generated": total_generated,
         "total_ai_accepted": total_accepted,
         "total_human": total_human,
+        "total_lines": total_lines,
         "avg_ai_percentage": avg_pct,
     }
 
@@ -158,11 +157,18 @@ def get_stats():
         db = StatsDatabase()
         repo_id = request.args.get("repo_id")
         contributor_id = request.args.get("contributor_id")
+        contributor_email = None
+        contributor_name = None
+        if contributor_id:
+            contributor = db.get_contributor_by_id(contributor_id)
+            if contributor:
+                contributor_email = contributor.get("email")
+                contributor_name = contributor.get("name")
         items = db.get_aggregated_stats(
             start_date=start_date,
             end_date=end_date,
             repo_id=repo_id,
-            contributor_id=contributor_id,
+            contributor_email=contributor_email,
             granularity=granularity,
         )
 
@@ -176,10 +182,8 @@ def get_stats():
             repo = db.get_repository_by_id(repo_id)
             if repo:
                 filters["repo_name"] = repo.get("repo_name")
-        if contributor_id:
-            contributor = db.get_contributor_by_id(contributor_id)
-            if contributor:
-                filters["contributor_name"] = contributor.get("name")
+        if contributor_name:
+            filters["contributor_name"] = contributor_name
 
         return jsonify(
             {
@@ -201,13 +205,19 @@ def get_daily_stats():
         page, page_size = _get_pagination()
 
         db = StatsDatabase()
+        contributor_email = None
+        contributor_id = request.args.get("contributor_id")
+        if contributor_id:
+            contributor = db.get_contributor_by_id(contributor_id)
+            if contributor:
+                contributor_email = contributor.get("email")
         result = db.get_daily_stats_paginated(
             page=page,
             page_size=page_size,
             start_date=request.args.get("start_date", type=int),
             end_date=request.args.get("end_date", type=int),
             repo_id=request.args.get("repo_id"),
-            contributor_id=request.args.get("contributor_id"),
+            contributor_email=contributor_email,
         )
 
         return jsonify(
@@ -293,22 +303,7 @@ def get_stats_aggregate_compat():
         db = StatsDatabase()
         repo_id = payload.get("repo_id")
         contributor_id = payload.get("contributor_id")
-
-        items = db.get_aggregated_stats(
-            start_date=start_date,
-            end_date=end_date,
-            repo_id=repo_id,
-            contributor_id=contributor_id,
-            granularity="daily",
-        )
-        detail_rows = db.query_daily_stats(
-            start_date=start_date,
-            end_date=end_date,
-            repo_id=repo_id,
-            contributor_id=contributor_id,
-            limit=100000,
-            offset=0,
-        )
+        contributor_email = None
 
         repo_url = None
         contributor_uid = None
@@ -320,7 +315,15 @@ def get_stats_aggregate_compat():
             contributor = db.get_contributor_by_id(contributor_id)
             if contributor:
                 contributor_uid = contributor.get("contributor_uid")
+                contributor_email = contributor.get("email")
 
+        items = db.get_aggregated_stats(
+            start_date=start_date,
+            end_date=end_date,
+            repo_id=repo_id,
+            contributor_email=contributor_email,
+            granularity="daily",
+        )
         committed_rows = db.query_committed_events(
             start_ts=start_date,
             end_ts=end_date,
@@ -340,7 +343,7 @@ def get_stats_aggregate_compat():
                 "ai_commit_pct": round((ai_commits / total_commits) * 100, 2)
                 if total_commits > 0
                 else 0,
-                "total_lines": summary["total_ai_accepted"] + summary["total_human"],
+                "total_lines": summary["total_lines"],
                 "ai_lines": summary["total_ai_accepted"],
                 "ai_lines_pct": summary["avg_ai_percentage"],
             }

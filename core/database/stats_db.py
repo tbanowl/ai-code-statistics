@@ -145,7 +145,8 @@ class StatsDatabase(BaseDatabase):
                     target = (
                         session.query(StatsDailyStat)
                         .filter(StatsDailyStat.repo_id == unknown.id)
-                        .filter(StatsDailyStat.contributor_id == daily.contributor_id)
+                        .filter(StatsDailyStat.contributor_name == daily.contributor_name)
+                        .filter(StatsDailyStat.contributor_email == daily.contributor_email)
                         .filter(StatsDailyStat.stat_date == daily.stat_date)
                         .first()
                     )
@@ -154,24 +155,11 @@ class StatsDatabase(BaseDatabase):
                         daily.updated_at = now_ts()
                         continue
 
-                    target.ai_generated_lines += int(daily.ai_generated_lines or 0)
-                    target.ai_generated_lines_total += int(
-                        daily.ai_generated_lines_total or 0
-                    )
+                    target.ai_lines += int(daily.ai_lines or 0)
+                    target.ai_total_lines += int(daily.ai_total_lines or 0)
                     target.ai_accepted_lines += int(daily.ai_accepted_lines or 0)
                     target.human_lines += int(daily.human_lines or 0)
-                    total = int(target.ai_accepted_lines or 0) + int(
-                        target.human_lines or 0
-                    )
-                    target.ai_percentage = (
-                        round((int(target.ai_accepted_lines or 0) / total) * 100, 2)
-                        if total > 0
-                        else 0
-                    )
-                    if not (target.git_ai_version or "") and (
-                        daily.git_ai_version or ""
-                    ):
-                        target.git_ai_version = daily.git_ai_version
+                    target.total_lines += int(daily.total_lines or 0)
                     target.updated_at = now_ts()
                     session.delete(daily)
 
@@ -391,6 +379,7 @@ class StatsDatabase(BaseDatabase):
                         "tool_model_pairs_total": self._metric_total(row.tool_model_pairs),
                         "mixed_additions_total": self._metric_total(row.mixed_additions),
                         "human_additions": int(row.human_additions or 0),
+                        "git_diff_added_lines": int(row.git_diff_added_lines or 0),
                         "ai_additions": self._metric_total(row.ai_additions),
                         "ai_accepted_lines": self._metric_total(row.ai_accepted),
                         "total_ai_additions_total": self._metric_total(row.total_ai_additions),
@@ -639,36 +628,40 @@ class StatsDatabase(BaseDatabase):
             return record.id
 
     def upsert_daily_stat(
-        self, stat_date: int, repo_id: str, contributor_id: str, stats: Dict
+        self,
+        stat_date: int,
+        repo_id: str,
+        contributor_name: str,
+        contributor_email: Optional[str],
+        stats: Dict,
     ) -> str:
         with session_scope(self.engine) as session:
             row = (
                 session.query(StatsDailyStat)
                 .filter(StatsDailyStat.stat_date == stat_date)
                 .filter(StatsDailyStat.repo_id == repo_id)
-                .filter(StatsDailyStat.contributor_id == contributor_id)
+                .filter(StatsDailyStat.contributor_name == contributor_name)
+                .filter(StatsDailyStat.contributor_email == contributor_email)
                 .first()
             )
 
             if row is None:
                 row = StatsDailyStat(
-                    stat_date=stat_date, repo_id=repo_id, contributor_id=contributor_id
+                    stat_date=stat_date,
+                    repo_id=repo_id,
+                    contributor_name=contributor_name,
+                    contributor_email=contributor_email,
                 )
                 session.add(row)
 
             row.repo_name = stats.get("repo_name", "")
-            row.contributor_name = stats.get("contributor_name", "")
-            row.ai_generated_lines = int(stats.get("ai_generated_lines", 0))
-            row.ai_generated_lines_total = int(
-                stats.get("ai_generated_lines_total", row.ai_generated_lines)
-            )
+            row.contributor_name = stats.get("contributor_name", contributor_name)
+            row.contributor_email = stats.get("contributor_email", contributor_email)
+            row.ai_lines = int(stats.get("ai_lines", 0))
+            row.ai_total_lines = int(stats.get("ai_total_lines", row.ai_lines))
             row.ai_accepted_lines = int(stats.get("ai_accepted_lines", 0))
             row.human_lines = int(stats.get("human_lines", 0))
-            row.git_ai_version = stats.get("git_ai_version", "")
-            total = row.ai_accepted_lines + row.human_lines
-            row.ai_percentage = (
-                round((row.ai_accepted_lines / total) * 100, 2) if total > 0 else 0
-            )
+            row.total_lines = int(stats.get("total_lines", 0))
             row.updated_at = now_ts()
 
             session.flush()
@@ -767,7 +760,7 @@ class StatsDatabase(BaseDatabase):
         start_date: int,
         end_date: int,
         repo_id: Optional[str],
-        contributor_id: Optional[str],
+        contributor_email: Optional[str],
         limit: int,
         offset: int,
     ) -> List[Dict]:
@@ -780,21 +773,16 @@ class StatsDatabase(BaseDatabase):
             )
             if repo_id:
                 query = query.filter(StatsDailyStat.repo_id == repo_id)
-            if contributor_id:
-                query = query.filter(StatsDailyStat.contributor_id == contributor_id)
+            if contributor_email:
+                query = query.filter(StatsDailyStat.contributor_email == contributor_email)
 
             rows = (
                 query.join(
                     StatsRepository, StatsRepository.id == StatsDailyStat.repo_id
                 )
-                .join(
-                    StatsContributor,
-                    StatsContributor.id == StatsDailyStat.contributor_id,
-                )
                 .with_entities(
                     StatsDailyStat,
                     StatsRepository.repo_name,
-                    StatsContributor.name,
                 )
                 .order_by(StatsDailyStat.stat_date.desc())
                 .limit(limit)
@@ -802,10 +790,10 @@ class StatsDatabase(BaseDatabase):
                 .all()
             )
             items: List[Dict] = []
-            for stat, repo_name, contributor_name in rows:
+            for stat, repo_name in rows:
                 item = stat.to_dict()
                 item["repo_name"] = repo_name or UNKNOWN_REPO
-                item["contributor_name"] = contributor_name or "unknown"
+                item["contributor_name"] = item.get("contributor_name") or "unknown"
                 items.append(item)
             return items
 
@@ -816,7 +804,7 @@ class StatsDatabase(BaseDatabase):
         start_date: Optional[int] = None,
         end_date: Optional[int] = None,
         repo_id: Optional[str] = None,
-        contributor_id: Optional[str] = None,
+        contributor_email: Optional[str] = None,
     ) -> Dict:
         self.consolidate_unknown_repositories()
         with session_scope(self.engine) as session:
@@ -827,22 +815,17 @@ class StatsDatabase(BaseDatabase):
                 query = query.filter(StatsDailyStat.stat_date <= end_date)
             if repo_id:
                 query = query.filter(StatsDailyStat.repo_id == repo_id)
-            if contributor_id:
-                query = query.filter(StatsDailyStat.contributor_id == contributor_id)
+            if contributor_email:
+                query = query.filter(StatsDailyStat.contributor_email == contributor_email)
 
             total = query.count()
             rows = (
                 query.join(
                     StatsRepository, StatsRepository.id == StatsDailyStat.repo_id
                 )
-                .join(
-                    StatsContributor,
-                    StatsContributor.id == StatsDailyStat.contributor_id,
-                )
                 .with_entities(
                     StatsDailyStat,
                     StatsRepository.repo_name,
-                    StatsContributor.name,
                 )
                 .order_by(StatsDailyStat.stat_date.desc())
                 .offset((page - 1) * page_size)
@@ -851,10 +834,10 @@ class StatsDatabase(BaseDatabase):
             )
 
             items: List[Dict] = []
-            for stat, repo_name, contributor_name in rows:
+            for stat, repo_name in rows:
                 item = stat.to_dict()
                 item["repo_name"] = repo_name or UNKNOWN_REPO
-                item["contributor_name"] = contributor_name or "unknown"
+                item["contributor_name"] = item.get("contributor_name") or "unknown"
                 items.append(item)
 
             return {
@@ -869,7 +852,7 @@ class StatsDatabase(BaseDatabase):
         start_date: int,
         end_date: int,
         repo_id: Optional[str] = None,
-        contributor_id: Optional[str] = None,
+        contributor_email: Optional[str] = None,
         granularity: str = "daily",
     ) -> List[Dict]:
         self.consolidate_unknown_repositories()
@@ -877,13 +860,12 @@ class StatsDatabase(BaseDatabase):
             query = (
                 session.query(
                     StatsDailyStat.stat_date,
-                    func.sum(StatsDailyStat.ai_generated_lines).label(
-                        "ai_generated_lines"
-                    ),
+                    func.sum(StatsDailyStat.ai_lines).label("ai_lines"),
                     func.sum(StatsDailyStat.ai_accepted_lines).label(
                         "ai_accepted_lines"
                     ),
                     func.sum(StatsDailyStat.human_lines).label("human_lines"),
+                    func.sum(StatsDailyStat.total_lines).label("total_lines"),
                 )
                 .filter(StatsDailyStat.stat_date >= start_date)
                 .filter(StatsDailyStat.stat_date <= end_date)
@@ -891,8 +873,8 @@ class StatsDatabase(BaseDatabase):
 
             if repo_id:
                 query = query.filter(StatsDailyStat.repo_id == repo_id)
-            if contributor_id:
-                query = query.filter(StatsDailyStat.contributor_id == contributor_id)
+            if contributor_email:
+                query = query.filter(StatsDailyStat.contributor_email == contributor_email)
 
             rows = (
                 query.group_by(StatsDailyStat.stat_date)
@@ -904,16 +886,13 @@ class StatsDatabase(BaseDatabase):
         for row in rows:
             accepted = int(row.ai_accepted_lines or 0)
             human = int(row.human_lines or 0)
-            total = accepted + human
             items.append(
                 {
                     "stat_date": int(row.stat_date),
-                    "ai_generated_lines": int(row.ai_generated_lines or 0),
+                    "ai_lines": int(row.ai_lines or 0),
                     "ai_accepted_lines": accepted,
                     "human_lines": human,
-                    "ai_percentage": round((accepted / total) * 100, 2)
-                    if total > 0
-                    else 0,
+                    "total_lines": int(row.total_lines or 0),
                 }
             )
 
@@ -948,19 +927,17 @@ class StatsDatabase(BaseDatabase):
                 grouped[key] = {
                     "period": key,
                     "stat_date": period_ts,
-                    "ai_generated_lines": 0,
+                    "ai_lines": 0,
                     "ai_accepted_lines": 0,
                     "human_lines": 0,
+                    "total_lines": 0,
                 }
-            grouped[key]["ai_generated_lines"] += item["ai_generated_lines"]
+            grouped[key]["ai_lines"] += item["ai_lines"]
             grouped[key]["ai_accepted_lines"] += item["ai_accepted_lines"]
             grouped[key]["human_lines"] += item["human_lines"]
+            grouped[key]["total_lines"] += item["total_lines"]
 
         result = []
         for value in grouped.values():
-            total = value["ai_accepted_lines"] + value["human_lines"]
-            value["ai_percentage"] = (
-                round((value["ai_accepted_lines"] / total) * 100, 2) if total > 0 else 0
-            )
             result.append(value)
         return sorted(result, key=lambda x: x["stat_date"])

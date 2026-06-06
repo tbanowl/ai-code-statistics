@@ -226,26 +226,26 @@ CREATE TABLE IF NOT EXISTS stats_repo_contributors (
     INDEX idx_stats_repo_contributors_contributor (contributor_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='仓库贡献者关联表';
 
--- 每日统计表
-CREATE TABLE IF NOT EXISTS stats_daily_stats (
+-- Commit 每日统计表
+CREATE TABLE IF NOT EXISTS stats_commit_daily (
     id VARCHAR(20) PRIMARY KEY COMMENT '主键，使用 XID',
-    stat_date BIGINT NOT NULL COMMENT '统计日期（毫秒时间戳）',
+    stat_date BIGINT NOT NULL COMMENT '统计日期（年月日 yyyyMMdd）',
     repo_id VARCHAR(20) NOT NULL COMMENT '仓库 ID',
     repo_name VARCHAR(100) COMMENT '仓库名称冗余字段',
-    contributor_id VARCHAR(20) NOT NULL COMMENT '贡献者 ID',
     contributor_name VARCHAR(100) COMMENT '贡献者名称冗余字段',
-    ai_generated_lines INT DEFAULT 0 COMMENT 'AI 生成源代码行数',
-    ai_generated_lines_total INT DEFAULT 0 COMMENT 'AI 生成总行数',
+    contributor_email VARCHAR(255) COMMENT '贡献者邮箱',
+    ai_lines INT DEFAULT 0 COMMENT 'AI 生成源代码行数',
+    ai_total_lines INT DEFAULT 0 COMMENT 'AI 生成总行数',
     ai_accepted_lines INT DEFAULT 0 COMMENT '被接受的 AI 代码行数',
     human_lines INT DEFAULT 0 COMMENT '人类代码行数',
-    ai_percentage DECIMAL(5, 2) DEFAULT 0.0 COMMENT 'AI 占比',
-    git_ai_version VARCHAR(50) COMMENT 'Git-AI 客户端版本号',
+    total_lines INT DEFAULT 0 COMMENT 'Git 提交新增总行数',
     created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
     updated_at BIGINT NOT NULL COMMENT '更新时间戳（毫秒）',
-    INDEX idx_stats_daily_stats_date (stat_date),
-    INDEX idx_stats_daily_stats_repo (repo_id),
-    INDEX idx_stats_daily_stats_contributor (contributor_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='每日统计表';
+    INDEX idx_stats_commit_daily_date (stat_date),
+    INDEX idx_stats_commit_daily_repo (repo_id),
+    INDEX idx_stats_commit_daily_contributor_email (contributor_email),
+    UNIQUE KEY uk_stats_commit_daily_identity (stat_date, repo_id, contributor_name, contributor_email)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='Commit 每日统计表';
 
 -- GIT AI 数据收集表
 CREATE TABLE IF NOT EXISTS telemetry_envelope (
@@ -296,7 +296,7 @@ CREATE TABLE IF NOT EXISTS stats_ssh_keys (
 CREATE TABLE IF NOT EXISTS stats_blame_repo (
     id VARCHAR(20) PRIMARY KEY COMMENT '主键，使用 XID',
     repo_id VARCHAR(20) NOT NULL COMMENT '仓库 ID',
-    stat_date BIGINT NOT NULL COMMENT '统计日期（毫秒时间戳）',
+    stat_date BIGINT NOT NULL COMMENT '统计日期（年月日 yyyyMMdd）',
     commit_sha VARCHAR(40) NOT NULL COMMENT '当前统计提交 SHA',
     branch VARCHAR(100) NOT NULL COMMENT '分支名称',
     total_lines INT NOT NULL COMMENT '总行数',
@@ -315,7 +315,7 @@ CREATE TABLE IF NOT EXISTS stats_blame_repo_contributor (
     id VARCHAR(20) PRIMARY KEY COMMENT '主键，使用 XID',
     repo_id VARCHAR(20) NOT NULL COMMENT '仓库 ID',
     branch VARCHAR(100) NOT NULL COMMENT '分支名称',
-    stat_date BIGINT NOT NULL COMMENT '统计日期（毫秒时间戳）',
+    stat_date BIGINT NOT NULL COMMENT '统计日期（年月日 yyyyMMdd）',
     contributor_name VARCHAR(100) NOT NULL COMMENT '贡献者名称',
     contributor_email VARCHAR(100) NOT NULL DEFAULT '' COMMENT '贡献者邮箱',
     ai_lines INT NOT NULL DEFAULT 0 COMMENT 'AI 代码行数',

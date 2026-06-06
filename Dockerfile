@@ -5,23 +5,23 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # 备份并配置内网源（跳过GPG验证）
-RUN cp /etc/apt/sources.list /etc/apt/sources.list_bak && \
-    echo "deb [trusted=yes] http://172.16.13.24/repository/proxy-debian12/ bookworm main non-free non-free-firmware contrib" > /etc/apt/sources.list && \
-    echo "deb [trusted=yes] http://172.16.13.24/repository/proxy-debian12/ bookworm-updates main non-free non-free-firmware contrib" >> /etc/apt/sources.list && \
-    echo "deb [trusted=yes] http://172.16.13.24/repository/proxy-debian12/ bookworm-backports main non-free non-free-firmware contrib" >> /etc/apt/sources.list
+# RUN cp /etc/apt/sources.list /etc/apt/sources.list_bak && \
+#     echo "deb [trusted=yes] http://172.16.13.24/repository/proxy-debian12/ bookworm main non-free non-free-firmware contrib" > /etc/apt/sources.list && \
+#     echo "deb [trusted=yes] http://172.16.13.24/repository/proxy-debian12/ bookworm-updates main non-free non-free-firmware contrib" >> /etc/apt/sources.list && \
+#     echo "deb [trusted=yes] http://172.16.13.24/repository/proxy-debian12/ bookworm-backports main non-free non-free-firmware contrib" >> /etc/apt/sources.list
 
 # 设置 pip 源
-ENV PIP_INDEX_URL=http://172.16.13.24/repository/pypi-proxy-tencent/simple
-ENV PIP_TRUSTED_HOST=172.16.13.24
+# ENV PIP_INDEX_URL=http://172.16.13.24/repository/pypi-proxy-tencent/simple
+# ENV PIP_TRUSTED_HOST=172.16.13.24
 
 # 安装依赖（构建和运行）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
+    ssh \
     git \
     libpq-dev \
     libpq5 \
     libmariadb-dev \
-    postgresql-client \
     gunicorn \
     && rm -rf /var/lib/apt/lists/*
 

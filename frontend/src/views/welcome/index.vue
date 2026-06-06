@@ -107,7 +107,7 @@ const summaryCards = computed<SummaryCard[]>(() => {
     {
       title: "AI 占比",
       value: summary ? formatPercent(summary.avg_ai_percentage) : "--",
-      subtitle: "AI 接受行数 / (AI 接受行数 + 人工行数)",
+      subtitle: "AI 接受行数 / Git 提交总行数",
       loading: summaryLoading.value,
       error: summaryError.value
     },
@@ -694,6 +694,21 @@ function getErrorMessage(error: unknown, fallback: string) {
           min-width="150"
         />
         <el-table-column
+          prop="contributor_email"
+          label="提交邮箱"
+          min-width="190"
+        />
+        <el-table-column prop="total_lines" label="提交总行数" min-width="120">
+          <template #default="{ row }">
+            {{ formatNumber(row.total_lines) }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="ai_lines" label="AI 代码行数" min-width="120">
+          <template #default="{ row }">
+            {{ formatNumber(row.ai_lines) }}
+          </template>
+        </el-table-column>
+        <el-table-column
           prop="ai_accepted_lines"
           label="AI 接受行数"
           min-width="130"
@@ -705,13 +720,6 @@ function getErrorMessage(error: unknown, fallback: string) {
         <el-table-column prop="human_lines" label="人工行数" min-width="120">
           <template #default="{ row }">
             {{ formatNumber(row.human_lines) }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="ai_percentage" label="AI 占比" width="100">
-          <template #default="{ row }">
-            <el-tag effect="plain" round>
-              {{ formatPercent(row.ai_percentage) }}
-            </el-tag>
           </template>
         </el-table-column>
       </el-table>

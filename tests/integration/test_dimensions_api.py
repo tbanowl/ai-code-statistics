@@ -97,14 +97,16 @@ def test_aggregate_stats_api(client):
         db = db_cls.return_value
         db.get_aggregated_stats.return_value = [
             {
-                "ai_generated_lines": 30,
+                "ai_lines": 30,
                 "ai_accepted_lines": 25,
                 "human_lines": 75,
+                "total_lines": 100,
             },
             {
-                "ai_generated_lines": 80,
+                "ai_lines": 80,
                 "ai_accepted_lines": 75,
                 "human_lines": 25,
+                "total_lines": 100,
             },
         ]
         db.query_committed_events.return_value = [
@@ -132,10 +134,10 @@ def test_stats_query_returns_filter_names(client):
         db.get_aggregated_stats.return_value = [
             {
                 "stat_date": 1,
-                "ai_generated_lines": 10,
+                "ai_lines": 10,
                 "ai_accepted_lines": 8,
                 "human_lines": 12,
-                "ai_percentage": 40,
+                "total_lines": 20,
             }
         ]
         db.get_repository_by_id.return_value = {

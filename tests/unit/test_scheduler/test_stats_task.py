@@ -14,6 +14,9 @@ def test_aggregate_by_repo_contributor():
             "author_uid": "alice <a@example.com>",
             "author_email": "a@example.com",
             "human_additions": 5,
+            "git_diff_added_lines": 20,
+            "ai_additions": 4,
+            "total_ai_additions_total": 6,
             "ai_accepted_lines": 10,
         },
         {
@@ -22,26 +25,24 @@ def test_aggregate_by_repo_contributor():
             "author_uid": "alice <a@example.com>",
             "author_email": "a@example.com",
             "human_additions": 7,
+            "git_diff_added_lines": 11,
+            "ai_additions": 3,
+            "total_ai_additions_total": 5,
             "ai_accepted_lines": 2,
         },
     ]
-    checkpoints = [
-        {
-            "repo_url": "repo/a",
-            "author": "alice",
-            "author_uid": "alice <a@example.com>",
-            "lines_added": 8,
-            "lines_added_sloc": 3,
-        }
-    ]
 
-    data = task._aggregate_by_repo_contributor(committed, checkpoints)
-    key = ("repo/a", "alice", "a@example.com", "alice <a@example.com>")
+    data = task._aggregate_by_repo_contributor(committed)
+    key = ("repo/a", "alice", "a@example.com")
     assert key in data
     assert data[key]["ai_accepted_lines"] == 12
     assert data[key]["human_lines"] == 12
-    assert data[key]["ai_generated_lines"] == 3
-    assert data[key]["ai_generated_lines_total"] == 8
+    assert data[key]["ai_lines"] == 7
+    assert data[key]["ai_total_lines"] == 11
+    assert data[key]["total_lines"] == 31
+    assert data[key]["contributor_email"] == "a@example.com"
+    assert "ai_percentage" not in data[key]
+    assert "git_ai_version" not in data[key]
 
 
 @patch("core.scheduler.tasks.daily_aggregation_task.StatsDatabase")
@@ -54,13 +55,14 @@ def test_execute_calls_stats_db_methods(mock_stats_db_cls):
             "author_uid": "alice <a@example.com>",
             "author_email": "a@example.com",
             "human_additions": 5,
+            "git_diff_added_lines": 15,
+            "ai_additions": 4,
+            "total_ai_additions_total": 6,
             "ai_accepted_lines": 10,
         }
     ]
-    stats_db.query_checkpoint_events.return_value = []
     stats_db.get_latest_stat_date.return_value = 0
     stats_db.get_or_create_repository.return_value = "r1"
-    stats_db.get_or_create_contributor.return_value = "c1"
     mock_stats_db_cls.return_value = stats_db
 
     task = DailyAggregationTask.__new__(DailyAggregationTask)
@@ -70,11 +72,13 @@ def test_execute_calls_stats_db_methods(mock_stats_db_cls):
     assert result["success"] is True
     assert result["records"] == 1
     stats_db.get_or_create_repository.assert_called_once_with("repo/a")
-    stats_db.get_or_create_contributor.assert_called_once_with(
-        "alice", "a@example.com"
-    )
-    stats_db.ensure_repo_contributor_link.assert_called_once_with("r1", "c1")
+    stats_db.get_or_create_contributor.assert_not_called()
+    stats_db.ensure_repo_contributor_link.assert_not_called()
     assert stats_db.upsert_daily_stat.call_count == 1
+    args = stats_db.upsert_daily_stat.call_args.args
+    assert args[1] == "r1"
+    assert args[2] == "alice"
+    assert args[3] == "a@example.com"
 
 
 def test_aggregate_normalizes_none_and_missing_repo_url_to_unknown():
@@ -102,10 +106,10 @@ def test_aggregate_normalizes_none_and_missing_repo_url_to_unknown():
             "human_additions": 2,
         },
     ]
-    data = task._aggregate_by_repo_contributor(committed, [])
+    data = task._aggregate_by_repo_contributor(committed)
 
     # All three events should merge into a single key with repo_path == UNKNOWN_REPO
-    key = (UNKNOWN_REPO, "bob", "b@b.com", "bob")
+    key = (UNKNOWN_REPO, "bob", "b@b.com")
     assert key in data
     assert data[key]["human_lines"] == 10
     assert len(data) == 1
@@ -130,11 +134,11 @@ def test_aggregate_normalizes_different_url_formats_to_same_key():
             "human_additions": 6,
         },
     ]
-    data = task._aggregate_by_repo_contributor(committed, [])
+    data = task._aggregate_by_repo_contributor(committed)
 
     # Both normalize to "git.example.com/org/repo"
     expected_repo_path = "git.example.com/org/repo"
-    key = (expected_repo_path, "carol", "c@c.com", "carol")
+    key = (expected_repo_path, "carol", "c@c.com")
     assert key in data
     assert data[key]["human_lines"] == 10
     assert data[key]["repo_name"] == "org/repo"

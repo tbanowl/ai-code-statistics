@@ -8,7 +8,7 @@ from core.database import StatsDatabase
 from core.utils.repo_url import normalize_repo_url
 
 
-@scheduled(cron="0 2 * * *", job_id="daily_aggregation", name="每日统计聚合")
+@scheduled(cron="0 0 * * *", job_id="daily_aggregation", name="每日统计聚合")
 class DailyAggregationTask(BaseTask):
     """每日统计聚合任务 - 从 Metrics 事件表聚合生成每日统计数据"""
 
@@ -72,26 +72,19 @@ class DailyAggregationTask(BaseTask):
                 repo_url=repo_url,
                 author=contributor,
             )
-            checkpoint_events = []
-
             self.logger.info(
-                f"查询到 {len(committed_events)} 个 Committed 事件, {len(checkpoint_events)} 个 Checkpoint 事件"
+                f"查询到 {len(committed_events)} 个 Committed 事件"
             )
 
-            aggregated = self._aggregate_by_repo_contributor(
-                committed_events, checkpoint_events
-            )
+            aggregated = self._aggregate_by_repo_contributor(committed_events)
 
             for key, stats in aggregated.items():
-                repo_path, author_name, author_email, _author_uid = key
+                repo_path, author_name, author_email = key
 
                 repo_id = stats_db.get_or_create_repository(repo_path)
-                contributor_id = stats_db.get_or_create_contributor(
-                    author_name, author_email
+                stats_db.upsert_daily_stat(
+                    stat_date, repo_id, author_name, author_email, stats
                 )
-                stats_db.ensure_repo_contributor_link(repo_id, contributor_id)
-
-                stats_db.upsert_daily_stat(stat_date, repo_id, contributor_id, stats)
 
             total_records += len(aggregated)
             cursor = cursor + timedelta(days=1)
@@ -99,82 +92,32 @@ class DailyAggregationTask(BaseTask):
         self.logger.info(f"聚合完成，共处理 {total_records} 条记录")
         return {"success": True, "records": total_records}
 
-    def _aggregate_by_repo_contributor(
-        self, committed_events: List[Dict], checkpoint_events: List[Dict]
-    ) -> Dict:
+    def _aggregate_by_repo_contributor(self, committed_events: List[Dict]) -> Dict:
         aggregated = {}
 
         for event in committed_events:
             repo_path = normalize_repo_url(event.get("repo_url"))
             author_name = event.get("author", "")
             author_email = event.get("author_email")
-            author_uid = event.get("author_uid") or author_name
-            key = (repo_path, author_name, author_email, author_uid)
+            key = (repo_path, author_name, author_email)
 
             if key not in aggregated:
                 aggregated[key] = {
                     "repo_name": StatsDatabase._extract_repo_name(repo_path),
                     "contributor_name": author_name or "unknown",
-                    "ai_generated_lines": 0,
-                    "ai_generated_lines_total": 0,
+                    "contributor_email": author_email,
+                    "ai_lines": 0,
+                    "ai_total_lines": 0,
                     "ai_accepted_lines": 0,
                     "human_lines": 0,
-                    "git_ai_version": None,
+                    "total_lines": 0,
                 }
 
             stats = aggregated[key]
-            stats["ai_generated_lines_total"] += int(event.get("total_ai_additions_total", 0))
-            stats["ai_generated_lines"] = int(event.get("ai_additions", 0))
+            stats["ai_total_lines"] += int(event.get("total_ai_additions_total", 0))
+            stats["ai_lines"] += int(event.get("ai_additions", 0))
             stats["ai_accepted_lines"] += int(event.get("ai_accepted_lines", 0))
             stats["human_lines"] += int(event.get("human_additions", 0))
-            # stats["commit_times"] += int(event.get("commit_times", 0))
-            if event.get("git_ai_version"):
-                stats["git_ai_version"] = event.get("git_ai_version")
-
-        for event in checkpoint_events:
-            repo_path = normalize_repo_url(event.get("repo_url"))
-            author_name = event.get("author", "")
-            author_email = event.get("author_email")
-            author_uid = event.get("author_uid") or author_name
-            matched = False
-            for key in aggregated.keys():
-                if (
-                    key[0] == repo_path
-                    and key[1] == author_name
-                    and key[3] == author_uid
-                ):
-                    aggregated[key]["ai_generated_lines_total"] += int(
-                        event.get("lines_added", 0)
-                    )
-                    aggregated[key]["ai_generated_lines"] += int(
-                        event.get("lines_added_sloc", 0)
-                    )
-                    if event.get("git_ai_version") and not aggregated[key].get(
-                        "git_ai_version"
-                    ):
-                        aggregated[key]["git_ai_version"] = event.get("git_ai_version")
-                    matched = True
-
-            if not matched:
-                key = (repo_path, author_name, author_email, author_uid)
-                aggregated[key] = {
-                    "repo_name": StatsDatabase._extract_repo_name(repo_path),
-                    "contributor_name": author_name or "unknown",
-                    "ai_generated_lines": int(event.get("lines_added_sloc", 0)),
-                    "ai_generated_lines_total": int(event.get("lines_added", 0)),
-                    "ai_accepted_lines": 0,
-                    "human_lines": 0,
-                    "git_ai_version": event.get("git_ai_version"),
-                }
-
-        for stats in aggregated.values():
-            total = int(stats.get("human_lines", 0)) + int(
-                stats.get("ai_accepted_lines", 0)
-            )
-            stats["ai_percentage"] = (
-                round((int(stats.get("ai_accepted_lines", 0)) / total) * 100, 2)
-                if total > 0
-                else 0
-            )
+            stats["total_lines"] += int(event.get("git_diff_added_lines", 0))
 
         return aggregated

@@ -15,7 +15,6 @@ from sqlalchemy import (
     Text,
     ForeignKey,
     JSON,
-    Numeric,
     Index,
     UniqueConstraint,
 )
@@ -384,7 +383,7 @@ class StatsRepoContributor(ModelBase):
 class StatsDailyStat(ModelBase):
     """每日统计表"""
 
-    __tablename__ = "stats_daily_stats"
+    __tablename__ = "stats_commit_daily"
 
     id: Mapped[str] = mapped_column(String(20), primary_key=True, default=gen_xid)
     # 统计日期，格式：YYYYMMDD
@@ -395,19 +394,14 @@ class StatsDailyStat(ModelBase):
         index=True,
     )
     repo_name: Mapped[str] = mapped_column(String, nullable=True)
-    contributor_id: Mapped[str] = mapped_column(
-        String(20),
-        nullable=False,
-        index=True,
-    )
     contributor_name: Mapped[str] = mapped_column(String, nullable=True)
+    contributor_email: Mapped[str] = mapped_column(String, nullable=True, index=True)
 
-    ai_generated_lines: Mapped[int] = mapped_column(Integer, default=0)
-    ai_generated_lines_total: Mapped[int] = mapped_column(Integer, default=0)
+    ai_lines: Mapped[int] = mapped_column(Integer, default=0)
+    ai_total_lines: Mapped[int] = mapped_column(Integer, default=0)
     ai_accepted_lines: Mapped[int] = mapped_column(Integer, default=0)
     human_lines: Mapped[int] = mapped_column(Integer, default=0)
-    ai_percentage: Mapped[float] = mapped_column(Numeric(5, 2), default=0.0)
-    git_ai_version: Mapped[str] = mapped_column(String(50), nullable=True)
+    total_lines: Mapped[int] = mapped_column(Integer, default=0)
 
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
     updated_at: Mapped[int] = mapped_column(

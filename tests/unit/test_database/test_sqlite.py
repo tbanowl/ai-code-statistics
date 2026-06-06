@@ -45,20 +45,21 @@ def test_init_db_creates_engine(stats_db):
 
 def test_upsert_and_query_daily_stats(stats_db):
     repo_id = stats_db.get_or_create_repository("owner/repo")
-    contributor_id = stats_db.get_or_create_contributor("alice", "alice@example.com")
-    stats_db.ensure_repo_contributor_link(repo_id, contributor_id)
 
     stats_db.upsert_daily_stat(
         1710000000000,
         repo_id,
-        contributor_id,
+        "alice",
+        "alice@example.com",
         {
             "repo_name": "owner/repo",
             "contributor_name": "alice",
-            "ai_generated_lines": 20,
-            "ai_generated_lines_total": 24,
+            "contributor_email": "alice@example.com",
+            "ai_lines": 20,
+            "ai_total_lines": 24,
             "ai_accepted_lines": 80,
             "human_lines": 40,
+            "total_lines": 120,
         },
     )
 
@@ -66,13 +67,20 @@ def test_upsert_and_query_daily_stats(stats_db):
         1709999999000,
         1710000001000,
         repo_id,
-        contributor_id,
+        "alice@example.com",
         limit=10,
         offset=0,
     )
     assert len(rows) == 1
-    assert rows[0]["ai_generated_lines"] == 20
+    assert rows[0]["ai_lines"] == 20
+    assert rows[0]["ai_total_lines"] == 24
     assert rows[0]["ai_accepted_lines"] == 80
+    assert rows[0]["human_lines"] == 40
+    assert rows[0]["total_lines"] == 120
+    assert rows[0]["contributor_email"] == "alice@example.com"
+    assert "contributor_id" not in rows[0]
+    assert "ai_percentage" not in rows[0]
+    assert "git_ai_version" not in rows[0]
 
 
 def test_list_repositories_and_contributors(stats_db):
