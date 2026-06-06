@@ -6,11 +6,13 @@ from sqlalchemy import create_engine
 
 import core.config.loader as loader
 import core.database.base as db_base
+from core.database.authorship_notes_db import compute_note_content_hash
 from core.database.metrics_db import MetricsDatabase
 from core.database.stats_db import StatsDatabase
 from core.scheduler.tasks.daily_aggregation_task import DailyAggregationTask
 from core.database.base import session_scope
 from core.database.models import (
+    AuthorshipNotes,
     MetricsEventsCheckpoint,
     MetricsEventsCommitted,
     StatsContributor,
@@ -93,6 +95,94 @@ def test_query_committed_and_checkpoint_events(setup_dbs):
     assert checkpoints[0]["author"] == "alice"
     assert checkpoints[0]["lines_added"] == 5
     assert checkpoints[0]["lines_added_sloc"] == 3
+
+
+def test_query_committed_events_can_require_authorship_notes(setup_dbs):
+    metrics_db, stats_db = setup_dbs
+
+    raw_id = metrics_db.save_metrics_raw(
+        version=1,
+        event_count=2,
+        payload_json="{}",
+        received_at=1710000000000,
+    )
+
+    with_note = MetricsEventsCommitted(
+        raw_id=raw_id,
+        timestamp=1710000000001,
+        repo_url="example.com/org/repo",
+        author="alice <alice@example.com>",
+        commit_sha="abc123",
+        human_additions=6,
+        git_diff_added_lines=10,
+        ai_additions=[3, 1],
+        ai_accepted=[3, 1],
+        total_ai_additions=[3, 1],
+    )
+    with_note.uid = gen_commited_uid(with_note)
+    metrics_db.upsert_committed_event(with_note)
+
+    without_note = MetricsEventsCommitted(
+        raw_id=raw_id,
+        timestamp=1710000000002,
+        repo_url="example.com/org/repo",
+        author="bob <bob@example.com>",
+        commit_sha="def456",
+        human_additions=4,
+        git_diff_added_lines=8,
+        ai_additions=[2, 1],
+        ai_accepted=[2, 1],
+        total_ai_additions=[2, 1],
+    )
+    without_note.uid = gen_commited_uid(without_note)
+    metrics_db.upsert_committed_event(without_note)
+
+    with session_scope(stats_db.engine) as session:
+        session.add(
+            AuthorshipNotes(
+                repo_url="example.com/org/repo",
+                branch="main",
+                commit_sha="abc123",
+                note_blob_oid=None,
+                author_name="alice",
+                author_email="alice@example.com",
+                note_content="note-a",
+                content_hash=compute_note_content_hash("note-a"),
+                change_seq=1,
+            )
+        )
+
+    unfiltered = stats_db.query_committed_events(
+        1710000000000, 1710000000010, require_authorship_notes=False
+    )
+    filtered = stats_db.query_committed_events(
+        1710000000000, 1710000000010, require_authorship_notes=True
+    )
+
+    assert {row["commit_sha"] for row in unfiltered} == {"abc123", "def456"}
+    assert [row["commit_sha"] for row in filtered] == ["abc123"]
+    assert filtered[0]["repo_url"] == "example.com/org/repo"
+    assert filtered[0]["timestamp"] == 1710000000001
+
+
+def test_update_repository_last_daily_aggregation_commit_sha(setup_dbs):
+    _, stats_db = setup_dbs
+    repo_id = stats_db.get_or_create_repository("https://example.com/org/repo.git")
+
+    assert (
+        stats_db.update_repository_last_daily_aggregation_commit_sha(
+            repo_id, "abc123def456"
+        )
+        is True
+    )
+
+    with session_scope(stats_db.engine) as session:
+        repo = (
+            session.query(StatsRepository)
+            .filter(StatsRepository.id == repo_id)
+            .one()
+        )
+        assert repo.last_daily_aggregation_commit_sha == "abc123def456"
 
 
 def test_repository_contributor_and_daily_stats_flow(setup_dbs):

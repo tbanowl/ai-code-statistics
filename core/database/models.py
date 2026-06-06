@@ -296,6 +296,8 @@ class StatsRepository(ModelBase):
     ssh_key_id: Mapped[str] = mapped_column(String(20), nullable=True)
     # 最近一次 Git Blame 统计成功的提交 SHA
     last_blame_commit_sha: Mapped[str] = mapped_column(String(40), nullable=True)
+    # 最近一次每日聚合成功统计到的提交 SHA
+    last_daily_aggregation_commit_sha: Mapped[str] = mapped_column(String(40), nullable=True)
     last_stat_date: Mapped[int] = mapped_column(BigInteger, nullable=True)
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
     updated_at: Mapped[int] = mapped_column(

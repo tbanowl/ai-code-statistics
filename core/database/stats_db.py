@@ -8,6 +8,7 @@ from sqlalchemy import func, or_
 from .base import BaseDatabase, now_ts, session_scope
 from core.utils.repo_url import normalize_repo_url, UNKNOWN_REPO
 from .models import (
+    AuthorshipNotes,
     MetricsEventsCheckpoint,
     MetricsEventsCommitted,
     StatsContributor,
@@ -346,17 +347,17 @@ class StatsDatabase(BaseDatabase):
         end_ts: int,
         repo_url: Optional[str] = None,
         author: Optional[str] = None,
+        require_authorship_notes: bool = False,
     ) -> List[Dict]:
         with session_scope(self.engine) as session:
+            normalized_repo_url = normalize_repo_url(repo_url) if repo_url else None
             query = (
                 session.query(MetricsEventsCommitted)
                 .filter(MetricsEventsCommitted.timestamp >= start_ts)
                 .filter(MetricsEventsCommitted.timestamp <= end_ts)
             )
-            if repo_url:
-                query = query.filter(
-                    MetricsEventsCommitted.repo_url == normalize_repo_url(repo_url)
-                )
+            if normalized_repo_url:
+                query = query.filter(MetricsEventsCommitted.repo_url == normalized_repo_url)
             if author:
                 author_key = author.strip()
                 query = query.filter(
@@ -365,6 +366,15 @@ class StatsDatabase(BaseDatabase):
                         MetricsEventsCommitted.author.like(f"{author_key} <%"),
                     )
                 )
+            if require_authorship_notes:
+                query = query.filter(MetricsEventsCommitted.commit_sha.isnot(None))
+                query = query.filter(func.trim(MetricsEventsCommitted.commit_sha) != "")
+                query = query.filter(
+                    session.query(AuthorshipNotes.id)
+                    .filter(AuthorshipNotes.repo_url == MetricsEventsCommitted.repo_url)
+                    .filter(AuthorshipNotes.commit_sha == MetricsEventsCommitted.commit_sha)
+                    .exists()
+                )
             rows = query.all()
 
             items: List[Dict] = []
@@ -372,7 +382,9 @@ class StatsDatabase(BaseDatabase):
                 author_name, author_email = self._parse_author(row.author)
                 items.append(
                     {
-                        "repo_url": row.repo_url or "",
+                        "repo_url": normalize_repo_url(row.repo_url),
+                        "commit_sha": (row.commit_sha or "").strip(),
+                        "timestamp": int(row.timestamp or 0),
                         "author": author_name,
                         "author_uid": (row.author or "").strip() or author_name,
                         "author_email": author_email,
@@ -549,6 +561,27 @@ class StatsDatabase(BaseDatabase):
             session.add(record)
             session.flush()
             return record.id
+
+    def update_repository_last_daily_aggregation_commit_sha(
+        self, repo_id: str, commit_sha: str
+    ) -> bool:
+        normalized_sha = (commit_sha or "").strip()
+        if not normalized_sha:
+            return False
+
+        with session_scope(self.engine) as session:
+            row = (
+                session.query(StatsRepository)
+                .filter(StatsRepository.id == repo_id)
+                .first()
+            )
+            if row is None:
+                return False
+
+            row.last_daily_aggregation_commit_sha = normalized_sha
+            row.updated_at = now_ts()
+            session.flush()
+            return True
 
     def get_or_create_contributor(
         self, name: str, email: Optional[str]
