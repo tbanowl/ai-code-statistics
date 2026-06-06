@@ -262,3 +262,54 @@ def test_execute_groups_by_event_timestamp_stat_date(mock_stats_db_cls):
     assert result["success"] is True
     args = stats_db.upsert_daily_stat.call_args.args
     assert args[0] == 20260604
+
+
+@patch("core.scheduler.tasks.daily_aggregation_task.StatsDatabase")
+def test_execute_updates_repository_progress_to_latest_commit(mock_stats_db_cls):
+    stats_db = MagicMock()
+    stats_db.query_committed_events.return_value = [
+        {
+            "repo_url": "repo/a",
+            "author": "alice",
+            "author_uid": "alice <a@example.com>",
+            "author_email": "a@example.com",
+            "human_additions": 5,
+            "git_diff_added_lines": 15,
+            "ai_additions": 4,
+            "total_ai_additions_total": 6,
+            "ai_accepted_lines": 10,
+            "commit_sha": "older123",
+            "timestamp": _millis(2026, 6, 5, 10, 30),
+        },
+        {
+            "repo_url": "repo/a",
+            "author": "alice",
+            "author_uid": "alice <a@example.com>",
+            "author_email": "a@example.com",
+            "human_additions": 7,
+            "git_diff_added_lines": 11,
+            "ai_additions": 3,
+            "total_ai_additions_total": 5,
+            "ai_accepted_lines": 2,
+            "commit_sha": "newer456",
+            "timestamp": _millis(2026, 6, 5, 11, 30),
+        },
+    ]
+    stats_db.get_or_create_repository.return_value = "r1"
+    mock_stats_db_cls.return_value = stats_db
+
+    task = DailyAggregationTask.__new__(DailyAggregationTask)
+    task.config = {}
+    task.logger = MagicMock()
+
+    result = task.execute(
+        {
+            "start_date": _millis(2026, 6, 5),
+            "end_date": _millis(2026, 6, 5),
+        }
+    )
+
+    assert result["success"] is True
+    stats_db.update_repository_last_daily_aggregation_commit_sha.assert_called_once_with(
+        "r1", "newer456"
+    )
