@@ -422,17 +422,19 @@ class StatsDatabase(BaseDatabase):
                         "repo_url": normalize_repo_url(row.repo_url),
                         "commit_sha": (row.commit_sha or "").strip(),
                         "timestamp": int(row.timestamp or 0),
+                        "commit_date": int(row.commit_date or 0),
                         "author": author_name,
                         "author_uid": (row.author or "").strip() or author_name,
                         "author_email": author_email,
                         "tool_model_pairs_total": self._metric_total(row.tool_model_pairs),
-                        "mixed_additions_total": self._metric_total(row.mixed_additions),
+                        "mixed_additions": int(row.mixed_additions_total or 0),
                         "human_additions": int(row.human_additions or 0),
+                        "git_diff_deleted_lines": int(row.git_diff_deleted_lines or 0),
                         "git_diff_added_lines": int(row.git_diff_added_lines or 0),
-                        "ai_additions": self._metric_total(row.ai_additions),
-                        "ai_accepted_lines": self._metric_total(row.ai_accepted),
-                        "total_ai_additions_total": self._metric_total(row.total_ai_additions),
-                        "total_ai_deletions_total": self._metric_total(row.total_ai_deletions),
+                        "ai_additions": int(row.ai_additions_total or 0),
+                        "ai_accepted": int(row.ai_accepted_total or 0),
+                        "total_ai_additions": int(row.total_ai_additions_total or 0),
+                        "total_ai_deletions": int(row.total_ai_deletions_total or 0),
                         "git_ai_version": row.git_ai_version,
                     }
                 )
@@ -502,17 +504,11 @@ class StatsDatabase(BaseDatabase):
                         "tool_model_pairs": self._format_tool_model_pairs(
                             row.tool_model_pairs
                         ),
-                        "mixed_additions": self._first_metric_value(
-                            row.mixed_additions
-                        ),
-                        "ai_additions": self._first_metric_value(row.ai_additions),
-                        "ai_accepted": self._first_metric_value(row.ai_accepted),
-                        "total_ai_additions": self._first_metric_value(
-                            row.total_ai_additions
-                        ),
-                        "total_ai_deletions": self._first_metric_value(
-                            row.total_ai_deletions
-                        ),
+                        "mixed_additions": int(row.mixed_additions_total or 0),
+                        "ai_additions": int(row.ai_additions_total or 0),
+                        "ai_accepted": int(row.ai_accepted_total or 0),
+                        "total_ai_additions": int(row.total_ai_additions_total or 0),
+                        "total_ai_deletions": int(row.total_ai_deletions_total or 0),
                         "base_commit_sha": row.base_commit_sha or "",
                         "git_ai_version": row.git_ai_version or "",
                     }

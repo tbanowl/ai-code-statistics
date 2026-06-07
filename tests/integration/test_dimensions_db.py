@@ -276,7 +276,11 @@ def test_query_committed_and_checkpoint_events(setup_dbs):
     assert committed[0]["repo_url"] == "repo/a"
     assert committed[0]["author"] == "alice"
     assert committed[0]["author_email"] == "alice@example.com"
-    assert committed[0]["ai_accepted_lines"] == 3
+    assert committed[0]["timestamp"] == 1710000000
+    assert committed[0]["commit_date"] == 20240309
+    assert committed[0]["ai_accepted"] == 3
+    assert committed[0]["ai_additions"] == 3
+    assert committed[0]["total_ai_additions"] == 3
     assert committed[0]["human_additions"] == 6
     assert len(checkpoints) == 1
     assert checkpoints[0]["author"] == "alice"

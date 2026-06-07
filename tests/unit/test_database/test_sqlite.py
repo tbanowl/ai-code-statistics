@@ -187,7 +187,7 @@ def test_ensure_repository_branch_upserts_branch(stats_db):
     assert second_id == first_id
 
 
-def test_query_events_normalizes_repo_url_filters(stats_db):
+def test_query_committed_events_normalizes_repo_url_filter(stats_db):
     with session_scope(stats_db.engine) as session:
         raw = MetricsEventsRaw(
             event_count=2,
