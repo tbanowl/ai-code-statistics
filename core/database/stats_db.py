@@ -624,18 +624,37 @@ class StatsDatabase(BaseDatabase):
             query = session.query(
                 MetricsEventsCommitted.id,
                 MetricsEventsCommitted.commit_date,
+                MetricsEventsCommitted.repo_url,
+                MetricsEventsCommitted.commit_sha,
             ).filter(MetricsEventsCommitted.repo_url == normalized_repo_url)
             if last_aggregation_id:
                 query = query.filter(MetricsEventsCommitted.id > last_aggregation_id)
-            if require_authorship_notes:
-                query = query.join(
-                    AuthorshipNotes,
-                    (MetricsEventsCommitted.repo_url == AuthorshipNotes.repo_url)
-                    & (MetricsEventsCommitted.commit_sha == AuthorshipNotes.commit_sha),
-                )
             rows = query.order_by(MetricsEventsCommitted.id.asc()).all()
 
+            matching_note_keys = set()
+            if require_authorship_notes and rows:
+                commit_shas = {
+                    (row.commit_sha or "").strip()
+                    for row in rows
+                    if (row.commit_sha or "").strip()
+                }
+                if commit_shas:
+                    matching_notes = (
+                        session.query(AuthorshipNotes.repo_url, AuthorshipNotes.commit_sha)
+                        .filter(AuthorshipNotes.repo_url == normalized_repo_url)
+                        .filter(AuthorshipNotes.commit_sha.in_(commit_shas))
+                        .all()
+                    )
+                    matching_note_keys = {
+                        (
+                            normalize_repo_url(note_repo_url),
+                            (commit_sha or "").strip(),
+                        )
+                        for note_repo_url, commit_sha in matching_notes
+                    }
+
         commit_dates = set()
+        valid_rows = []
         for row in rows:
             try:
                 commit_date = int(row.commit_date)
@@ -649,10 +668,18 @@ class StatsDatabase(BaseDatabase):
                     "Committed event has invalid commit_date for daily aggregation: "
                     f"repo_url={normalized_repo_url}, committed_id={row.id}"
                 )
+            if require_authorship_notes:
+                note_key = (
+                    normalize_repo_url(row.repo_url),
+                    (row.commit_sha or "").strip(),
+                )
+                if note_key not in matching_note_keys:
+                    continue
+            valid_rows.append(row)
             commit_dates.add(commit_date)
 
         commit_dates = sorted(commit_dates)
-        last_id = rows[-1].id if rows else None
+        last_id = valid_rows[-1].id if valid_rows else None
         return {"commit_dates": commit_dates, "last_id": last_id}
 
     def aggregate_committed_daily_stats(
@@ -700,29 +727,53 @@ class StatsDatabase(BaseDatabase):
                 .all()
             )
 
-        items = []
+        metric_fields = (
+            "human_additions",
+            "unknown_additions",
+            "git_diff_deleted_lines",
+            "git_diff_added_lines",
+            "mixed_additions",
+            "ai_additions",
+            "ai_accepted",
+            "total_ai_additions",
+            "total_ai_deletions",
+        )
+        merged = {}
         for row in rows:
             contributor_name, contributor_email = self._parse_author(row.author)
             repo_path = normalize_repo_url(row.repo_url)
-            items.append(
-                {
+            key = (
+                int(row.stat_date),
+                repo_path,
+                contributor_name,
+                contributor_email,
+            )
+            values = {
+                "human_additions": int(row.human_additions or 0),
+                "unknown_additions": int(row.unknown_additions or 0),
+                "git_diff_deleted_lines": int(row.git_diff_deleted_lines or 0),
+                "git_diff_added_lines": int(row.git_diff_added_lines or 0),
+                "mixed_additions": int(row.mixed_additions or 0),
+                "ai_additions": int(row.ai_additions or 0),
+                "ai_accepted": int(row.ai_accepted or 0),
+                "total_ai_additions": int(row.total_ai_additions or 0),
+                "total_ai_deletions": int(row.total_ai_deletions or 0),
+            }
+            if key not in merged:
+                merged[key] = {
                     "stat_date": int(row.stat_date),
                     "repo_url": repo_path,
                     "repo_name": self._extract_repo_name(repo_path),
                     "contributor_name": contributor_name,
                     "contributor_email": contributor_email,
-                    "human_additions": int(row.human_additions or 0),
-                    "unknown_additions": int(row.unknown_additions or 0),
-                    "git_diff_deleted_lines": int(row.git_diff_deleted_lines or 0),
-                    "git_diff_added_lines": int(row.git_diff_added_lines or 0),
-                    "mixed_additions": int(row.mixed_additions or 0),
-                    "ai_additions": int(row.ai_additions or 0),
-                    "ai_accepted": int(row.ai_accepted or 0),
-                    "total_ai_additions": int(row.total_ai_additions or 0),
-                    "total_ai_deletions": int(row.total_ai_deletions or 0),
+                    **values,
                 }
-            )
-        return items
+                continue
+
+            for field in metric_fields:
+                merged[key][field] += values[field]
+
+        return list(merged.values())
 
     def update_repository_last_daily_aggregation_id(
         self, repo_id: str, committed_id: str
