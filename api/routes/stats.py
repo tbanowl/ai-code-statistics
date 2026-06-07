@@ -335,14 +335,8 @@ def get_stats_aggregate_compat():
         summary = _build_summary(items)
         total_commits = len(committed_rows)
 
-        def _row_ai_accepted(row):
-            value = row.get("ai_accepted")
-            if value is None:
-                value = row.get("ai_accepted_lines")
-            return value
-
         ai_commits = sum(
-            1 for row in committed_rows if _to_int(_row_ai_accepted(row)) > 0
+            1 for row in committed_rows if _to_int(row.get("ai_accepted")) > 0
         )
         return jsonify(
             {

@@ -1039,6 +1039,7 @@ def test_aggregation_range_does_not_create_empty_repository(setup_dbs):
     committed = MetricsEventsCommitted(
         raw_id=raw_id,
         timestamp=1772323200000,
+        commit_date=20260301,
         repo_url="",
         author="alice <alice@example.com>",
         human_additions=2,

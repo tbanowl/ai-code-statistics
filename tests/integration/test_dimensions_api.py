@@ -79,7 +79,7 @@ def test_repository_consolidation_report_api(client):
 def test_query_daily_stats_api(client):
     with patch("api.routes.stats.StatsDatabase") as db_cls:
         db_cls.return_value.get_daily_stats_paginated.return_value = {
-            "items": [{"ai_accepted_lines": 2, "human_lines": 3}],
+            "items": [{"ai_accepted": 2, "human_additions": 3}],
             "total": 1,
             "page": 1,
             "page_size": 20,
@@ -89,7 +89,7 @@ def test_query_daily_stats_api(client):
     assert resp.status_code == 200
     data = resp.get_json()
     assert data["success"] is True
-    assert data["data"][0]["ai_accepted_lines"] == 2
+    assert data["data"][0]["ai_accepted"] == 2
 
 
 def test_aggregate_stats_api(client):
@@ -113,7 +113,7 @@ def test_aggregate_stats_api(client):
         ]
         db.query_committed_events.return_value = [
             {"ai_accepted": 0},
-            {"ai_accepted_lines": 2},
+            {"ai_accepted": 2},
             {"ai_accepted": 1},
         ]
         resp = client.post(
