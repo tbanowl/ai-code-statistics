@@ -3,7 +3,7 @@ import tempfile
 from datetime import datetime, timezone
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 
 import core.config.loader as loader
 import core.database.base as db_base
@@ -589,6 +589,79 @@ def test_find_daily_aggregation_affected_dates_validates_before_authorship_filte
             last_aggregation_id="c001",
             require_authorship_notes=True,
         )
+
+
+def test_find_daily_aggregation_affected_dates_uses_sql_exists_for_authorship_notes(
+    setup_dbs,
+):
+    metrics_db, stats_db = setup_dbs
+    raw_id = metrics_db.save_metrics_raw(1, 3, "{}", 1710000000)
+    with session_scope(stats_db.engine) as session:
+        session.add_all(
+            [
+                MetricsEventsCommitted(
+                    id="c001",
+                    uid="uid-c001",
+                    raw_id=raw_id,
+                    timestamp=1710000000,
+                    commit_date=20240309,
+                    repo_url="example.com/org/repo",
+                    author="alice <alice@example.com>",
+                    commit_sha="without-note",
+                ),
+                MetricsEventsCommitted(
+                    id="c002",
+                    uid="uid-c002",
+                    raw_id=raw_id,
+                    timestamp=1710003600,
+                    commit_date=20240309,
+                    repo_url="example.com/org/repo",
+                    author="bob <bob@example.com>",
+                    commit_sha="with-note",
+                ),
+                MetricsEventsCommitted(
+                    id="c003",
+                    uid="uid-c003",
+                    raw_id=raw_id,
+                    timestamp=1710090000,
+                    commit_date=20240310,
+                    repo_url="example.com/org/repo",
+                    author="carol <carol@example.com>",
+                    commit_sha="also-without-note",
+                ),
+                AuthorshipNotes(
+                    repo_url="example.com/org/repo",
+                    branch="main",
+                    commit_sha="with-note",
+                    commit_date=20240309,
+                    note_blob_oid=None,
+                    author_name="bob",
+                    author_email="bob@example.com",
+                    note_content="note",
+                    content_hash=compute_note_content_hash("note"),
+                    change_seq=1,
+                ),
+            ]
+        )
+
+    statements = []
+
+    def capture_sql(_conn, _cursor, statement, _parameters, _context, _executemany):
+        statements.append(statement)
+
+    event.listen(stats_db.engine, "before_cursor_execute", capture_sql)
+    try:
+        result = stats_db.find_daily_aggregation_affected_dates(
+            repo_url="example.com/org/repo",
+            require_authorship_notes=True,
+        )
+    finally:
+        event.remove(stats_db.engine, "before_cursor_execute", capture_sql)
+
+    assert result == {"commit_dates": [20240309], "last_id": "c002"}
+    emitted_sql = "\n".join(statements).lower()
+    assert "exists" in emitted_sql
+    assert "authorship_notes.commit_sha in" not in emitted_sql
 
 
 def test_aggregate_committed_daily_stats_recomputes_full_dates(setup_dbs):

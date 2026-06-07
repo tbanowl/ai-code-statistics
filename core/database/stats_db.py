@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 import re
 from typing import Dict, List, Optional, Tuple
 
-from sqlalchemy import func, or_
+from sqlalchemy import exists, func, or_
 
 from .base import BaseDatabase, now_ts, session_scope
 from core.utils.repo_url import normalize_repo_url, UNKNOWN_REPO
@@ -618,65 +618,61 @@ class StatsDatabase(BaseDatabase):
     ) -> Dict:
         normalized_repo_url = normalize_repo_url(repo_url)
         with session_scope(self.engine) as session:
-            query = session.query(
-                MetricsEventsCommitted.id,
-                MetricsEventsCommitted.commit_date,
-                MetricsEventsCommitted.repo_url,
-                MetricsEventsCommitted.commit_sha,
-            ).filter(MetricsEventsCommitted.repo_url == normalized_repo_url)
+            base_query = session.query(MetricsEventsCommitted).filter(
+                MetricsEventsCommitted.repo_url == normalized_repo_url
+            )
             if last_aggregation_id:
-                query = query.filter(MetricsEventsCommitted.id > last_aggregation_id)
-            rows = query.order_by(MetricsEventsCommitted.id.asc()).all()
+                base_query = base_query.filter(
+                    MetricsEventsCommitted.id > last_aggregation_id
+                )
 
-            matching_note_keys = set()
-            if require_authorship_notes and rows:
-                commit_shas = {
-                    (row.commit_sha or "").strip()
-                    for row in rows
-                    if (row.commit_sha or "").strip()
-                }
-                if commit_shas:
-                    matching_notes = (
-                        session.query(AuthorshipNotes.repo_url, AuthorshipNotes.commit_sha)
-                        .filter(AuthorshipNotes.repo_url == normalized_repo_url)
-                        .filter(AuthorshipNotes.commit_sha.in_(commit_shas))
-                        .all()
+            invalid_row = (
+                base_query.filter(
+                    or_(
+                        MetricsEventsCommitted.commit_date.is_(None),
+                        MetricsEventsCommitted.commit_date <= 0,
                     )
-                    matching_note_keys = {
-                        (
-                            normalize_repo_url(note_repo_url),
-                            (commit_sha or "").strip(),
-                        )
-                        for note_repo_url, commit_sha in matching_notes
-                    }
-
-        commit_dates = set()
-        valid_rows = []
-        for row in rows:
-            try:
-                commit_date = int(row.commit_date)
-            except (TypeError, ValueError):
-                raise ValueError(
-                    "Committed event has invalid commit_date for daily aggregation: "
-                    f"repo_url={normalized_repo_url}, committed_id={row.id}"
-                ) from None
-            if commit_date <= 0:
-                raise ValueError(
-                    "Committed event has invalid commit_date for daily aggregation: "
-                    f"repo_url={normalized_repo_url}, committed_id={row.id}"
                 )
+                .order_by(MetricsEventsCommitted.id.asc())
+                .first()
+            )
+            if invalid_row:
+                raise ValueError(
+                    "Committed event has invalid commit_date for daily aggregation: "
+                    f"repo_url={normalized_repo_url}, committed_id={invalid_row.id}"
+                )
+
+            valid_query = base_query
             if require_authorship_notes:
-                note_key = (
-                    normalize_repo_url(row.repo_url),
-                    (row.commit_sha or "").strip(),
+                note_exists = (
+                    exists()
+                    .where(AuthorshipNotes.repo_url == MetricsEventsCommitted.repo_url)
+                    .where(AuthorshipNotes.commit_sha == MetricsEventsCommitted.commit_sha)
                 )
-                if note_key not in matching_note_keys:
-                    continue
-            valid_rows.append(row)
-            commit_dates.add(commit_date)
+                valid_query = valid_query.filter(
+                    MetricsEventsCommitted.commit_sha.isnot(None)
+                )
+                valid_query = valid_query.filter(
+                    func.trim(MetricsEventsCommitted.commit_sha) != ""
+                )
+                valid_query = valid_query.filter(note_exists)
 
-        commit_dates = sorted(commit_dates)
-        last_id = valid_rows[-1].id if valid_rows else None
+            commit_dates = [
+                int(row[0])
+                for row in (
+                    valid_query.with_entities(MetricsEventsCommitted.commit_date)
+                    .distinct()
+                    .order_by(MetricsEventsCommitted.commit_date.asc())
+                    .all()
+                )
+            ]
+            last_row = (
+                valid_query.with_entities(MetricsEventsCommitted.id)
+                .order_by(MetricsEventsCommitted.id.desc())
+                .first()
+            )
+
+        last_id = last_row[0] if last_row else None
         return {"commit_dates": commit_dates, "last_id": last_id}
 
     def aggregate_committed_daily_stats(
