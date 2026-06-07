@@ -124,8 +124,8 @@ class MetricsDatabase(BaseDatabase):
 
     def get_committed_events_in_range(self, start: datetime, end: datetime) -> List[Dict]:
         """获取时间范围内的 Committed 事件"""
-        start_ts = int(start.timestamp() * 1000)
-        end_ts = int(end.timestamp() * 1000)
+        start_ts = int(start.timestamp())
+        end_ts = int(end.timestamp())
         with session_scope(self.engine) as session:
             results = session.query(MetricsEventsCommitted)\
                 .filter(MetricsEventsCommitted.timestamp >= start_ts)\

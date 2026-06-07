@@ -1,5 +1,6 @@
 import os
 import tempfile
+from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import create_engine
@@ -14,8 +15,10 @@ from core.services.metrics_service import MetricsService
 from core.database.base import session_scope
 from core.database.models import (
     AuthorshipNotes,
+    MetricsEventsAgentUsage,
     MetricsEventsCheckpoint,
     MetricsEventsCommitted,
+    MetricsEventsInstallHooks,
     StatsContributor,
     StatsDailyStat,
     StatsRepoContributor,
@@ -90,6 +93,140 @@ def test_metrics_processor_committed_seconds_commit_date_and_totals(setup_dbs):
     assert row["total_ai_additions_total"] == 6
     assert row["total_ai_deletions_total"] == 7
     assert row["time_waiting_for_ai_total"] == 8000
+
+
+def test_metrics_processor_non_committed_events_store_seconds(setup_dbs):
+    metrics_db, _stats_db = setup_dbs
+    service = MetricsService()
+    raw_id = metrics_db.save_metrics_raw(
+        version=1,
+        event_count=3,
+        payload_json="{}",
+        received_at=1710000000000,
+    )
+
+    service._process_single_event(
+        {
+            "e": 2,
+            "t": 1710000000,
+            "v": {},
+            "a": {
+                "1": "https://example.com/org/repo.git",
+                "2": "Alice <alice@example.com>",
+                "3": "abc123",
+            },
+        },
+        raw_id,
+    )
+    service._process_single_event(
+        {
+            "e": 3,
+            "t": 1710000000,
+            "v": {
+                "0": "codex",
+                "1": "installed",
+                "2": "ok",
+            },
+            "a": {},
+        },
+        raw_id,
+    )
+    service._process_single_event(
+        {
+            "e": 4,
+            "t": 1710000000,
+            "v": {
+                "0": 1710000000,
+                "1": "ai_agent",
+                "2": "core/file.py",
+            },
+            "a": {
+                "1": "https://example.com/org/repo.git",
+                "2": "Alice <alice@example.com>",
+                "3": "abc123",
+            },
+        },
+        raw_id,
+    )
+
+    with session_scope(metrics_db.engine) as session:
+        agent_usage = session.query(MetricsEventsAgentUsage).one()
+        install_hooks = session.query(MetricsEventsInstallHooks).one()
+        checkpoint = session.query(MetricsEventsCheckpoint).one()
+
+        assert agent_usage.timestamp == 1710000000
+        assert install_hooks.timestamp == 1710000000
+        assert checkpoint.timestamp == 1710000000
+        assert checkpoint.checkpoint_ts == 1710000000 * 1000
+
+
+def test_metrics_processor_checkpoint_missing_checkpoint_ts_preserves_none(setup_dbs):
+    metrics_db, _stats_db = setup_dbs
+    service = MetricsService()
+    raw_id = metrics_db.save_metrics_raw(
+        version=1,
+        event_count=1,
+        payload_json="{}",
+        received_at=1710000000000,
+    )
+
+    service._process_single_event(
+        {
+            "e": 4,
+            "t": 1710000000,
+            "v": {
+                "1": "ai_agent",
+                "2": "core/file.py",
+            },
+            "a": {
+                "1": "https://example.com/org/repo.git",
+                "2": "Alice <alice@example.com>",
+                "3": "abc123",
+            },
+        },
+        raw_id,
+    )
+
+    with session_scope(metrics_db.engine) as session:
+        checkpoint = session.query(MetricsEventsCheckpoint).one()
+        assert checkpoint.timestamp == 1710000000
+        assert checkpoint.checkpoint_ts is None
+
+
+def test_get_committed_events_in_range_uses_second_bounds(setup_dbs):
+    metrics_db, _stats_db = setup_dbs
+    service = MetricsService()
+    raw_id = metrics_db.save_metrics_raw(
+        version=1,
+        event_count=1,
+        payload_json="{}",
+        received_at=1710000000000,
+    )
+    service._process_single_event(
+        {
+            "e": 1,
+            "t": 1710000000,
+            "v": {
+                "0": 11,
+                "1": 2,
+                "2": 13,
+            },
+            "a": {
+                "1": "https://example.com/org/repo.git",
+                "2": "Alice <alice@example.com>",
+                "3": "abc123",
+            },
+        },
+        raw_id,
+    )
+
+    rows = metrics_db.get_committed_events_in_range(
+        datetime.fromtimestamp(1710000000, timezone.utc),
+        datetime.fromtimestamp(1710000010, timezone.utc),
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["timestamp"] == 1710000000
 
 
 def test_query_committed_and_checkpoint_events(setup_dbs):

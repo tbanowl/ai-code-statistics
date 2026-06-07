@@ -159,7 +159,8 @@ class MetricsService:
                 prompt_id = self._get_string(attrs, "22"),
                 created_at = now,
             )
-            record.checkpoint_ts = record.checkpoint_ts * 1000
+            if record.checkpoint_ts is not None:
+                record.checkpoint_ts = record.checkpoint_ts * 1000
             record.uid = gen_checkpoint_uid(record)
             self.database.save_checkpoint_event(record)
 
