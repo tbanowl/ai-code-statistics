@@ -435,6 +435,172 @@ def test_update_repository_last_daily_aggregation_id(setup_dbs):
         assert repo.updated_at > original_updated_at
 
 
+def test_find_daily_aggregation_affected_dates_uses_id_cursor(setup_dbs):
+    metrics_db, stats_db = setup_dbs
+    raw_id = metrics_db.save_metrics_raw(1, 3, "{}", 1710000000)
+    stats_db.get_or_create_repository("example.com/org/repo")
+
+    rows = [
+        MetricsEventsCommitted(
+            id="c001",
+            uid="uid-c001",
+            raw_id=raw_id,
+            timestamp=1710000000,
+            commit_date=20240309,
+            repo_url="example.com/org/repo",
+            author="alice <alice@example.com>",
+            commit_sha="a1",
+        ),
+        MetricsEventsCommitted(
+            id="c002",
+            uid="uid-c002",
+            raw_id=raw_id,
+            timestamp=1710003600,
+            commit_date=20240309,
+            repo_url="example.com/org/repo",
+            author="bob <bob@example.com>",
+            commit_sha="b1",
+        ),
+        MetricsEventsCommitted(
+            id="c003",
+            uid="uid-c003",
+            raw_id=raw_id,
+            timestamp=1710090000,
+            commit_date=20240310,
+            repo_url="example.com/org/repo",
+            author="alice <alice@example.com>",
+            commit_sha="a2",
+        ),
+    ]
+    with session_scope(stats_db.engine) as session:
+        session.add_all(rows)
+
+    result = stats_db.find_daily_aggregation_affected_dates(
+        repo_url="example.com/org/repo",
+        last_aggregation_id="c001",
+        require_authorship_notes=False,
+    )
+
+    assert result == {"commit_dates": [20240309, 20240310], "last_id": "c003"}
+
+
+def test_aggregate_committed_daily_stats_recomputes_full_dates(setup_dbs):
+    metrics_db, stats_db = setup_dbs
+    raw_id = metrics_db.save_metrics_raw(1, 3, "{}", 1710000000)
+    with session_scope(stats_db.engine) as session:
+        session.add_all(
+            [
+                MetricsEventsCommitted(
+                    id="c001",
+                    uid="uid-c001",
+                    raw_id=raw_id,
+                    timestamp=1710000000,
+                    commit_date=20240309,
+                    repo_url="example.com/org/repo",
+                    author="alice <alice@example.com>",
+                    human_additions=5,
+                    git_diff_deleted_lines=1,
+                    git_diff_added_lines=10,
+                    mixed_additions_total=2,
+                    ai_additions_total=3,
+                    ai_accepted_total=4,
+                    total_ai_additions_total=6,
+                    total_ai_deletions_total=1,
+                ),
+                MetricsEventsCommitted(
+                    id="c002",
+                    uid="uid-c002",
+                    raw_id=raw_id,
+                    timestamp=1710003600,
+                    commit_date=20240309,
+                    repo_url="example.com/org/repo",
+                    author="alice <alice@example.com>",
+                    human_additions=7,
+                    git_diff_deleted_lines=2,
+                    git_diff_added_lines=11,
+                    mixed_additions_total=3,
+                    ai_additions_total=4,
+                    ai_accepted_total=5,
+                    total_ai_additions_total=8,
+                    total_ai_deletions_total=2,
+                ),
+            ]
+        )
+
+    rows = stats_db.aggregate_committed_daily_stats(
+        repo_url="example.com/org/repo",
+        commit_dates=[20240309],
+        require_authorship_notes=False,
+    )
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["stat_date"] == 20240309
+    assert row["contributor_name"] == "alice"
+    assert row["contributor_email"] == "alice@example.com"
+    assert row["human_additions"] == 12
+    assert row["git_diff_deleted_lines"] == 3
+    assert row["git_diff_added_lines"] == 21
+    assert row["mixed_additions"] == 5
+    assert row["ai_additions"] == 7
+    assert row["ai_accepted"] == 9
+    assert row["total_ai_additions"] == 14
+    assert row["total_ai_deletions"] == 3
+
+
+def test_aggregate_committed_daily_stats_requires_authorship_notes(setup_dbs):
+    metrics_db, stats_db = setup_dbs
+    raw_id = metrics_db.save_metrics_raw(1, 2, "{}", 1710000000)
+    with session_scope(stats_db.engine) as session:
+        session.add_all(
+            [
+                MetricsEventsCommitted(
+                    id="c001",
+                    uid="uid-c001",
+                    raw_id=raw_id,
+                    timestamp=1710000000,
+                    commit_date=20240309,
+                    repo_url="example.com/org/repo",
+                    author="alice <alice@example.com>",
+                    commit_sha="with-note",
+                    ai_accepted_total=5,
+                ),
+                MetricsEventsCommitted(
+                    id="c002",
+                    uid="uid-c002",
+                    raw_id=raw_id,
+                    timestamp=1710000100,
+                    commit_date=20240309,
+                    repo_url="example.com/org/repo",
+                    author="alice <alice@example.com>",
+                    commit_sha="without-note",
+                    ai_accepted_total=7,
+                ),
+                AuthorshipNotes(
+                    repo_url="example.com/org/repo",
+                    branch="main",
+                    commit_sha="with-note",
+                    commit_date=20240309,
+                    note_blob_oid=None,
+                    author_name="alice",
+                    author_email="alice@example.com",
+                    note_content="note",
+                    content_hash=compute_note_content_hash("note"),
+                    change_seq=1,
+                ),
+            ]
+        )
+
+    rows = stats_db.aggregate_committed_daily_stats(
+        repo_url="example.com/org/repo",
+        commit_dates=[20240309],
+        require_authorship_notes=True,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["ai_accepted"] == 5
+
+
 def test_repository_contributor_and_daily_stats_flow(setup_dbs):
     _, stats_db = setup_dbs
 

@@ -601,6 +601,113 @@ class StatsDatabase(BaseDatabase):
             session.flush()
             return record.id
 
+    def list_repositories_for_daily_aggregation(
+        self, repo_url: Optional[str] = None
+    ) -> List[Dict]:
+        self.consolidate_unknown_repositories()
+        with session_scope(self.engine) as session:
+            query = session.query(StatsRepository).order_by(StatsRepository.repo_path.asc())
+            if repo_url:
+                query = query.filter(
+                    StatsRepository.repo_path == normalize_repo_url(repo_url)
+                )
+            return [row.to_dict() for row in query.all()]
+
+    def find_daily_aggregation_affected_dates(
+        self,
+        repo_url: str,
+        last_aggregation_id: Optional[str] = None,
+        require_authorship_notes: bool = False,
+    ) -> Dict:
+        normalized_repo_url = normalize_repo_url(repo_url)
+        with session_scope(self.engine) as session:
+            query = session.query(
+                MetricsEventsCommitted.id,
+                MetricsEventsCommitted.commit_date,
+            ).filter(MetricsEventsCommitted.repo_url == normalized_repo_url)
+            if last_aggregation_id:
+                query = query.filter(MetricsEventsCommitted.id > last_aggregation_id)
+            if require_authorship_notes:
+                query = query.join(
+                    AuthorshipNotes,
+                    (MetricsEventsCommitted.repo_url == AuthorshipNotes.repo_url)
+                    & (MetricsEventsCommitted.commit_sha == AuthorshipNotes.commit_sha),
+                )
+            rows = query.order_by(MetricsEventsCommitted.id.asc()).all()
+
+        commit_dates = sorted({int(row.commit_date) for row in rows if row.commit_date})
+        last_id = rows[-1].id if rows else None
+        return {"commit_dates": commit_dates, "last_id": last_id}
+
+    def aggregate_committed_daily_stats(
+        self,
+        repo_url: str,
+        commit_dates: List[int],
+        require_authorship_notes: bool = False,
+    ) -> List[Dict]:
+        if not commit_dates:
+            return []
+
+        normalized_repo_url = normalize_repo_url(repo_url)
+        with session_scope(self.engine) as session:
+            query = session.query(
+                MetricsEventsCommitted.commit_date.label("stat_date"),
+                MetricsEventsCommitted.repo_url.label("repo_url"),
+                MetricsEventsCommitted.author.label("author"),
+                func.sum(func.coalesce(MetricsEventsCommitted.human_additions, 0)).label("human_additions"),
+                func.sum(0).label("unknown_additions"),
+                func.sum(func.coalesce(MetricsEventsCommitted.git_diff_deleted_lines, 0)).label("git_diff_deleted_lines"),
+                func.sum(func.coalesce(MetricsEventsCommitted.git_diff_added_lines, 0)).label("git_diff_added_lines"),
+                func.sum(func.coalesce(MetricsEventsCommitted.mixed_additions_total, 0)).label("mixed_additions"),
+                func.sum(func.coalesce(MetricsEventsCommitted.ai_additions_total, 0)).label("ai_additions"),
+                func.sum(func.coalesce(MetricsEventsCommitted.ai_accepted_total, 0)).label("ai_accepted"),
+                func.sum(func.coalesce(MetricsEventsCommitted.total_ai_additions_total, 0)).label("total_ai_additions"),
+                func.sum(func.coalesce(MetricsEventsCommitted.total_ai_deletions_total, 0)).label("total_ai_deletions"),
+            ).filter(MetricsEventsCommitted.repo_url == normalized_repo_url)
+            query = query.filter(MetricsEventsCommitted.commit_date.in_(commit_dates))
+            if require_authorship_notes:
+                query = query.join(
+                    AuthorshipNotes,
+                    (MetricsEventsCommitted.repo_url == AuthorshipNotes.repo_url)
+                    & (MetricsEventsCommitted.commit_sha == AuthorshipNotes.commit_sha),
+                )
+            rows = (
+                query.group_by(
+                    MetricsEventsCommitted.commit_date,
+                    MetricsEventsCommitted.repo_url,
+                    MetricsEventsCommitted.author,
+                )
+                .order_by(
+                    MetricsEventsCommitted.commit_date.asc(),
+                    MetricsEventsCommitted.author.asc(),
+                )
+                .all()
+            )
+
+        items = []
+        for row in rows:
+            contributor_name, contributor_email = self._parse_author(row.author)
+            repo_path = normalize_repo_url(row.repo_url)
+            items.append(
+                {
+                    "stat_date": int(row.stat_date),
+                    "repo_url": repo_path,
+                    "repo_name": self._extract_repo_name(repo_path),
+                    "contributor_name": contributor_name,
+                    "contributor_email": contributor_email,
+                    "human_additions": int(row.human_additions or 0),
+                    "unknown_additions": int(row.unknown_additions or 0),
+                    "git_diff_deleted_lines": int(row.git_diff_deleted_lines or 0),
+                    "git_diff_added_lines": int(row.git_diff_added_lines or 0),
+                    "mixed_additions": int(row.mixed_additions or 0),
+                    "ai_additions": int(row.ai_additions or 0),
+                    "ai_accepted": int(row.ai_accepted or 0),
+                    "total_ai_additions": int(row.total_ai_additions or 0),
+                    "total_ai_deletions": int(row.total_ai_deletions or 0),
+                }
+            )
+        return items
+
     def update_repository_last_daily_aggregation_id(
         self, repo_id: str, committed_id: str
     ) -> bool:
