@@ -113,7 +113,7 @@ def test_aggregate_stats_api(client):
         ]
         db.query_committed_events.return_value = [
             {"ai_accepted": 0},
-            {"ai_accepted": 2},
+            {"ai_accepted_lines": 2},
             {"ai_accepted": 1},
         ]
         resp = client.post(

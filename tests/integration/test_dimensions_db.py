@@ -809,6 +809,72 @@ def test_get_aggregated_stats_uses_new_daily_fields(setup_dbs):
     ]
 
 
+def test_get_aggregated_stats_groups_yyyy_mm_dd_monthly_and_weekly(setup_dbs):
+    _, stats_db = setup_dbs
+    repo_id = stats_db.get_or_create_repository("example.com/org/repo")
+    rows = [
+        (20260605, 10, 1, 2, 30, 3, 4, 5, 6, 7),
+        (20260606, 20, 2, 4, 40, 6, 8, 10, 12, 14),
+    ]
+    for (
+        stat_date,
+        human,
+        unknown,
+        deleted,
+        added,
+        mixed,
+        ai,
+        accepted,
+        total_ai,
+        total_ai_deleted,
+    ) in rows:
+        stats_db.upsert_daily_stat(
+            stat_date,
+            repo_id,
+            "alice",
+            "alice@example.com",
+            {
+                "repo_name": "org/repo",
+                "contributor_name": "alice",
+                "contributor_email": "alice@example.com",
+                "human_additions": human,
+                "unknown_additions": unknown,
+                "git_diff_deleted_lines": deleted,
+                "git_diff_added_lines": added,
+                "mixed_additions": mixed,
+                "ai_additions": ai,
+                "ai_accepted": accepted,
+                "total_ai_additions": total_ai,
+                "total_ai_deletions": total_ai_deleted,
+            },
+        )
+
+    monthly = stats_db.get_aggregated_stats(
+        20260601, 20260630, repo_id=repo_id, granularity="monthly"
+    )
+    weekly = stats_db.get_aggregated_stats(
+        20260601, 20260630, repo_id=repo_id, granularity="weekly"
+    )
+
+    expected_metrics = {
+        "human_additions": 30,
+        "unknown_additions": 3,
+        "git_diff_deleted_lines": 6,
+        "git_diff_added_lines": 70,
+        "mixed_additions": 9,
+        "ai_additions": 12,
+        "ai_accepted": 15,
+        "total_ai_additions": 18,
+        "total_ai_deletions": 21,
+    }
+    assert monthly == [
+        {"period": "2026-06", "stat_date": 20260601, **expected_metrics}
+    ]
+    assert weekly == [
+        {"period": "2026-W23", "stat_date": 20260601, **expected_metrics}
+    ]
+
+
 def test_repository_contributor_and_daily_stats_flow(setup_dbs):
     _, stats_db = setup_dbs
 

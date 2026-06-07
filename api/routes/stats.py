@@ -5,6 +5,16 @@ from core.database import BlameStatsDatabase, StatsDatabase
 stats_bp = Blueprint("stats", __name__, url_prefix="/api/stats")
 
 
+def _to_int(value: object) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        return int(value) if value.isdigit() else 0
+    return 0
+
+
 def _get_pagination() -> tuple[int, int]:
     page = request.args.get("page", type=int)
     page_size = request.args.get("page_size", type=int)
@@ -32,15 +42,6 @@ def _get_pagination() -> tuple[int, int]:
 
 
 def _build_summary(items: list[dict]) -> dict:
-    def _to_int(value: object) -> int:
-        if isinstance(value, bool):
-            return int(value)
-        if isinstance(value, (int, float)):
-            return int(value)
-        if isinstance(value, str):
-            return int(value) if value.isdigit() else 0
-        return 0
-
     total_generated = sum(_to_int(i.get("ai_additions")) for i in items)
     total_accepted = sum(_to_int(i.get("ai_accepted")) for i in items)
     total_human = sum(_to_int(i.get("human_additions")) for i in items)
@@ -333,8 +334,15 @@ def get_stats_aggregate_compat():
 
         summary = _build_summary(items)
         total_commits = len(committed_rows)
+
+        def _row_ai_accepted(row):
+            value = row.get("ai_accepted")
+            if value is None:
+                value = row.get("ai_accepted_lines")
+            return value
+
         ai_commits = sum(
-            1 for row in committed_rows if int(row.get("ai_accepted") or 0) > 0
+            1 for row in committed_rows if _to_int(_row_ai_accepted(row)) > 0
         )
         return jsonify(
             {
