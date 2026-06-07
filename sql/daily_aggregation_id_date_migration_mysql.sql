@@ -51,7 +51,10 @@ ALTER TABLE authorship_notes
 UPDATE authorship_notes
 SET commit_date = CAST(
     DATE_FORMAT(
-        DATE_ADD('1970-01-01 00:00:00', INTERVAL commit_time SECOND),
+        DATE_ADD(
+            '1970-01-01 00:00:00',
+            INTERVAL CASE WHEN commit_time > 9999999999 THEN FLOOR(commit_time / 1000) ELSE commit_time END SECOND
+        ),
         '%Y%m%d'
     ) AS UNSIGNED
 )
