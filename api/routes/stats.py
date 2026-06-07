@@ -41,10 +41,10 @@ def _build_summary(items: list[dict]) -> dict:
             return int(value) if value.isdigit() else 0
         return 0
 
-    total_generated = sum(_to_int(i.get("ai_lines")) for i in items)
-    total_accepted = sum(_to_int(i.get("ai_accepted_lines")) for i in items)
-    total_human = sum(_to_int(i.get("human_lines")) for i in items)
-    total_lines = sum(_to_int(i.get("total_lines")) for i in items)
+    total_generated = sum(_to_int(i.get("ai_additions")) for i in items)
+    total_accepted = sum(_to_int(i.get("ai_accepted")) for i in items)
+    total_human = sum(_to_int(i.get("human_additions")) for i in items)
+    total_lines = sum(_to_int(i.get("git_diff_added_lines")) for i in items)
     avg_pct = round((total_accepted / total_lines) * 100, 2) if total_lines > 0 else 0
 
     return {
@@ -334,7 +334,7 @@ def get_stats_aggregate_compat():
         summary = _build_summary(items)
         total_commits = len(committed_rows)
         ai_commits = sum(
-            1 for row in committed_rows if int(row.get("ai_accepted_lines") or 0) > 0
+            1 for row in committed_rows if int(row.get("ai_accepted") or 0) > 0
         )
         return jsonify(
             {

@@ -1110,12 +1110,25 @@ class StatsDatabase(BaseDatabase):
             query = (
                 session.query(
                     StatsDailyStat.stat_date,
-                    func.sum(StatsDailyStat.ai_lines).label("ai_lines"),
-                    func.sum(StatsDailyStat.ai_accepted_lines).label(
-                        "ai_accepted_lines"
+                    func.sum(StatsDailyStat.human_additions).label("human_additions"),
+                    func.sum(StatsDailyStat.unknown_additions).label(
+                        "unknown_additions"
                     ),
-                    func.sum(StatsDailyStat.human_lines).label("human_lines"),
-                    func.sum(StatsDailyStat.total_lines).label("total_lines"),
+                    func.sum(StatsDailyStat.git_diff_deleted_lines).label(
+                        "git_diff_deleted_lines"
+                    ),
+                    func.sum(StatsDailyStat.git_diff_added_lines).label(
+                        "git_diff_added_lines"
+                    ),
+                    func.sum(StatsDailyStat.mixed_additions).label("mixed_additions"),
+                    func.sum(StatsDailyStat.ai_additions).label("ai_additions"),
+                    func.sum(StatsDailyStat.ai_accepted).label("ai_accepted"),
+                    func.sum(StatsDailyStat.total_ai_additions).label(
+                        "total_ai_additions"
+                    ),
+                    func.sum(StatsDailyStat.total_ai_deletions).label(
+                        "total_ai_deletions"
+                    ),
                 )
                 .filter(StatsDailyStat.stat_date >= start_date)
                 .filter(StatsDailyStat.stat_date <= end_date)
@@ -1134,15 +1147,18 @@ class StatsDatabase(BaseDatabase):
 
         items: List[Dict] = []
         for row in rows:
-            accepted = int(row.ai_accepted_lines or 0)
-            human = int(row.human_lines or 0)
             items.append(
                 {
                     "stat_date": int(row.stat_date),
-                    "ai_lines": int(row.ai_lines or 0),
-                    "ai_accepted_lines": accepted,
-                    "human_lines": human,
-                    "total_lines": int(row.total_lines or 0),
+                    "human_additions": int(row.human_additions or 0),
+                    "unknown_additions": int(row.unknown_additions or 0),
+                    "git_diff_deleted_lines": int(row.git_diff_deleted_lines or 0),
+                    "git_diff_added_lines": int(row.git_diff_added_lines or 0),
+                    "mixed_additions": int(row.mixed_additions or 0),
+                    "ai_additions": int(row.ai_additions or 0),
+                    "ai_accepted": int(row.ai_accepted or 0),
+                    "total_ai_additions": int(row.total_ai_additions or 0),
+                    "total_ai_deletions": int(row.total_ai_deletions or 0),
                 }
             )
 
@@ -1152,40 +1168,36 @@ class StatsDatabase(BaseDatabase):
 
     def _group_by_granularity(self, items: List[Dict], granularity: str) -> List[Dict]:
         grouped: Dict[str, Dict] = {}
+        metric_keys = (
+            "human_additions",
+            "unknown_additions",
+            "git_diff_deleted_lines",
+            "git_diff_added_lines",
+            "mixed_additions",
+            "ai_additions",
+            "ai_accepted",
+            "total_ai_additions",
+            "total_ai_deletions",
+        )
         for item in items:
-            dt = datetime.fromtimestamp(item["stat_date"] / 1000)
+            dt = datetime.strptime(str(item["stat_date"]), "%Y%m%d")
             if granularity == "weekly":
                 year, week, _ = dt.isocalendar()
                 key = f"{year}-W{week:02d}"
                 monday = dt - timedelta(days=dt.weekday())
-                period_ts = int(
-                    monday.replace(
-                        hour=0, minute=0, second=0, microsecond=0
-                    ).timestamp()
-                    * 1000
-                )
+                period_date = int(monday.strftime("%Y%m%d"))
             else:
                 key = f"{dt.year}-{dt.month:02d}"
-                period_ts = int(
-                    dt.replace(
-                        day=1, hour=0, minute=0, second=0, microsecond=0
-                    ).timestamp()
-                    * 1000
-                )
+                period_date = int(dt.replace(day=1).strftime("%Y%m%d"))
 
             if key not in grouped:
                 grouped[key] = {
                     "period": key,
-                    "stat_date": period_ts,
-                    "ai_lines": 0,
-                    "ai_accepted_lines": 0,
-                    "human_lines": 0,
-                    "total_lines": 0,
+                    "stat_date": period_date,
+                    **{metric_key: 0 for metric_key in metric_keys},
                 }
-            grouped[key]["ai_lines"] += item["ai_lines"]
-            grouped[key]["ai_accepted_lines"] += item["ai_accepted_lines"]
-            grouped[key]["human_lines"] += item["human_lines"]
-            grouped[key]["total_lines"] += item["total_lines"]
+            for metric_key in metric_keys:
+                grouped[key][metric_key] += item[metric_key]
 
         result = []
         for value in grouped.values():

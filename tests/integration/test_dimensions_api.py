@@ -97,22 +97,24 @@ def test_aggregate_stats_api(client):
         db = db_cls.return_value
         db.get_aggregated_stats.return_value = [
             {
-                "ai_lines": 30,
-                "ai_accepted_lines": 25,
-                "human_lines": 75,
-                "total_lines": 100,
+                "stat_date": 20260605,
+                "ai_additions": 30,
+                "ai_accepted": 25,
+                "human_additions": 75,
+                "git_diff_added_lines": 100,
             },
             {
-                "ai_lines": 80,
-                "ai_accepted_lines": 75,
-                "human_lines": 25,
-                "total_lines": 100,
+                "stat_date": 20260606,
+                "ai_additions": 80,
+                "ai_accepted": 75,
+                "human_additions": 25,
+                "git_diff_added_lines": 100,
             },
         ]
         db.query_committed_events.return_value = [
-            {"ai_accepted_lines": 0},
-            {"ai_accepted_lines": 2},
-            {"ai_accepted_lines": 1},
+            {"ai_accepted": 0},
+            {"ai_accepted": 2},
+            {"ai_accepted": 1},
         ]
         resp = client.post(
             "/api/stats/aggregate",
@@ -133,11 +135,11 @@ def test_stats_query_returns_filter_names(client):
         db = db_cls.return_value
         db.get_aggregated_stats.return_value = [
             {
-                "stat_date": 1,
-                "ai_lines": 10,
-                "ai_accepted_lines": 8,
-                "human_lines": 12,
-                "total_lines": 20,
+                "stat_date": 20260605,
+                "ai_additions": 10,
+                "ai_accepted": 8,
+                "human_additions": 12,
+                "git_diff_added_lines": 20,
             }
         ]
         db.get_repository_by_id.return_value = {

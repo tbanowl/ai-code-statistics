@@ -767,6 +767,48 @@ def test_aggregate_committed_daily_stats_requires_authorship_notes(setup_dbs):
     assert rows[0]["ai_accepted"] == 5
 
 
+def test_get_aggregated_stats_uses_new_daily_fields(setup_dbs):
+    _, stats_db = setup_dbs
+    repo_id = stats_db.get_or_create_repository("example.com/org/repo")
+    stats_db.upsert_daily_stat(
+        20260605,
+        repo_id,
+        "alice",
+        "alice@example.com",
+        {
+            "repo_name": "org/repo",
+            "contributor_name": "alice",
+            "contributor_email": "alice@example.com",
+            "human_additions": 10,
+            "unknown_additions": 1,
+            "git_diff_deleted_lines": 2,
+            "git_diff_added_lines": 30,
+            "mixed_additions": 3,
+            "ai_additions": 4,
+            "ai_accepted": 5,
+            "total_ai_additions": 6,
+            "total_ai_deletions": 7,
+        },
+    )
+
+    rows = stats_db.get_aggregated_stats(20260601, 20260630, repo_id=repo_id)
+
+    assert rows == [
+        {
+            "stat_date": 20260605,
+            "human_additions": 10,
+            "unknown_additions": 1,
+            "git_diff_deleted_lines": 2,
+            "git_diff_added_lines": 30,
+            "mixed_additions": 3,
+            "ai_additions": 4,
+            "ai_accepted": 5,
+            "total_ai_additions": 6,
+            "total_ai_deletions": 7,
+        }
+    ]
+
+
 def test_repository_contributor_and_daily_stats_flow(setup_dbs):
     _, stats_db = setup_dbs
 
