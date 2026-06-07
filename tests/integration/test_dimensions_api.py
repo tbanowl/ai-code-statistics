@@ -136,10 +136,17 @@ def test_stats_query_returns_filter_names(client):
         db.get_aggregated_stats.return_value = [
             {
                 "stat_date": 20260605,
-                "ai_additions": 10,
-                "ai_accepted": 8,
-                "human_additions": 12,
-                "git_diff_added_lines": 20,
+                "ai_additions": 30,
+                "ai_accepted": 25,
+                "human_additions": 75,
+                "git_diff_added_lines": 100,
+            },
+            {
+                "stat_date": 20260606,
+                "ai_additions": 80,
+                "ai_accepted": 75,
+                "human_additions": 25,
+                "git_diff_added_lines": 100,
             }
         ]
         db.get_repository_by_id.return_value = {
@@ -160,6 +167,11 @@ def test_stats_query_returns_filter_names(client):
     assert data["success"] is True
     assert data["data"]["filters"]["repo_name"] == "org/repo"
     assert data["data"]["filters"]["contributor_name"] == "Alice"
+    assert data["data"]["summary"]["total_ai_generated"] == 110
+    assert data["data"]["summary"]["total_ai_accepted"] == 100
+    assert data["data"]["summary"]["total_human"] == 100
+    assert data["data"]["summary"]["total_lines"] == 200
+    assert data["data"]["summary"]["avg_ai_percentage"] == 50.0
 
 
 def test_trigger_aggregate_with_filters(client):
