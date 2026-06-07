@@ -407,11 +407,32 @@ def test_update_repository_last_daily_aggregation_id(setup_dbs):
     _, stats_db = setup_dbs
     repo_id = stats_db.get_or_create_repository("https://example.com/org/repo.git")
 
-    assert stats_db.update_repository_last_daily_aggregation_id(repo_id, "czabc123") is True
+    assert stats_db.update_repository_last_daily_aggregation_id(repo_id, "") is False
+    assert stats_db.update_repository_last_daily_aggregation_id(repo_id, "   ") is False
+    assert (
+        stats_db.update_repository_last_daily_aggregation_id(
+            "missingrepo0000001", "czmissing"
+        )
+        is False
+    )
+
+    with session_scope(stats_db.engine) as session:
+        repo = session.query(StatsRepository).filter(StatsRepository.id == repo_id).one()
+        repo.updated_at = 1
+        session.flush()
+        original_updated_at = repo.updated_at
+        assert repo.last_daily_aggregation_id is None
+
+    assert (
+        stats_db.update_repository_last_daily_aggregation_id(repo_id, "  czabc123  ")
+        is True
+    )
 
     with session_scope(stats_db.engine) as session:
         repo = session.query(StatsRepository).filter(StatsRepository.id == repo_id).one()
         assert repo.last_daily_aggregation_id == "czabc123"
+        assert repo.updated_at is not None
+        assert repo.updated_at > original_updated_at
 
 
 def test_repository_contributor_and_daily_stats_flow(setup_dbs):
@@ -429,11 +450,15 @@ def test_repository_contributor_and_daily_stats_flow(setup_dbs):
             "repo_name": "org/repo-a",
             "contributor_name": "alice",
             "contributor_email": "alice@example.com",
-            "ai_lines": 20,
-            "ai_total_lines": 24,
-            "ai_accepted_lines": 60,
-            "human_lines": 40,
-            "total_lines": 100,
+            "human_additions": 40,
+            "unknown_additions": 1,
+            "git_diff_deleted_lines": 3,
+            "git_diff_added_lines": 100,
+            "mixed_additions": 2,
+            "ai_additions": 20,
+            "ai_accepted": 18,
+            "total_ai_additions": 24,
+            "total_ai_deletions": 5,
         },
     )
 
@@ -454,10 +479,15 @@ def test_repository_contributor_and_daily_stats_flow(setup_dbs):
     assert repos[0]["repo_name"] == "org/repo-a"
     assert contributors[0]["name"] == "alice"
     assert len(daily) == 1
-    assert daily[0]["ai_lines"] == 20
-    assert daily[0]["ai_total_lines"] == 24
-    assert daily[0]["ai_accepted_lines"] == 60
-    assert daily[0]["total_lines"] == 100
+    assert daily[0]["human_additions"] == 40
+    assert daily[0]["unknown_additions"] == 1
+    assert daily[0]["git_diff_deleted_lines"] == 3
+    assert daily[0]["git_diff_added_lines"] == 100
+    assert daily[0]["mixed_additions"] == 2
+    assert daily[0]["ai_additions"] == 20
+    assert daily[0]["ai_accepted"] == 18
+    assert daily[0]["total_ai_additions"] == 24
+    assert daily[0]["total_ai_deletions"] == 5
     assert daily[0]["repo_name"] == "org/repo-a"
     assert daily[0]["contributor_name"] == "alice"
     assert daily[0]["contributor_email"] == "alice@example.com"
@@ -487,14 +517,35 @@ def test_consolidate_empty_repository_rows(setup_dbs):
         session.add(
             StatsDailyStat(
                 stat_date=1710000000000,
+                repo_id=unknown.id,
+                contributor_name=contributor.name,
+                contributor_email=contributor.email,
+                human_additions=10,
+                unknown_additions=1,
+                git_diff_deleted_lines=2,
+                git_diff_added_lines=30,
+                mixed_additions=3,
+                ai_additions=4,
+                ai_accepted=5,
+                total_ai_additions=6,
+                total_ai_deletions=7,
+            )
+        )
+        session.add(
+            StatsDailyStat(
+                stat_date=1710000000000,
                 repo_id=bad_repo.id,
                 contributor_name=contributor.name,
                 contributor_email=contributor.email,
-                ai_lines=1,
-                ai_total_lines=2,
-                ai_accepted_lines=3,
-                human_lines=4,
-                total_lines=7,
+                human_additions=20,
+                unknown_additions=2,
+                git_diff_deleted_lines=4,
+                git_diff_added_lines=40,
+                mixed_additions=6,
+                ai_additions=8,
+                ai_accepted=10,
+                total_ai_additions=12,
+                total_ai_deletions=14,
             )
         )
         session.add(
@@ -514,6 +565,15 @@ def test_consolidate_empty_repository_rows(setup_dbs):
         daily = session.query(StatsDailyStat).all()
         assert len(daily) == 1
         assert daily[0].repo_id == unknown_id
+        assert daily[0].human_additions == 30
+        assert daily[0].unknown_additions == 3
+        assert daily[0].git_diff_deleted_lines == 6
+        assert daily[0].git_diff_added_lines == 70
+        assert daily[0].mixed_additions == 9
+        assert daily[0].ai_additions == 12
+        assert daily[0].ai_accepted == 15
+        assert daily[0].total_ai_additions == 18
+        assert daily[0].total_ai_deletions == 21
 
         links = session.query(StatsRepoContributor).all()
         assert len(links) == 1

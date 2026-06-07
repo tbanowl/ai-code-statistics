@@ -75,6 +75,7 @@ def test_upsert_and_query_daily_stats(stats_db):
         offset=0,
     )
 
+    assert len(rows) == 1
     assert rows[0]["human_additions"] == 40
     assert rows[0]["unknown_additions"] == 1
     assert rows[0]["git_diff_deleted_lines"] == 3
