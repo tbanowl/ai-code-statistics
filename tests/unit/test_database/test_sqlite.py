@@ -236,7 +236,16 @@ def test_query_committed_events_normalizes_repo_url_filter(stats_db):
     checkpoint = stats_db.query_checkpoint_events(0, 2000, repo_url=full_url)
     paginated = stats_db.get_committed_events_paginated(repo_url=full_url)
 
-    assert [item["repo_url"] for item in committed] == ["codeup.aliyun.com/org/repo"]
+    assert len(committed) == 1
+    committed_item = committed[0]
+    assert committed_item["repo_url"] == "codeup.aliyun.com/org/repo"
+    assert committed_item["timestamp"] == 1000
+    assert committed_item["commit_date"] == 20240309
+    assert committed_item["mixed_additions"] == 11
+    assert committed_item["ai_additions"] == 12
+    assert committed_item["ai_accepted"] == 13
+    assert committed_item["total_ai_additions"] == 14
+    assert committed_item["total_ai_deletions"] == 15
     assert [item["repo_url"] for item in checkpoint] == ["codeup.aliyun.com/org/repo"]
     assert paginated["total"] == 1
     item = paginated["items"][0]
