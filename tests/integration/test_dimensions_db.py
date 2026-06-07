@@ -10,6 +10,7 @@ from core.database.authorship_notes_db import compute_note_content_hash
 from core.database.metrics_db import MetricsDatabase
 from core.database.stats_db import StatsDatabase
 from core.scheduler.tasks.daily_aggregation_task import DailyAggregationTask
+from core.services.metrics_service import MetricsService
 from core.database.base import session_scope
 from core.database.models import (
     AuthorshipNotes,
@@ -46,6 +47,51 @@ def setup_dbs(db_url):
     return metrics_db, stats_db
 
 
+def test_metrics_processor_committed_seconds_commit_date_and_totals(setup_dbs):
+    metrics_db, _stats_db = setup_dbs
+    service = MetricsService()
+    raw_id = metrics_db.save_metrics_raw(
+        version=1,
+        event_count=1,
+        payload_json="{}",
+        received_at=1710000000000,
+    )
+    event = {
+        "e": 1,
+        "t": 1710000000,
+        "v": {
+            "0": 11,
+            "1": 2,
+            "2": 13,
+            "4": [3, 30],
+            "5": [4, 40],
+            "6": [5, 50],
+            "7": [6, 60],
+            "8": [7, 70],
+            "9": [8000, 9000],
+        },
+        "a": {
+            "1": "https://example.com/org/repo.git",
+            "2": "Alice <alice@example.com>",
+            "3": "abc123",
+        },
+    }
+
+    service._process_single_event(event, raw_id)
+
+    rows = metrics_db.get_committed_events_by_repo("example.com/org/repo")
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["timestamp"] == 1710000000
+    assert row["commit_date"] == 20240309
+    assert row["mixed_additions_total"] == 3
+    assert row["ai_additions_total"] == 4
+    assert row["ai_accepted_total"] == 5
+    assert row["total_ai_additions_total"] == 6
+    assert row["total_ai_deletions_total"] == 7
+    assert row["time_waiting_for_ai_total"] == 8000
+
+
 def test_query_committed_and_checkpoint_events(setup_dbs):
     metrics_db, stats_db = setup_dbs
 
@@ -57,7 +103,8 @@ def test_query_committed_and_checkpoint_events(setup_dbs):
     )
     committed = MetricsEventsCommitted(
         raw_id=raw_id,
-        timestamp=1710000000001,
+        timestamp=1710000000,
+        commit_date=20240309,
         repo_url="repo/a",
         author="alice <alice@example.com>",
         human_additions=6,
@@ -66,6 +113,9 @@ def test_query_committed_and_checkpoint_events(setup_dbs):
         ai_additions=[3, 1],
         ai_accepted=[3, 1],
         total_ai_additions=[3, 1],
+        ai_additions_total=3,
+        ai_accepted_total=3,
+        total_ai_additions_total=3,
     )
     committed.uid = gen_commited_uid(committed)
     metrics_db.upsert_committed_event(committed)
@@ -82,7 +132,7 @@ def test_query_committed_and_checkpoint_events(setup_dbs):
     checkpoint.uid = gen_checkpoint_uid(checkpoint)
     metrics_db.save_checkpoint_event(checkpoint)
 
-    committed = stats_db.query_committed_events(1710000000000, 1710000000010)
+    committed = stats_db.query_committed_events(1710000000, 1710000010)
     checkpoints = stats_db.query_checkpoint_events(1710000000000, 1710000000010)
 
     assert len(committed) == 1
@@ -109,7 +159,8 @@ def test_query_committed_events_can_require_authorship_notes(setup_dbs):
 
     with_note = MetricsEventsCommitted(
         raw_id=raw_id,
-        timestamp=1710000000001,
+        timestamp=1710000001,
+        commit_date=20240309,
         repo_url="example.com/org/repo",
         author="alice <alice@example.com>",
         commit_sha="abc123",
@@ -124,7 +175,8 @@ def test_query_committed_events_can_require_authorship_notes(setup_dbs):
 
     without_note = MetricsEventsCommitted(
         raw_id=raw_id,
-        timestamp=1710000000002,
+        timestamp=1710000002,
+        commit_date=20240309,
         repo_url="example.com/org/repo",
         author="bob <bob@example.com>",
         commit_sha="def456",
@@ -153,16 +205,16 @@ def test_query_committed_events_can_require_authorship_notes(setup_dbs):
         )
 
     unfiltered = stats_db.query_committed_events(
-        1710000000000, 1710000000010, require_authorship_notes=False
+        1710000000, 1710000010, require_authorship_notes=False
     )
     filtered = stats_db.query_committed_events(
-        1710000000000, 1710000000010, require_authorship_notes=True
+        1710000000, 1710000010, require_authorship_notes=True
     )
 
     assert {row["commit_sha"] for row in unfiltered} == {"abc123", "def456"}
     assert [row["commit_sha"] for row in filtered] == ["abc123"]
     assert filtered[0]["repo_url"] == "example.com/org/repo"
-    assert filtered[0]["timestamp"] == 1710000000001
+    assert filtered[0]["timestamp"] == 1710000001
 
 
 def test_query_committed_events_authorship_notes_match_normalized_repo_url(setup_dbs):
@@ -177,7 +229,8 @@ def test_query_committed_events_authorship_notes_match_normalized_repo_url(setup
 
     committed = MetricsEventsCommitted(
         raw_id=raw_id,
-        timestamp=1710000000001,
+        timestamp=1710000001,
+        commit_date=20240309,
         repo_url="https://example.com/org/repo.git",
         author="alice <alice@example.com>",
         commit_sha="abc123",
@@ -206,7 +259,7 @@ def test_query_committed_events_authorship_notes_match_normalized_repo_url(setup
         )
 
     filtered = stats_db.query_committed_events(
-        1710000000000, 1710000000010, require_authorship_notes=True
+        1710000000, 1710000010, require_authorship_notes=True
     )
 
     assert [row["commit_sha"] for row in filtered] == ["abc123"]

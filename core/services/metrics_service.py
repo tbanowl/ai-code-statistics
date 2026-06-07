@@ -3,7 +3,7 @@
 import json
 import uuid
 from typing import List, Dict, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from core.config.logging import Logger
 from core.database import MetricsDatabase
 from core.database.models import MetricsEventsAgentUsage, MetricsEventsCheckpoint, MetricsEventsCommitted, MetricsEventsInstallHooks
@@ -54,7 +54,8 @@ class MetricsService:
     def _process_single_event(self, event: Dict, raw_id: str):
         """处理单个事件"""
         event_id = event.get("e")
-        timestamp = event.get("t", 0) * 1000
+        timestamp = self._event_timestamp_seconds(event)
+        commit_date = self._commit_date_from_seconds(timestamp)
         values = event.get("v", {})
         attrs = event.get("a", {})
 
@@ -65,6 +66,7 @@ class MetricsService:
                 raw_id =raw_id,
                 event_id = 1,
                 timestamp= timestamp,
+                commit_date=commit_date,
                 human_additions= self._get_u32(values, "0"),
                 git_diff_deleted_lines= self._get_u32(values, "1"),
                 git_diff_added_lines= self._get_u32(values, "2"),
@@ -78,6 +80,12 @@ class MetricsService:
                 total_ai_additions= self._get_u32_array(values, "7"),
                 total_ai_deletions= self._get_u32_array(values, "8"),
                 time_waiting_for_ai= self._get_u64_array(values, "9"),
+                mixed_additions_total=self._first_array_int(values, "4"),
+                ai_additions_total=self._first_array_int(values, "5"),
+                ai_accepted_total=self._first_array_int(values, "6"),
+                total_ai_additions_total=self._first_array_int(values, "7"),
+                total_ai_deletions_total=self._first_array_int(values, "8"),
+                time_waiting_for_ai_total=self._first_array_int(values, "9"),
                 git_ai_version= self._get_string(attrs, "0"),
                 repo_url= normalize_repo_url(self._get_string(attrs, "1")),
                 author= self._get_string(attrs, "2"),
@@ -157,6 +165,29 @@ class MetricsService:
 
         else:
             raise ValueError(f"未知事件类型: {event_id}")
+
+    @staticmethod
+    def _event_timestamp_seconds(event: Dict) -> int:
+        raw = event.get("t", 0)
+        if isinstance(raw, (int, float)):
+            return int(raw)
+        return 0
+
+    @staticmethod
+    def _commit_date_from_seconds(timestamp: int) -> Optional[int]:
+        if timestamp <= 0:
+            return None
+        return int(datetime.fromtimestamp(timestamp, timezone.utc).strftime("%Y%m%d"))
+
+    @staticmethod
+    def _first_array_int(arr: Dict, pos: str) -> int:
+        values = MetricsService._get_array(arr, pos)
+        if not values:
+            return 0
+        first = values[0]
+        if isinstance(first, (int, float)):
+            return int(first)
+        return 0
 
     @staticmethod
     def _get_u32(arr: Dict, pos: str) -> Optional[int]:
@@ -295,4 +326,3 @@ class MetricsService:
             )
         except Exception as e:
             self.logger.error(f"保存事件错误失败: {e}", exc_info=True)
-
