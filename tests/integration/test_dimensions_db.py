@@ -484,6 +484,50 @@ def test_find_daily_aggregation_affected_dates_uses_id_cursor(setup_dbs):
     assert result == {"commit_dates": [20240309, 20240310], "last_id": "c003"}
 
 
+def test_find_daily_aggregation_affected_dates_rejects_missing_commit_date(setup_dbs):
+    metrics_db, stats_db = setup_dbs
+    raw_id = metrics_db.save_metrics_raw(1, 3, "{}", 1710000000)
+    with session_scope(stats_db.engine) as session:
+        session.add_all(
+            [
+                MetricsEventsCommitted(
+                    id="c001",
+                    uid="uid-c001",
+                    raw_id=raw_id,
+                    timestamp=1710000000,
+                    commit_date=20240308,
+                    repo_url="example.com/org/repo",
+                    author="alice <alice@example.com>",
+                ),
+                MetricsEventsCommitted(
+                    id="c002",
+                    uid="uid-c002",
+                    raw_id=raw_id,
+                    timestamp=1710003600,
+                    commit_date=20240309,
+                    repo_url="example.com/org/repo",
+                    author="alice <alice@example.com>",
+                ),
+                MetricsEventsCommitted(
+                    id="c003",
+                    uid="uid-c003",
+                    raw_id=raw_id,
+                    timestamp=1710090000,
+                    commit_date=None,
+                    repo_url="example.com/org/repo",
+                    author="bob <bob@example.com>",
+                ),
+            ]
+        )
+
+    with pytest.raises(ValueError, match="c003"):
+        stats_db.find_daily_aggregation_affected_dates(
+            repo_url="example.com/org/repo",
+            last_aggregation_id="c001",
+            require_authorship_notes=False,
+        )
+
+
 def test_aggregate_committed_daily_stats_recomputes_full_dates(setup_dbs):
     metrics_db, stats_db = setup_dbs
     raw_id = metrics_db.save_metrics_raw(1, 3, "{}", 1710000000)

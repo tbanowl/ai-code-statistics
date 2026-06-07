@@ -635,7 +635,23 @@ class StatsDatabase(BaseDatabase):
                 )
             rows = query.order_by(MetricsEventsCommitted.id.asc()).all()
 
-        commit_dates = sorted({int(row.commit_date) for row in rows if row.commit_date})
+        commit_dates = set()
+        for row in rows:
+            try:
+                commit_date = int(row.commit_date)
+            except (TypeError, ValueError):
+                raise ValueError(
+                    "Committed event has invalid commit_date for daily aggregation: "
+                    f"repo_url={normalized_repo_url}, committed_id={row.id}"
+                ) from None
+            if commit_date <= 0:
+                raise ValueError(
+                    "Committed event has invalid commit_date for daily aggregation: "
+                    f"repo_url={normalized_repo_url}, committed_id={row.id}"
+                )
+            commit_dates.add(commit_date)
+
+        commit_dates = sorted(commit_dates)
         last_id = rows[-1].id if rows else None
         return {"commit_dates": commit_dates, "last_id": last_id}
 
