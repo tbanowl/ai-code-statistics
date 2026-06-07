@@ -39,6 +39,40 @@ def test_metrics_committed_supports_json_fields():
     assert data["ai_additions"]["model-a"] == 50
 
 
+def test_metrics_committed_commit_date_and_total_columns():
+    columns = {c.name for c in MetricsEventsCommitted.__table__.columns}
+    expected = {
+        "commit_date",
+        "mixed_additions_total",
+        "ai_additions_total",
+        "ai_accepted_total",
+        "total_ai_additions_total",
+        "total_ai_deletions_total",
+        "time_waiting_for_ai_total",
+    }
+    assert expected.issubset(columns), f"Missing columns: {expected - columns}"
+
+    row = MetricsEventsCommitted(
+        raw_id="raw-1",
+        timestamp=1710000000,
+        commit_date=20240309,
+        mixed_additions_total=1,
+        ai_additions_total=2,
+        ai_accepted_total=3,
+        total_ai_additions_total=4,
+        total_ai_deletions_total=5,
+        time_waiting_for_ai_total=6,
+    )
+    data = row.to_dict()
+    assert data["commit_date"] == 20240309
+    assert data["mixed_additions_total"] == 1
+    assert data["ai_additions_total"] == 2
+    assert data["ai_accepted_total"] == 3
+    assert data["total_ai_additions_total"] == 4
+    assert data["total_ai_deletions_total"] == 5
+    assert data["time_waiting_for_ai_total"] == 6
+
+
 def test_metrics_checkpoint_fields():
     row = MetricsEventsCheckpoint(
         raw_id="raw-1",

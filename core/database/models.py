@@ -77,6 +77,7 @@ class MetricsEventsCommitted(ModelBase):
     )
     event_id: Mapped[int] = mapped_column(Integer, default=1)
     timestamp: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    commit_date: Mapped[int] = mapped_column(BigInteger, nullable=True, index=True)
 
     # 标量值
     human_additions: Mapped[int] = mapped_column(Integer, nullable=True)
@@ -94,6 +95,19 @@ class MetricsEventsCommitted(ModelBase):
     total_ai_additions: Mapped[dict] = mapped_column(JSON, nullable=True)
     total_ai_deletions: Mapped[dict] = mapped_column(JSON, nullable=True)
     time_waiting_for_ai: Mapped[dict] = mapped_column(JSON, nullable=True)
+
+    mixed_additions_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    ai_additions_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    ai_accepted_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_ai_additions_total: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    total_ai_deletions_total: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    time_waiting_for_ai_total: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0
+    )
 
     # 事件属性
     git_ai_version: Mapped[str] = mapped_column(String, nullable=True)
@@ -296,8 +310,8 @@ class StatsRepository(ModelBase):
     ssh_key_id: Mapped[str] = mapped_column(String(20), nullable=True)
     # 最近一次 Git Blame 统计成功的提交 SHA
     last_blame_commit_sha: Mapped[str] = mapped_column(String(40), nullable=True)
-    # 最近一次每日聚合成功统计到的提交 SHA
-    last_daily_aggregation_commit_sha: Mapped[str] = mapped_column(String(40), nullable=True)
+    # 最近一次每日聚合成功统计到的事件 ID
+    last_daily_aggregation_id: Mapped[str] = mapped_column(String(20), nullable=True)
     last_stat_date: Mapped[int] = mapped_column(BigInteger, nullable=True)
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
     updated_at: Mapped[int] = mapped_column(
@@ -399,11 +413,15 @@ class StatsDailyStat(ModelBase):
     contributor_name: Mapped[str] = mapped_column(String, nullable=True)
     contributor_email: Mapped[str] = mapped_column(String, nullable=True, index=True)
 
-    ai_lines: Mapped[int] = mapped_column(Integer, default=0)
-    ai_total_lines: Mapped[int] = mapped_column(Integer, default=0)
-    ai_accepted_lines: Mapped[int] = mapped_column(Integer, default=0)
-    human_lines: Mapped[int] = mapped_column(Integer, default=0)
-    total_lines: Mapped[int] = mapped_column(Integer, default=0)
+    human_additions: Mapped[int] = mapped_column(Integer, default=0)
+    unknown_additions: Mapped[int] = mapped_column(Integer, default=0)
+    git_diff_deleted_lines: Mapped[int] = mapped_column(Integer, default=0)
+    git_diff_added_lines: Mapped[int] = mapped_column(Integer, default=0)
+    mixed_additions: Mapped[int] = mapped_column(Integer, default=0)
+    ai_additions: Mapped[int] = mapped_column(Integer, default=0)
+    ai_accepted: Mapped[int] = mapped_column(Integer, default=0)
+    total_ai_additions: Mapped[int] = mapped_column(Integer, default=0)
+    total_ai_deletions: Mapped[int] = mapped_column(Integer, default=0)
 
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
     updated_at: Mapped[int] = mapped_column(
@@ -489,6 +507,7 @@ class AuthorshipNotes(ModelBase):
     author_email: Mapped[str] = mapped_column(Text, nullable=False)
     note_content: Mapped[str] = mapped_column(Text, nullable=False)
     commit_time: Mapped[int] = mapped_column(BigInteger, nullable=True, index=True)
+    commit_date: Mapped[int] = mapped_column(BigInteger, nullable=True, index=True)
     content_hash: Mapped[str] = mapped_column(String(71), nullable=False)
     change_seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
