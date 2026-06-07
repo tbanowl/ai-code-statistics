@@ -156,11 +156,23 @@ class StatsDatabase(BaseDatabase):
                         daily.updated_at = now_ts()
                         continue
 
-                    target.ai_lines += int(daily.ai_lines or 0)
-                    target.ai_total_lines += int(daily.ai_total_lines or 0)
-                    target.ai_accepted_lines += int(daily.ai_accepted_lines or 0)
-                    target.human_lines += int(daily.human_lines or 0)
-                    target.total_lines += int(daily.total_lines or 0)
+                    for field in (
+                        "human_additions",
+                        "unknown_additions",
+                        "git_diff_deleted_lines",
+                        "git_diff_added_lines",
+                        "mixed_additions",
+                        "ai_additions",
+                        "ai_accepted",
+                        "total_ai_additions",
+                        "total_ai_deletions",
+                    ):
+                        setattr(
+                            target,
+                            field,
+                            int(getattr(target, field) or 0)
+                            + int(getattr(daily, field) or 0),
+                        )
                     target.updated_at = now_ts()
                     session.delete(daily)
 
@@ -589,11 +601,11 @@ class StatsDatabase(BaseDatabase):
             session.flush()
             return record.id
 
-    def update_repository_last_daily_aggregation_commit_sha(
-        self, repo_id: str, commit_sha: str
+    def update_repository_last_daily_aggregation_id(
+        self, repo_id: str, committed_id: str
     ) -> bool:
-        normalized_sha = (commit_sha or "").strip()
-        if not normalized_sha:
+        normalized_id = (committed_id or "").strip()
+        if not normalized_id:
             return False
 
         with session_scope(self.engine) as session:
@@ -605,7 +617,7 @@ class StatsDatabase(BaseDatabase):
             if row is None:
                 return False
 
-            row.last_daily_aggregation_commit_sha = normalized_sha
+            row.last_daily_aggregation_id = normalized_id
             row.updated_at = now_ts()
             session.flush()
             return True
@@ -717,11 +729,15 @@ class StatsDatabase(BaseDatabase):
             row.repo_name = stats.get("repo_name", "")
             row.contributor_name = stats.get("contributor_name", contributor_name)
             row.contributor_email = stats.get("contributor_email", contributor_email)
-            row.ai_lines = int(stats.get("ai_lines", 0))
-            row.ai_total_lines = int(stats.get("ai_total_lines", row.ai_lines))
-            row.ai_accepted_lines = int(stats.get("ai_accepted_lines", 0))
-            row.human_lines = int(stats.get("human_lines", 0))
-            row.total_lines = int(stats.get("total_lines", 0))
+            row.human_additions = int(stats.get("human_additions", 0))
+            row.unknown_additions = int(stats.get("unknown_additions", 0))
+            row.git_diff_deleted_lines = int(stats.get("git_diff_deleted_lines", 0))
+            row.git_diff_added_lines = int(stats.get("git_diff_added_lines", 0))
+            row.mixed_additions = int(stats.get("mixed_additions", 0))
+            row.ai_additions = int(stats.get("ai_additions", 0))
+            row.ai_accepted = int(stats.get("ai_accepted", 0))
+            row.total_ai_additions = int(stats.get("total_ai_additions", 0))
+            row.total_ai_deletions = int(stats.get("total_ai_deletions", 0))
             row.updated_at = now_ts()
 
             session.flush()

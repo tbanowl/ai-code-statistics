@@ -44,43 +44,46 @@ def test_init_db_creates_engine(stats_db):
 
 
 def test_upsert_and_query_daily_stats(stats_db):
-    repo_id = stats_db.get_or_create_repository("owner/repo")
-
+    repo_id = stats_db.get_or_create_repository("https://example.com/org/repo.git")
     stats_db.upsert_daily_stat(
-        1710000000000,
+        20260605,
         repo_id,
         "alice",
         "alice@example.com",
         {
-            "repo_name": "owner/repo",
+            "repo_name": "org/repo",
             "contributor_name": "alice",
             "contributor_email": "alice@example.com",
-            "ai_lines": 20,
-            "ai_total_lines": 24,
-            "ai_accepted_lines": 80,
-            "human_lines": 40,
-            "total_lines": 120,
+            "human_additions": 40,
+            "unknown_additions": 1,
+            "git_diff_deleted_lines": 3,
+            "git_diff_added_lines": 120,
+            "mixed_additions": 2,
+            "ai_additions": 20,
+            "ai_accepted": 18,
+            "total_ai_additions": 24,
+            "total_ai_deletions": 5,
         },
     )
 
     rows = stats_db.query_daily_stats(
-        1709999999000,
-        1710000001000,
-        repo_id,
-        "alice@example.com",
+        start_date=20260601,
+        end_date=20260630,
+        repo_id=repo_id,
+        contributor_email="alice@example.com",
         limit=10,
         offset=0,
     )
-    assert len(rows) == 1
-    assert rows[0]["ai_lines"] == 20
-    assert rows[0]["ai_total_lines"] == 24
-    assert rows[0]["ai_accepted_lines"] == 80
-    assert rows[0]["human_lines"] == 40
-    assert rows[0]["total_lines"] == 120
-    assert rows[0]["contributor_email"] == "alice@example.com"
-    assert "contributor_id" not in rows[0]
-    assert "ai_percentage" not in rows[0]
-    assert "git_ai_version" not in rows[0]
+
+    assert rows[0]["human_additions"] == 40
+    assert rows[0]["unknown_additions"] == 1
+    assert rows[0]["git_diff_deleted_lines"] == 3
+    assert rows[0]["git_diff_added_lines"] == 120
+    assert rows[0]["mixed_additions"] == 2
+    assert rows[0]["ai_additions"] == 20
+    assert rows[0]["ai_accepted"] == 18
+    assert rows[0]["total_ai_additions"] == 24
+    assert rows[0]["total_ai_deletions"] == 5
 
 
 def test_list_repositories_and_contributors(stats_db):

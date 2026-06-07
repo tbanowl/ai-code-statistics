@@ -403,24 +403,15 @@ def test_query_committed_events_authorship_notes_match_normalized_repo_url(setup
     assert filtered[0]["repo_url"] == "example.com/org/repo"
 
 
-def test_update_repository_last_daily_aggregation_commit_sha(setup_dbs):
+def test_update_repository_last_daily_aggregation_id(setup_dbs):
     _, stats_db = setup_dbs
     repo_id = stats_db.get_or_create_repository("https://example.com/org/repo.git")
 
-    assert (
-        stats_db.update_repository_last_daily_aggregation_commit_sha(
-            repo_id, "abc123def456"
-        )
-        is True
-    )
+    assert stats_db.update_repository_last_daily_aggregation_id(repo_id, "czabc123") is True
 
     with session_scope(stats_db.engine) as session:
-        repo = (
-            session.query(StatsRepository)
-            .filter(StatsRepository.id == repo_id)
-            .one()
-        )
-        assert repo.last_daily_aggregation_commit_sha == "abc123def456"
+        repo = session.query(StatsRepository).filter(StatsRepository.id == repo_id).one()
+        assert repo.last_daily_aggregation_id == "czabc123"
 
 
 def test_repository_contributor_and_daily_stats_flow(setup_dbs):
