@@ -31,6 +31,12 @@ class TestNormalizeRepoUrl:
     def test_already_normalized(self):
         assert normalize_repo_url("org/repo") == "org/repo"
 
+    def test_mixed_case_url_lowercases(self):
+        assert normalize_repo_url("HTTPS://GitHub.COM/Org/Repo.GIT") == "github.com/org/repo"
+
+    def test_mixed_case_git_at_url_lowercases(self):
+        assert normalize_repo_url("GIT@GitHub.COM:Org/Repo.GIT") == "github.com/org/repo"
+
     def test_none_input(self):
         assert normalize_repo_url(None) == UNKNOWN_REPO
 

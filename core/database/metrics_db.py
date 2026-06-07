@@ -19,6 +19,7 @@ from .models import (
     MetricsEventErrors,
     CasObjects,
 )
+from core.utils.repo_url import normalize_repo_url
 
 
 class MetricsDatabase(BaseDatabase):
@@ -106,6 +107,7 @@ class MetricsDatabase(BaseDatabase):
 
     def upsert_committed_event(self, record: MetricsEventsCommitted) -> str:
         """保存 Committed 事件"""
+        record.repo_url = normalize_repo_url(record.repo_url)
         with session_scope(self.engine) as session:
             exsisted = session.query(MetricsEventsCommitted)\
                 .filter(MetricsEventsCommitted.uid == record.uid)\
@@ -142,9 +144,10 @@ class MetricsDatabase(BaseDatabase):
 
     def get_committed_events_by_repo(self, repo_url: str) -> List[Dict]:
         """按仓库查询 Committed 事件"""
+        normalized_repo_url = normalize_repo_url(repo_url)
         with session_scope(self.engine) as session:
             results = session.query(MetricsEventsCommitted)\
-                .filter(MetricsEventsCommitted.repo_url == repo_url)\
+                .filter(MetricsEventsCommitted.repo_url == normalized_repo_url)\
                 .all()
             return [r.to_dict() for r in results]
 
@@ -160,6 +163,7 @@ class MetricsDatabase(BaseDatabase):
 
     def save_checkpoint_event(self, event: MetricsEventsCheckpoint) -> str:
         """保存 Checkpoint 事件"""
+        event.repo_url = normalize_repo_url(event.repo_url)
         with session_scope(self.engine) as session:
             record = event
             exsisted = session.query(MetricsEventsCheckpoint)\
@@ -188,6 +192,7 @@ class MetricsDatabase(BaseDatabase):
 
     def save_agent_usage_event(self, event: MetricsEventsAgentUsage) -> str:
         """保存 AgentUsage 事件"""
+        event.repo_url = normalize_repo_url(event.repo_url)
         with session_scope(self.engine) as session:
             record = event
             exsisted = session.query(MetricsEventsAgentUsage)\
@@ -245,7 +250,7 @@ class MetricsDatabase(BaseDatabase):
             from sqlalchemy import distinct
             results = session.query(distinct(MetricsEventsCommitted.repo_url))\
                 .filter(MetricsEventsCommitted.repo_url.isnot(None)).all()
-            return [r[0] for r in results if r[0]]
+            return sorted({normalize_repo_url(r[0]) for r in results if r[0]})
 
     def get_all_authors(self) -> List[str]:
         """获取所有作者列表"""
@@ -295,4 +300,3 @@ class MetricsDatabase(BaseDatabase):
                 .order_by(MetricsEventErrors.event_index)\
                 .all()
             return [r.to_dict() for r in results]
-

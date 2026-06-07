@@ -8,7 +8,7 @@ from core.database import StatsDatabase
 from core.utils.repo_url import normalize_repo_url
 
 
-@scheduled(cron="0 0 * * *", job_id="daily_aggregation", name="每日统计聚合")
+@scheduled(cron="0/1 * * * *", job_id="daily_aggregation", name="每日统计聚合")
 class DailyAggregationTask(BaseTask):
     """每日统计聚合任务 - 从 Metrics 事件表聚合生成每日统计数据"""
 
@@ -133,6 +133,8 @@ class DailyAggregationTask(BaseTask):
     @staticmethod
     def _event_stat_date(event: Dict) -> int:
         raw_timestamp = event.get("timestamp")
+        if raw_timestamp is None:
+            return 0
         try:
             timestamp = int(raw_timestamp)
         except (TypeError, ValueError) as exc:

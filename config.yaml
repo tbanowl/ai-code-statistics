@@ -23,7 +23,7 @@ scheduler:
   jobs:
     daily_aggregation:
       enabled: true
-      cron: "*/10 * * * *"
+      cron: "*/1 * * * *"
       require_authorship_notes: false
     # Metrics 事件处理任务
     metrics_event_processor:
@@ -32,9 +32,8 @@ scheduler:
       batch_size: 100              # 每批处理的记录数
       timeout_minutes: 10          # 任务超时阈值（分钟）
     # Git Blame 统计任务
-    # git_blame_stats:
-    #   enabled: true
-    #   cron: "0/1 * * * *"
+    git_blame_stats:
+      enabled: false
       # cron: "0 */1 * * *"
     # Codeup Merge AI 归属重算任务
     codeup_merge_authorship:

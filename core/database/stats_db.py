@@ -309,16 +309,16 @@ class StatsDatabase(BaseDatabase):
 
         if len(parts) >= 5:
             level_parts = parts[:5]
-            result["name_level1"] = level_parts[-1]
-            result["name_level2"] = level_parts[-2]
-            result["name_level3"] = level_parts[-3]
-            result["name_level4"] = level_parts[-4]
-            result["name_level5"] = level_parts[-5]
+            result["name_level1"] = level_parts[-1].upper()
+            result["name_level2"] = level_parts[-2].upper()
+            result["name_level3"] = level_parts[-3].upper()
+            result["name_level4"] = level_parts[-4].upper()
+            result["name_level5"] = level_parts[-5].upper()
             result["repo_short_name"] = "/".join(parts[5:]) or None
             return result
 
         for index, part in enumerate(parts[:-1], start=1):
-            result[f"name_level{index}"] = part
+            result[f"name_level{index}"] = part.upper()
         result["repo_short_name"] = parts[-1]
         return result
 
@@ -568,10 +568,12 @@ class StatsDatabase(BaseDatabase):
         with session_scope(self.engine) as session:
             row = (
                 session.query(StatsRepository)
-                .filter(StatsRepository.repo_path == normalized_path)
+                .filter(func.lower(StatsRepository.repo_path) == normalized_path)
                 .first()
             )
             if row:
+                if row.repo_path != normalized_path:
+                    row.repo_path = normalized_path
                 current_name = (row.repo_name or "").strip()
                 if not current_name or current_name == row.repo_path:
                     row.repo_name = extracted_name

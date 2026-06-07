@@ -102,13 +102,13 @@ def test_get_or_create_repository_extracts_deep_path_levels(stats_db):
 
     repo = stats_db.get_repository_by_id(repo_id)
 
-    assert repo["repo_path"] == "github.com/L5/L4/L3/L2/L1/R1/R2"
+    assert repo["repo_path"] == "github.com/l5/l4/l3/l2/l1/r1/r2"
     assert repo["name_level1"] == "L1"
     assert repo["name_level2"] == "L2"
     assert repo["name_level3"] == "L3"
     assert repo["name_level4"] == "L4"
     assert repo["name_level5"] == "L5"
-    assert repo["repo_short_name"] == "R1/R2"
+    assert repo["repo_short_name"] == "r1/r2"
 
 
 def test_get_or_create_repository_extracts_single_segment_short_name_after_five_levels(stats_db):
@@ -121,7 +121,7 @@ def test_get_or_create_repository_extracts_single_segment_short_name_after_five_
     assert repo["name_level3"] == "L3"
     assert repo["name_level4"] == "L4"
     assert repo["name_level5"] == "L5"
-    assert repo["repo_short_name"] == "R1"
+    assert repo["repo_short_name"] == "r1"
 
 
 def test_get_or_create_repository_extracts_exactly_five_levels(stats_db):
@@ -143,8 +143,8 @@ def test_get_or_create_repository_extracts_short_path_levels(stats_db):
     repo = stats_db.get_repository_by_id(repo_id)
 
     assert repo["repo_path"] == "github.com/org/team/repo"
-    assert repo["name_level1"] == "org"
-    assert repo["name_level2"] == "team"
+    assert repo["name_level1"] == "ORG"
+    assert repo["name_level2"] == "TEAM"
     assert repo["name_level3"] is None
     assert repo["name_level4"] is None
     assert repo["name_level5"] is None
@@ -171,7 +171,7 @@ def test_get_or_create_repository_backfills_existing_repository_name_parts(stats
     assert repo["name_level3"] == "L3"
     assert repo["name_level4"] == "L4"
     assert repo["name_level5"] == "L5"
-    assert repo["repo_short_name"] == "R1/R2"
+    assert repo["repo_short_name"] == "r1/r2"
 
 
 def test_ensure_repository_branch_upserts_branch(stats_db):

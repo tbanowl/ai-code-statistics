@@ -10,6 +10,7 @@ from typing import Any
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
+from core.utils.repo_url import normalize_repo_url
 from .base import BaseDatabase, session_scope
 from .models import CodeupMergeAuthorshipTask, gen_xid
 
@@ -34,6 +35,7 @@ class CodeupMergeAuthorshipDatabase(BaseDatabase):
         skipped_reason: str | None = None,
     ) -> tuple[CodeupMergeAuthorshipTask, bool]:
         """创建或幂等更新 Codeup 合并重算任务。"""
+        repo_url = normalize_repo_url(repo_url)
         source_commit_shas_json = json.dumps(
             source_commit_shas, ensure_ascii=False, sort_keys=True
         )
@@ -117,6 +119,7 @@ class CodeupMergeAuthorshipDatabase(BaseDatabase):
         merge_type: str | None = None,
         skipped_reason: str | None = None,
     ) -> CodeupMergeAuthorshipTask:
+        repo_url = normalize_repo_url(repo_url)
         with session_scope(self.engine) as session:
             stmt = select(CodeupMergeAuthorshipTask).where(
                 CodeupMergeAuthorshipTask.repo_url == repo_url,
@@ -192,6 +195,7 @@ class CodeupMergeAuthorshipDatabase(BaseDatabase):
         merge_type: str | None = None,
         skipped_reason: str | None = None,
     ) -> CodeupMergeAuthorshipTask:
+        repo_url = normalize_repo_url(repo_url)
         with session_scope(self.engine) as session:
             stmt = select(CodeupMergeAuthorshipTask).where(
                 CodeupMergeAuthorshipTask.repo_url == repo_url,

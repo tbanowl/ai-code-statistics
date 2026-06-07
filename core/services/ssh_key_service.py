@@ -9,6 +9,7 @@ from base64 import b64encode, b64decode
 from core.config.logging import Logger
 from core.database.base import BaseDatabase, session_scope
 from core.database.models import StatsRepository, gen_xid
+from core.utils.repo_url import normalize_repo_url
 
 
 class SshKeyService:
@@ -328,11 +329,11 @@ class SshKeyService:
         Returns:
             SSH Key ID 或 None
         """
-        
+        normalized_repo_url = normalize_repo_url(repo_url)
         with session_scope(self.database.engine) as session:
             repo = (
                 session.query(StatsRepository)
-                .filter(StatsRepository.repo_path == repo_url)
+                .filter(StatsRepository.repo_path == normalized_repo_url)
                 .filter(StatsRepository.repo_stats_flag == 1)
                 .one_or_none()
             )

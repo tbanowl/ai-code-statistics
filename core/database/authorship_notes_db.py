@@ -6,6 +6,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.engine import Engine
 
 from core.config import loader
+from core.utils.repo_url import normalize_repo_url
 from .base import session_scope, BaseDatabase
 from .models import AuthorshipNotes, AuthorshipNotesSeq, gen_xid
 
@@ -78,6 +79,7 @@ class AuthorshipNotesDatabase(BaseDatabase):
         Returns:
             AuthorshipNotes: 创建或更新后的 note
         """
+        repo_url = normalize_repo_url(repo_url)
         content_hash = compute_note_content_hash(content)
 
         with session_scope(self.engine) as session:
@@ -124,6 +126,7 @@ class AuthorshipNotesDatabase(BaseDatabase):
         Returns:
             AuthorshipNotes 或 None
         """
+        repo_url = normalize_repo_url(repo_url)
         with session_scope(self.engine) as session:
             stmt = select(AuthorshipNotes).where(
                 AuthorshipNotes.repo_url == repo_url,
@@ -144,6 +147,7 @@ class AuthorshipNotesDatabase(BaseDatabase):
         if not commit_shas:
             return {"notes": [], "missing": []}
 
+        repo_url = normalize_repo_url(repo_url)
         with session_scope(self.engine) as session:
             stmt = select(AuthorshipNotes).where(
                 AuthorshipNotes.repo_url == repo_url,
@@ -178,6 +182,7 @@ class AuthorshipNotesDatabase(BaseDatabase):
         created = 0
         updated = 0
         unchanged = 0
+        repo_url = normalize_repo_url(repo_url)
 
         with session_scope(self.engine) as session:
             for note_data in notes_data:
@@ -239,6 +244,7 @@ class AuthorshipNotesDatabase(BaseDatabase):
         limit: int | None = None,
     ) -> Dict[str, Any]:
         page_limit = normalize_list_limit(limit)
+        repo_url = normalize_repo_url(repo_url)
 
         with session_scope(self.engine) as session:
             stmt = select(AuthorshipNotes).where(AuthorshipNotes.repo_url == repo_url)
@@ -283,6 +289,7 @@ class AuthorshipNotesDatabase(BaseDatabase):
         Returns:
             list: 匹配的提交 SHA 列表
         """
+        repo_url = normalize_repo_url(repo_url)
         with session_scope(self.engine) as session:
             stmt = select(AuthorshipNotes.commit_sha).where(
                 AuthorshipNotes.repo_url == repo_url,

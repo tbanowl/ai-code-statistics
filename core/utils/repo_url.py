@@ -18,11 +18,13 @@ def normalize_repo_url(raw: str | None) -> str:
     value = (raw or "").strip()
     if not value:
         return UNKNOWN_REPO
+    if value == UNKNOWN_REPO:
+        return UNKNOWN_REPO
 
     # 去除协议前缀
     had_protocol = False
     for prefix in ("https://", "http://", "ssh://", "git://", "file://"):
-        if value.startswith(prefix):
+        if value.lower().startswith(prefix):
             value = value[len(prefix):]
             had_protocol = True
             break
@@ -30,7 +32,7 @@ def normalize_repo_url(raw: str | None) -> str:
     # 去除 git@ 前缀
     # 无协议时（git@host:path.git），将第一个 : 替换为 /
     # 有协议时（ssh://git@host:port/path），冒号是端口号，不替换
-    if value.startswith("git@"):
+    if value.lower().startswith("git@"):
         value = value[4:]
         if not had_protocol:
             colon_pos = value.find(":")
@@ -41,14 +43,14 @@ def normalize_repo_url(raw: str | None) -> str:
     value = value.strip("/")
 
     # 去除末尾 .git
-    if value.endswith(".git"):
+    if value.lower().endswith(".git"):
         value = value[:-4]
 
     # 再次去除首尾斜杠（处理 repo.git/ → strip → repo.git → remove .git → repo 情况不需要，
     # 但处理 host/org/repo.git/ 这种 trailing slash + .git 场景）
     value = value.strip("/")
 
-    return value or UNKNOWN_REPO
+    return value.lower() or UNKNOWN_REPO
 
 
 def restore_repo_url(normalized: str, protocol: str = "ssh") -> str:
