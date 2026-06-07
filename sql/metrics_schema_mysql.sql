@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS metrics_events_committed (
     raw_id VARCHAR(20) COMMENT '关联的原始批次 ID',
     event_id INT NOT NULL DEFAULT 1 COMMENT '事件类型 ID (1=Committed)',
     timestamp BIGINT NOT NULL COMMENT '事件时间戳（毫秒）',
+    commit_date BIGINT COMMENT '提交日期 yyyyMMdd',
     human_additions INT COMMENT '人类手动添加代码行数',
     git_diff_deleted_lines INT COMMENT 'Git diff 删除行数',
     git_diff_added_lines INT COMMENT 'Git diff 新增行数',
@@ -31,6 +32,12 @@ CREATE TABLE IF NOT EXISTS metrics_events_committed (
     total_ai_additions JSON COMMENT '总 AI 新增代码行数 JSON',
     total_ai_deletions JSON COMMENT '总 AI 删除代码行数 JSON',
     time_waiting_for_ai JSON COMMENT '等待 AI 响应时长 JSON',
+    mixed_additions_total INT DEFAULT 0 COMMENT '混合生成代码行数首值',
+    ai_additions_total INT DEFAULT 0 COMMENT 'AI 生成代码行数首值',
+    ai_accepted_total INT DEFAULT 0 COMMENT '被接受 AI 代码行数首值',
+    total_ai_additions_total INT DEFAULT 0 COMMENT '总 AI 新增代码行数首值',
+    total_ai_deletions_total INT DEFAULT 0 COMMENT '总 AI 删除代码行数首值',
+    time_waiting_for_ai_total BIGINT DEFAULT 0 COMMENT '等待 AI 响应时长首值',
     git_ai_version VARCHAR(20) COMMENT 'Git-AI 客户端版本号',
     repo_url VARCHAR(400) COMMENT '仓库 URL',
     author VARCHAR(100) COMMENT '提交作者',
@@ -46,7 +53,9 @@ CREATE TABLE IF NOT EXISTS metrics_events_committed (
     INDEX idx_committed_timestamp (timestamp),
     INDEX idx_committed_repo_url (repo_url),
     INDEX idx_committed_author (author),
-    INDEX idx_committed_commit_sha (commit_sha)
+    INDEX idx_committed_commit_sha (commit_sha),
+    INDEX idx_committed_repo_id (repo_url, id),
+    INDEX idx_committed_repo_commit_date (repo_url, commit_date)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='Committed 事件表';
 
 -- Checkpoint 事件表
@@ -172,7 +181,7 @@ CREATE TABLE IF NOT EXISTS stats_repositories (
     repo_stats_flag INT DEFAULT 1 COMMENT '是否启用归因统计（0/1）',
     ssh_key_id VARCHAR(20) COMMENT '关联的 SSH Key ID',
     last_blame_commit_sha VARCHAR(40) COMMENT '最近一次 Git Blame 统计成功的提交 SHA',
-    last_daily_aggregation_commit_sha VARCHAR(40) COMMENT '最近一次每日聚合成功统计到的提交 SHA',
+    last_daily_aggregation_id VARCHAR(20) COMMENT '最近一次每日聚合成功统计到的 committed 事件 ID',
     last_stat_date BIGINT COMMENT '最后统计日期，格式 yyyyMMdd',
     created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
     updated_at BIGINT NOT NULL COMMENT '更新时间戳（毫秒）',
@@ -235,11 +244,15 @@ CREATE TABLE IF NOT EXISTS stats_commit_daily (
     repo_name VARCHAR(100) COMMENT '仓库名称冗余字段',
     contributor_name VARCHAR(100) COMMENT '贡献者名称冗余字段',
     contributor_email VARCHAR(255) COMMENT '贡献者邮箱',
-    ai_lines INT DEFAULT 0 COMMENT 'AI 生成源代码行数',
-    ai_total_lines INT DEFAULT 0 COMMENT 'AI 生成总行数',
-    ai_accepted_lines INT DEFAULT 0 COMMENT '被接受的 AI 代码行数',
-    human_lines INT DEFAULT 0 COMMENT '人类代码行数',
-    total_lines INT DEFAULT 0 COMMENT 'Git 提交新增总行数',
+    human_additions INT DEFAULT 0 COMMENT '人类手动添加代码行数',
+    unknown_additions INT DEFAULT 0 COMMENT '未知来源新增代码行数',
+    git_diff_deleted_lines INT DEFAULT 0 COMMENT 'Git diff 删除行数',
+    git_diff_added_lines INT DEFAULT 0 COMMENT 'Git diff 新增行数',
+    mixed_additions INT DEFAULT 0 COMMENT '混合生成代码行数',
+    ai_additions INT DEFAULT 0 COMMENT 'AI 生成代码行数',
+    ai_accepted INT DEFAULT 0 COMMENT '被接受 AI 代码行数',
+    total_ai_additions INT DEFAULT 0 COMMENT '总 AI 新增代码行数',
+    total_ai_deletions INT DEFAULT 0 COMMENT '总 AI 删除代码行数',
     created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
     updated_at BIGINT NOT NULL COMMENT '更新时间戳（毫秒）',
     INDEX idx_stats_commit_daily_date (stat_date),
@@ -263,6 +276,7 @@ CREATE TABLE IF NOT EXISTS authorship_notes (
     branch VARCHAR(100) NOT NULL COMMENT '分支名称',
     commit_sha VARCHAR(40) NOT NULL COMMENT '提交 SHA',
     commit_time BIGINT NOT NULL DEFAULT 0 COMMENT '提交时间戳（秒）',
+    commit_date BIGINT COMMENT '提交日期 yyyyMMdd',
     note_blob_oid VARCHAR(40) COMMENT 'Note Blob OID',
     author_name VARCHAR(100) NOT NULL COMMENT '作者名称',
     author_email VARCHAR(100) NOT NULL COMMENT '作者邮箱',
@@ -274,7 +288,8 @@ CREATE TABLE IF NOT EXISTS authorship_notes (
     UNIQUE KEY uk_authorship_notes_repo_commit (repo_url, commit_sha),
     INDEX idx_authorship_notes_repo_url (repo_url),
     INDEX idx_authorship_notes_repo_commit (repo_url, commit_sha),
-    INDEX idx_authorship_notes_repo_change_seq (repo_url, change_seq)
+    INDEX idx_authorship_notes_repo_change_seq (repo_url, change_seq),
+    INDEX idx_authorship_notes_repo_commit_date (repo_url, commit_date)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='作者注释表';
 
 CREATE TABLE IF NOT EXISTS authorship_notes_seq (
