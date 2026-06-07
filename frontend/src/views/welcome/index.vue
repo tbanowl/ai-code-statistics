@@ -86,10 +86,10 @@ const trendLabels = computed(() =>
   )
 );
 const aiAcceptedTrend = computed(() =>
-  (statsData.value?.items ?? []).map(item => toNumber(item.ai_accepted_lines))
+  (statsData.value?.items ?? []).map(item => toNumber(item.ai_accepted))
 );
 const humanTrend = computed(() =>
-  (statsData.value?.items ?? []).map(item => toNumber(item.human_lines))
+  (statsData.value?.items ?? []).map(item => toNumber(item.human_additions))
 );
 const hasTrendData = computed(() => trendLabels.value.length > 0);
 
@@ -367,8 +367,8 @@ function buildRankings(
       humanLines: 0
     };
 
-    current.aiAcceptedLines += toNumber(row.ai_accepted_lines);
-    current.humanLines += toNumber(row.human_lines);
+    current.aiAcceptedLines += toNumber(row.ai_accepted);
+    current.humanLines += toNumber(row.human_additions);
 
     grouped.set(name, current);
   });
@@ -698,28 +698,36 @@ function getErrorMessage(error: unknown, fallback: string) {
           label="提交邮箱"
           min-width="190"
         />
-        <el-table-column prop="total_lines" label="提交总行数" min-width="120">
+        <el-table-column
+          prop="git_diff_added_lines"
+          label="提交总行数"
+          min-width="120"
+        >
           <template #default="{ row }">
-            {{ formatNumber(row.total_lines) }}
+            {{ formatNumber(row.git_diff_added_lines) }}
           </template>
         </el-table-column>
-        <el-table-column prop="ai_lines" label="AI 代码行数" min-width="120">
+        <el-table-column prop="ai_additions" label="AI 代码行数" min-width="120">
           <template #default="{ row }">
-            {{ formatNumber(row.ai_lines) }}
+            {{ formatNumber(row.ai_additions) }}
           </template>
         </el-table-column>
         <el-table-column
-          prop="ai_accepted_lines"
+          prop="ai_accepted"
           label="AI 接受行数"
           min-width="130"
         >
           <template #default="{ row }">
-            {{ formatNumber(row.ai_accepted_lines) }}
+            {{ formatNumber(row.ai_accepted) }}
           </template>
         </el-table-column>
-        <el-table-column prop="human_lines" label="人工行数" min-width="120">
+        <el-table-column
+          prop="human_additions"
+          label="人工行数"
+          min-width="120"
+        >
           <template #default="{ row }">
-            {{ formatNumber(row.human_lines) }}
+            {{ formatNumber(row.human_additions) }}
           </template>
         </el-table-column>
       </el-table>

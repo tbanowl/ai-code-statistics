@@ -16,10 +16,15 @@ export type PaginationData = NonNullable<ApiResponse<unknown>["pagination"]>;
 // 统计项类型
 export type StatItem = {
   stat_date: number;
-  ai_lines: number;
-  ai_accepted_lines: number;
-  human_lines: number;
-  total_lines: number;
+  human_additions: number;
+  unknown_additions: number;
+  git_diff_deleted_lines: number;
+  git_diff_added_lines: number;
+  mixed_additions: number;
+  ai_additions: number;
+  ai_accepted: number;
+  total_ai_additions: number;
+  total_ai_deletions: number;
 };
 
 // 统计汇总类型
@@ -74,11 +79,15 @@ export type DailyStatItem = {
   repo_name: string | null;
   contributor_name: string | null;
   contributor_email: string | null;
-  ai_lines: number;
-  ai_total_lines: number;
-  ai_accepted_lines: number;
-  human_lines: number;
-  total_lines: number;
+  human_additions: number;
+  unknown_additions: number;
+  git_diff_deleted_lines: number;
+  git_diff_added_lines: number;
+  mixed_additions: number;
+  ai_additions: number;
+  ai_accepted: number;
+  total_ai_additions: number;
+  total_ai_deletions: number;
   created_at: number;
   updated_at: number;
 };
@@ -89,6 +98,7 @@ export type CommittedReportItem = {
   author: string;
   branch: string;
   timestamp: number;
+  commit_date: number;
   human_additions: number;
   git_diff_deleted_lines: number;
   git_diff_added_lines: number;
