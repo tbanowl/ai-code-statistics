@@ -26,7 +26,7 @@ class DailyAggregationTask(BaseTask):
         total_records = 0
         for repo in repositories:
             repo_id = repo["id"]
-            repo_path = repo.get("repo_path")
+            repo_path = repo.get("repo_path", "")
             last_id = repo.get("last_daily_aggregation_id")
             affected = stats_db.find_daily_aggregation_affected_dates(
                 repo_url=repo_path,
