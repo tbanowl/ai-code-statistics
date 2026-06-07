@@ -201,9 +201,20 @@ def test_query_committed_events_normalizes_repo_url_filter(stats_db):
                 uid="committed-1",
                 raw_id=raw.id,
                 timestamp=1000,
+                commit_date=20240309,
                 repo_url="codeup.aliyun.com/org/repo",
                 author="alice <alice@example.com>",
                 human_additions=3,
+                mixed_additions=[99],
+                ai_additions=[98],
+                ai_accepted=[97],
+                total_ai_additions=[96],
+                total_ai_deletions=[95],
+                mixed_additions_total=11,
+                ai_additions_total=12,
+                ai_accepted_total=13,
+                total_ai_additions_total=14,
+                total_ai_deletions_total=15,
             )
         )
         session.add(
@@ -228,7 +239,15 @@ def test_query_committed_events_normalizes_repo_url_filter(stats_db):
     assert [item["repo_url"] for item in committed] == ["codeup.aliyun.com/org/repo"]
     assert [item["repo_url"] for item in checkpoint] == ["codeup.aliyun.com/org/repo"]
     assert paginated["total"] == 1
-    assert paginated["items"][0]["repo_url"] == "codeup.aliyun.com/org/repo"
+    item = paginated["items"][0]
+    assert item["repo_url"] == "codeup.aliyun.com/org/repo"
+    assert item["timestamp"] == 1000
+    assert item["commit_date"] == 20240309
+    assert item["mixed_additions"] == 11
+    assert item["ai_additions"] == 12
+    assert item["ai_accepted"] == 13
+    assert item["total_ai_additions"] == 14
+    assert item["total_ai_deletions"] == 15
 
 
 class TestExtractRepoName:

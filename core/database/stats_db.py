@@ -495,6 +495,7 @@ class StatsDatabase(BaseDatabase):
                         "author": author_name,
                         "branch": row.branch or "",
                         "timestamp": row.timestamp,
+                        "commit_date": int(row.commit_date or 0),
                         "human_additions": int(row.human_additions or 0),
                         "git_diff_deleted_lines": int(row.git_diff_deleted_lines or 0),
                         "git_diff_added_lines": int(row.git_diff_added_lines or 0),
