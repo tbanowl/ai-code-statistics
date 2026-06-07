@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS metrics_events_committed (
     uid VARCHAR(100) NOT NULL COMMENT '事件唯一标识',
     raw_id VARCHAR(20) COMMENT '关联的原始批次 ID',
     event_id INT NOT NULL DEFAULT 1 COMMENT '事件类型 ID (1=Committed)',
-    timestamp BIGINT NOT NULL COMMENT '事件时间戳（毫秒）',
+    timestamp BIGINT NOT NULL COMMENT '事件时间戳（秒）',
     commit_date BIGINT COMMENT '提交日期 yyyyMMdd',
     human_additions INT COMMENT '人类手动添加代码行数',
     git_diff_deleted_lines INT COMMENT 'Git diff 删除行数',
@@ -32,12 +32,12 @@ CREATE TABLE IF NOT EXISTS metrics_events_committed (
     total_ai_additions JSON COMMENT '总 AI 新增代码行数 JSON',
     total_ai_deletions JSON COMMENT '总 AI 删除代码行数 JSON',
     time_waiting_for_ai JSON COMMENT '等待 AI 响应时长 JSON',
-    mixed_additions_total INT DEFAULT 0 COMMENT '混合生成代码行数首值',
-    ai_additions_total INT DEFAULT 0 COMMENT 'AI 生成代码行数首值',
-    ai_accepted_total INT DEFAULT 0 COMMENT '被接受 AI 代码行数首值',
-    total_ai_additions_total INT DEFAULT 0 COMMENT '总 AI 新增代码行数首值',
-    total_ai_deletions_total INT DEFAULT 0 COMMENT '总 AI 删除代码行数首值',
-    time_waiting_for_ai_total BIGINT DEFAULT 0 COMMENT '等待 AI 响应时长首值',
+    mixed_additions_total INT NOT NULL DEFAULT 0 COMMENT '混合生成代码行数首值',
+    ai_additions_total INT NOT NULL DEFAULT 0 COMMENT 'AI 生成代码行数首值',
+    ai_accepted_total INT NOT NULL DEFAULT 0 COMMENT '被接受 AI 代码行数首值',
+    total_ai_additions_total INT NOT NULL DEFAULT 0 COMMENT '总 AI 新增代码行数首值',
+    total_ai_deletions_total INT NOT NULL DEFAULT 0 COMMENT '总 AI 删除代码行数首值',
+    time_waiting_for_ai_total BIGINT NOT NULL DEFAULT 0 COMMENT '等待 AI 响应时长首值',
     git_ai_version VARCHAR(20) COMMENT 'Git-AI 客户端版本号',
     repo_url VARCHAR(400) COMMENT '仓库 URL',
     author VARCHAR(100) COMMENT '提交作者',
@@ -152,7 +152,7 @@ CREATE TABLE IF NOT EXISTS otel_invocation_counts (
     otel_log_date CHAR(8) NOT NULL COMMENT '日志日期（YYYYMMDD）',
     created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
     INDEX idx_otel_invocation_received_at (received_at),
-    INDEX idx_otel_invocation_org_plugin_skill (org_user, plugin_name, skill_name)
+    INDEX idx_otel_invocation_org_plugin_skill (org_user, plugin_name, skill_name),
     INDEX idx_otel_log_date_plugin_skill_user (otel_log_date, plugin_name, skill_name, org_user)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='Claude Code OTLP Logs Skill 调用计数表';
 

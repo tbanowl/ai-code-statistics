@@ -21,7 +21,7 @@ ALTER TABLE metrics_events_committed
 
 UPDATE metrics_events_committed
 SET timestamp = FLOOR(timestamp / 1000)
-WHERE timestamp >= 1000000000000;
+WHERE timestamp > 9999999999;
 
 UPDATE metrics_events_committed
 SET commit_date = CAST(
@@ -30,7 +30,7 @@ SET commit_date = CAST(
         '%Y%m%d'
     ) AS UNSIGNED
 )
-WHERE timestamp IS NOT NULL;
+WHERE timestamp > 0;
 
 UPDATE metrics_events_committed
 SET
@@ -55,7 +55,7 @@ SET commit_date = CAST(
         '%Y%m%d'
     ) AS UNSIGNED
 )
-WHERE commit_time IS NOT NULL;
+WHERE commit_time > 0;
 
 ALTER TABLE authorship_notes
     ADD INDEX idx_authorship_notes_repo_commit_date (repo_url, commit_date);
