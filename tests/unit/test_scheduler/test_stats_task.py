@@ -46,6 +46,9 @@ def test_execute_discovers_dates_recomputes_and_updates_id(mock_stats_db_cls):
     result = task.execute()
 
     assert result == {"success": True, "records": 1}
+    stats_db.list_repositories_for_daily_aggregation.assert_called_once_with(
+        repo_url=None
+    )
     stats_db.find_daily_aggregation_affected_dates.assert_called_once_with(
         repo_url="repo/a",
         last_aggregation_id="c001",
@@ -77,9 +80,10 @@ def test_execute_passes_authorship_notes_gate_to_discovery_and_aggregation(
         {"id": "r1", "repo_path": "repo/a", "last_daily_aggregation_id": None}
     ]
     stats_db.find_daily_aggregation_affected_dates.return_value = {
-        "commit_dates": [],
+        "commit_dates": [20260605],
         "last_id": None,
     }
+    stats_db.aggregate_committed_daily_stats.return_value = []
     mock_stats_db_cls.return_value = stats_db
 
     task = DailyAggregationTask.__new__(DailyAggregationTask)
@@ -96,6 +100,9 @@ def test_execute_passes_authorship_notes_gate_to_discovery_and_aggregation(
     assert stats_db.find_daily_aggregation_affected_dates.call_args.kwargs[
         "require_authorship_notes"
     ] is True
+    assert stats_db.aggregate_committed_daily_stats.call_args.kwargs[
+        "require_authorship_notes"
+    ] is True
 
 
 @patch("core.scheduler.tasks.daily_aggregation_task.StatsDatabase")
@@ -105,9 +112,10 @@ def test_execute_context_overrides_authorship_notes_gate(mock_stats_db_cls):
         {"id": "r1", "repo_path": "repo/a", "last_daily_aggregation_id": None}
     ]
     stats_db.find_daily_aggregation_affected_dates.return_value = {
-        "commit_dates": [],
+        "commit_dates": [20260605],
         "last_id": None,
     }
+    stats_db.aggregate_committed_daily_stats.return_value = []
     mock_stats_db_cls.return_value = stats_db
 
     task = DailyAggregationTask.__new__(DailyAggregationTask)
@@ -122,6 +130,9 @@ def test_execute_context_overrides_authorship_notes_gate(mock_stats_db_cls):
     task.execute({"require_authorship_notes": True})
 
     assert stats_db.find_daily_aggregation_affected_dates.call_args.kwargs[
+        "require_authorship_notes"
+    ] is True
+    assert stats_db.aggregate_committed_daily_stats.call_args.kwargs[
         "require_authorship_notes"
     ] is True
 
