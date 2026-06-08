@@ -19,6 +19,8 @@ from core.database.cx_usage_db import (
 def _cx_usage_db():
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
+    previous_config_data = loader.config_data
+    previous_global_engine = db_base.global_engine
     loader.config_data = {
         "features": {"enabled": True},
         "git": {"type": "github"},
@@ -27,14 +29,14 @@ def _cx_usage_db():
     db_base.global_engine = create_engine(f"sqlite:///{path}")
     db = CxUsageDatabase()
     db_base.Base.metadata.create_all(db.engine)
-    return db, path
+    return db, path, previous_config_data, previous_global_engine
 
 
-def _cleanup_cx_usage_db(db, path):
+def _cleanup_cx_usage_db(db, path, previous_config_data, previous_global_engine):
     if db and db.engine:
         db.engine.dispose()
-    loader.config_data = {}
-    db_base.global_engine = None
+    loader.config_data = previous_config_data
+    db_base.global_engine = previous_global_engine
     if os.path.exists(path):
         os.unlink(path)
 
@@ -81,7 +83,7 @@ def _constraint_sql(model, constraint_name):
 
 
 def test_insert_batch_derives_event_day_from_event_time():
-    db, path = _cx_usage_db()
+    db, path, previous_config_data, previous_global_engine = _cx_usage_db()
     try:
         result = db.insert_batch(
             [
@@ -105,7 +107,7 @@ def test_insert_batch_derives_event_day_from_event_time():
             row = session.query(CxCommandUsageEvent).one()
             assert row.event_day == 20260528
     finally:
-        _cleanup_cx_usage_db(db, path)
+        _cleanup_cx_usage_db(db, path, previous_config_data, previous_global_engine)
 
 
 def test_codereview_models_match_event_type_defaults_and_constraints():
@@ -127,7 +129,7 @@ def test_codereview_models_match_event_type_defaults_and_constraints():
 
 
 def test_insert_codereview_batch_splits_bypass_and_summary():
-    db, path = _cx_usage_db()
+    db, path, previous_config_data, previous_global_engine = _cx_usage_db()
     try:
         bypass_event = {
             "eventId": "evt_codereview_202606080101",
@@ -216,11 +218,11 @@ def test_insert_codereview_batch_splits_bypass_and_summary():
             assert summary.raw_event == {"eventId": "evt_codereview_202606080102"}
             assert summary.token_name == "token-1"
     finally:
-        _cleanup_cx_usage_db(db, path)
+        _cleanup_cx_usage_db(db, path, previous_config_data, previous_global_engine)
 
 
 def test_insert_codereview_batch_reports_duplicate_event_id():
-    db, path = _cx_usage_db()
+    db, path, previous_config_data, previous_global_engine = _cx_usage_db()
     try:
         event = _bypass_event("evt_codereview_202606080103")
 
@@ -234,11 +236,11 @@ def test_insert_codereview_batch_reports_duplicate_event_id():
             "failed": [],
         }
     finally:
-        _cleanup_cx_usage_db(db, path)
+        _cleanup_cx_usage_db(db, path, previous_config_data, previous_global_engine)
 
 
 def test_insert_codereview_batch_persists_accepted_event_before_same_batch_duplicate():
-    db, path = _cx_usage_db()
+    db, path, previous_config_data, previous_global_engine = _cx_usage_db()
     try:
         duplicate_event = _bypass_event("evt_codereview_202606080104")
         first = db.insert_codereview_batch([duplicate_event])
@@ -260,11 +262,11 @@ def test_insert_codereview_batch_persists_accepted_event_before_same_batch_dupli
             )
             assert persisted is not None
     finally:
-        _cleanup_cx_usage_db(db, path)
+        _cleanup_cx_usage_db(db, path, previous_config_data, previous_global_engine)
 
 
 def test_insert_codereview_batch_reports_cross_type_duplicate_in_same_batch():
-    db, path = _cx_usage_db()
+    db, path, previous_config_data, previous_global_engine = _cx_usage_db()
     try:
         event_id = "evt_codereview_202606080106"
         bypass_event = _bypass_event(event_id)
@@ -286,11 +288,11 @@ def test_insert_codereview_batch_reports_cross_type_duplicate_in_same_batch():
                 is None
             )
     finally:
-        _cleanup_cx_usage_db(db, path)
+        _cleanup_cx_usage_db(db, path, previous_config_data, previous_global_engine)
 
 
 def test_insert_codereview_batch_reports_cross_table_duplicate_from_existing_event():
-    db, path = _cx_usage_db()
+    db, path, previous_config_data, previous_global_engine = _cx_usage_db()
     try:
         event_id = "evt_codereview_202606080107"
         first = db.insert_codereview_batch([_summary_event(event_id)])
@@ -311,4 +313,4 @@ def test_insert_codereview_batch_reports_cross_table_duplicate_from_existing_eve
                 is None
             )
     finally:
-        _cleanup_cx_usage_db(db, path)
+        _cleanup_cx_usage_db(db, path, previous_config_data, previous_global_engine)
