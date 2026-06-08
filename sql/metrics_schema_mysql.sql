@@ -495,3 +495,101 @@ CREATE INDEX idx_usage_project_time ON cx_command_usage_events(project_id, event
 CREATE INDEX idx_usage_user_time ON cx_command_usage_events(git_user_email, event_time);
 CREATE INDEX idx_usage_event_time ON cx_command_usage_events(event_time);
 CREATE INDEX idx_usage_event_day ON cx_command_usage_events(event_day);
+
+CREATE TABLE IF NOT EXISTS cx_codereview_bypasses (
+  id VARCHAR(20) PRIMARY KEY ,
+  event_id VARCHAR(80) NOT NULL UNIQUE,
+  schema_version VARCHAR(16) NOT NULL,
+  event_type VARCHAR(64) NOT NULL DEFAULT 'cx_codereview_issue_bypass',
+  event_time DATETIME(3) NOT NULL,
+  spec_id VARCHAR(128) NULL,
+  spec_id_source VARCHAR(32) NULL,
+  project_id VARCHAR(128) NULL,
+  git_user_name VARCHAR(128) NULL,
+  git_user_email VARCHAR(256) NULL,
+  session_id VARCHAR(128) NULL,
+  plugin_version VARCHAR(32) NULL,
+  source VARCHAR(64) NULL,
+  push_id          VARCHAR(80) NULL,
+  commit_sha       VARCHAR(64) NULL,
+  issue_id         VARCHAR(128) NULL,
+  issue_title      VARCHAR(512) NULL,
+  issue_description TEXT NULL,
+  severity         VARCHAR(16) NULL,
+  file_path        TEXT NULL,
+  line_range       VARCHAR(64) NULL,
+  code_snippet     TEXT NULL,
+  impact           TEXT NULL,
+  suggestion       TEXT NULL,
+  rule_ref         VARCHAR(256) NULL,
+  response         VARCHAR(16) NULL,
+  reason           VARCHAR(512) NULL,
+  original_marker  JSON NULL,
+  bypassed_marker  JSON NULL,
+  token_name       VARCHAR(128) NULL,
+  raw_event        JSON NULL,
+  created_at       DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3),
+  CONSTRAINT chk_cr_bypass_event_type CHECK (event_type = 'cx_codereview_issue_bypass')
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE INDEX idx_cr_bypass_push_id
+  ON cx_codereview_bypasses(push_id);
+
+CREATE INDEX idx_cr_bypass_commit_tm
+  ON cx_codereview_bypasses(commit_sha, event_time);
+
+CREATE INDEX idx_cr_bypass_severity
+  ON cx_codereview_bypasses(severity);
+
+CREATE INDEX idx_cr_bypass_user_tm
+  ON cx_codereview_bypasses(git_user_email, event_time);
+
+CREATE INDEX idx_cr_bypass_event_tm
+  ON cx_codereview_bypasses(event_time);
+
+CREATE TABLE IF NOT EXISTS cx_codereview_summaries (
+  id VARCHAR(20) PRIMARY KEY ,
+  event_id VARCHAR(80) NOT NULL UNIQUE,
+  schema_version VARCHAR(16) NOT NULL,
+  event_type VARCHAR(64) NOT NULL DEFAULT 'cx_codereview_push_summary',
+  event_time DATETIME(3) NOT NULL,
+  spec_id VARCHAR(128) NULL,
+  spec_id_source VARCHAR(32) NULL,
+  project_id VARCHAR(128) NULL,
+  git_user_name VARCHAR(128) NULL,
+  git_user_email VARCHAR(256) NULL,
+  session_id VARCHAR(128) NULL,
+  plugin_version VARCHAR(32) NULL,
+  source VARCHAR(64) NULL,
+  push_id          VARCHAR(80) NULL,
+  commit_sha       VARCHAR(64) NULL,
+  commit_short     VARCHAR(16) NULL,
+  push_branch      VARCHAR(256) NULL,
+  push_remote      VARCHAR(64) NULL,
+  report_path      TEXT NULL,
+  review_status    VARCHAR(32) NULL,
+  bypass_count     INT NULL,
+  final_score      DECIMAL(5,2) NULL,
+  grade            VARCHAR(8) NULL,
+  issue_counts     JSON NULL,
+  submission_time  DATETIME(3) NULL,
+  token_name       VARCHAR(128) NULL,
+  raw_event        JSON NULL,
+  created_at       DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3),
+  CONSTRAINT chk_cr_summary_event_type CHECK (event_type = 'cx_codereview_push_summary')
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE INDEX idx_cr_summary_push_id
+  ON cx_codereview_summaries(push_id);
+
+CREATE INDEX idx_cr_summary_commit_tm
+  ON cx_codereview_summaries(commit_sha, event_time);
+
+CREATE INDEX idx_cr_summary_branch_tm
+  ON cx_codereview_summaries(push_branch, event_time);
+
+CREATE INDEX idx_cr_summary_user_tm
+  ON cx_codereview_summaries(git_user_email, event_time);
+
+CREATE INDEX idx_cr_summary_event_tm
+  ON cx_codereview_summaries(event_time);
