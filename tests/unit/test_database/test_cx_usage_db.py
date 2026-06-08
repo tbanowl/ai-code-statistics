@@ -3,7 +3,7 @@ import tempfile
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import create_engine
+from sqlalchemy import CheckConstraint, create_engine
 
 import core.config.loader as loader
 import core.database.base as db_base
@@ -39,6 +39,32 @@ def _cleanup_cx_usage_db(db, path):
         os.unlink(path)
 
 
+def _bypass_event(event_id, **overrides):
+    event = {
+        "eventId": event_id,
+        "schemaVersion": "1.0",
+        "eventType": "cx_codereview_issue_bypass",
+        "eventTime": datetime(2026, 6, 8, 10, 20, 30),
+        "specId": "spec-1",
+        "pushId": "push-1",
+        "rawEvent": {"eventId": event_id},
+    }
+    event.update(overrides)
+    return event
+
+
+def _constraint_sql(model, constraint_name):
+    constraints = [
+        constraint
+        for constraint in model.__table__.constraints
+        if constraint.name == constraint_name
+    ]
+    assert len(constraints) == 1
+    constraint = constraints[0]
+    assert isinstance(constraint, CheckConstraint)
+    return str(constraint.sqltext)
+
+
 def test_insert_batch_derives_event_day_from_event_time():
     db, path = _cx_usage_db()
     try:
@@ -65,6 +91,24 @@ def test_insert_batch_derives_event_day_from_event_time():
             assert row.event_day == 20260528
     finally:
         _cleanup_cx_usage_db(db, path)
+
+
+def test_codereview_models_match_event_type_defaults_and_constraints():
+    bypass_event_type = CxCodereviewBypass.__table__.c.event_type
+    summary_event_type = CxCodereviewSummary.__table__.c.event_type
+
+    assert bypass_event_type.server_default is not None
+    assert str(bypass_event_type.server_default.arg) == "cx_codereview_issue_bypass"
+    assert summary_event_type.server_default is not None
+    assert str(summary_event_type.server_default.arg) == "cx_codereview_push_summary"
+    assert (
+        _constraint_sql(CxCodereviewBypass, "chk_cr_bypass_event_type")
+        == "event_type = 'cx_codereview_issue_bypass'"
+    )
+    assert (
+        _constraint_sql(CxCodereviewSummary, "chk_cr_summary_event_type")
+        == "event_type = 'cx_codereview_push_summary'"
+    )
 
 
 def test_insert_codereview_batch_splits_bypass_and_summary():
@@ -163,15 +207,7 @@ def test_insert_codereview_batch_splits_bypass_and_summary():
 def test_insert_codereview_batch_reports_duplicate_event_id():
     db, path = _cx_usage_db()
     try:
-        event = {
-            "eventId": "evt_codereview_202606080103",
-            "schemaVersion": "1.0",
-            "eventType": "cx_codereview_issue_bypass",
-            "eventTime": datetime(2026, 6, 8, 10, 20, 30),
-            "specId": "spec-1",
-            "pushId": "push-1",
-            "rawEvent": {"eventId": "evt_codereview_202606080103"},
-        }
+        event = _bypass_event("evt_codereview_202606080103")
 
         first = db.insert_codereview_batch([event])
         second = db.insert_codereview_batch([event])
@@ -182,5 +218,31 @@ def test_insert_codereview_batch_reports_duplicate_event_id():
             "duplicated": ["evt_codereview_202606080103"],
             "failed": [],
         }
+    finally:
+        _cleanup_cx_usage_db(db, path)
+
+
+def test_insert_codereview_batch_persists_accepted_event_before_same_batch_duplicate():
+    db, path = _cx_usage_db()
+    try:
+        duplicate_event = _bypass_event("evt_codereview_202606080104")
+        first = db.insert_codereview_batch([duplicate_event])
+        assert first["accepted"] == ["evt_codereview_202606080104"]
+
+        new_event = _bypass_event("evt_codereview_202606080105")
+        second = db.insert_codereview_batch([new_event, duplicate_event])
+
+        assert second == {
+            "accepted": ["evt_codereview_202606080105"],
+            "duplicated": ["evt_codereview_202606080104"],
+            "failed": [],
+        }
+        with session_scope(db.engine) as session:
+            persisted = (
+                session.query(CxCodereviewBypass)
+                .filter_by(event_id="evt_codereview_202606080105")
+                .one_or_none()
+            )
+            assert persisted is not None
     finally:
         _cleanup_cx_usage_db(db, path)
