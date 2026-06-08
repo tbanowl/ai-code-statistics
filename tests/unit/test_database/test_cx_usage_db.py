@@ -4,6 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import CheckConstraint, create_engine
+from sqlalchemy.exc import SQLAlchemyError
 
 import core.config.loader as loader
 import core.database.base as db_base
@@ -312,5 +313,25 @@ def test_insert_codereview_batch_reports_cross_table_duplicate_from_existing_eve
                 .one_or_none()
                 is None
             )
+    finally:
+        _cleanup_cx_usage_db(db, path, previous_config_data, previous_global_engine)
+
+
+def test_insert_codereview_batch_propagates_database_write_errors(monkeypatch):
+    db, path, previous_config_data, previous_global_engine = _cx_usage_db()
+    try:
+        event = _bypass_event("evt_codereview_202606080108")
+
+        def fail_flush(self, *args, **kwargs):
+            raise SQLAlchemyError("database down")
+
+        monkeypatch.setattr("sqlalchemy.orm.Session.flush", fail_flush)
+
+        try:
+            db.insert_codereview_batch([event])
+        except SQLAlchemyError as exc:
+            assert "database down" in str(exc)
+        else:
+            raise AssertionError("expected SQLAlchemyError to propagate")
     finally:
         _cleanup_cx_usage_db(db, path, previous_config_data, previous_global_engine)

@@ -145,6 +145,17 @@ def test_validate_rejects_non_integral_bypass_count_values():
         assert "invalid bypassCount" in result["errors"]
 
 
+def test_validate_rejects_oversized_bypass_count_without_raising():
+    event = _base_event("cx_codereview_push_summary")
+    event["eventId"] = "evt_codereview_count_oversized"
+    event["bypassCount"] = "1" * 5000
+
+    result = validate_codereview_event(event)
+
+    assert result["valid"] is False
+    assert "invalid bypassCount" in result["errors"]
+
+
 def test_validate_rejects_invalid_final_score_shape():
     for invalid_value in ("NaN", "Infinity", "1000.00", "1.234"):
         event = _base_event("cx_codereview_push_summary")

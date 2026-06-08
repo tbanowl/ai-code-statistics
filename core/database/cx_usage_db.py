@@ -4,7 +4,7 @@ from typing import Dict, List, Optional
 
 from sqlalchemy import CheckConstraint, DateTime, JSON, Integer, Numeric, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from .base import BaseDatabase, session_scope, Base
 from .models import gen_xid
@@ -224,6 +224,8 @@ class CxUsageDatabase(BaseDatabase):
                 seen_event_ids.add(event_id)
             except IntegrityError:
                 duplicated.append(event["eventId"])
+            except SQLAlchemyError:
+                raise
             except Exception:
                 failed.append(event["eventId"])
 

@@ -128,7 +128,11 @@ def _read_int(event, key, errors):
     if isinstance(value, str):
         stripped = value.strip()
         if stripped.isdigit():
-            return int(stripped)
+            try:
+                return int(stripped)
+            except ValueError:
+                errors.append(f"invalid {key}")
+                return None
         errors.append(f"invalid {key}")
         return None
     try:
