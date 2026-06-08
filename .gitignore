@@ -51,3 +51,4 @@ frontend/dist
 git-ai*.exe
 git-ai
 .source
+.codegraph
