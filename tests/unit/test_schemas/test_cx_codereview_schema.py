@@ -133,6 +133,57 @@ def test_validate_rejects_invalid_numeric_fields():
     assert "invalid finalScore" in result["errors"]
 
 
+def test_validate_rejects_non_integral_bypass_count_values():
+    for invalid_value in (True, 1.9, "1.9", "many"):
+        event = _base_event("cx_codereview_push_summary")
+        event["eventId"] = f"evt_codereview_count_{str(invalid_value).replace('.', '_')}"
+        event["bypassCount"] = invalid_value
+
+        result = validate_codereview_event(event)
+
+        assert result["valid"] is False
+        assert "invalid bypassCount" in result["errors"]
+
+
+def test_validate_rejects_invalid_final_score_shape():
+    for invalid_value in ("NaN", "Infinity", "1000.00", "1.234"):
+        event = _base_event("cx_codereview_push_summary")
+        event["eventId"] = f"evt_codereview_score_{invalid_value.replace('.', '_')}"
+        event["finalScore"] = invalid_value
+
+        result = validate_codereview_event(event)
+
+        assert result["valid"] is False
+        assert "invalid finalScore" in result["errors"]
+
+
+def test_validate_summary_json_fields_allow_lists():
+    event = _base_event("cx_codereview_push_summary")
+    event.update(
+        {
+            "eventId": "evt_codereview_202606080004",
+            "issueCounts": [{"severity": "high", "count": 1}],
+        }
+    )
+
+    result = validate_codereview_event(event)
+
+    assert result["valid"] is True
+    assert result["value"]["issueCounts"] == [{"severity": "high", "count": 1}]
+
+
+def test_validate_rejects_fixed_string_limit_violations():
+    event = _base_event("cx_codereview_push_summary")
+    event["gitUserEmail"] = "a" * 257
+    event["pushBranch"] = "b" * 257
+
+    result = validate_codereview_event(event)
+
+    assert result["valid"] is False
+    assert "gitUserEmail too long" in result["errors"]
+    assert "pushBranch too long" in result["errors"]
+
+
 def test_validate_batch_shape_and_size():
     assert validate_batch({"not": "a-list"}) == {
         "valid": False,

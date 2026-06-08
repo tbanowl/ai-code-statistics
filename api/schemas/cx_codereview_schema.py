@@ -120,11 +120,30 @@ def _read_int(event, key, errors):
     value = event.get(key)
     if value in (None, ""):
         return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
+    if isinstance(value, bool):
         errors.append(f"invalid {key}")
         return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.isdigit():
+            return int(stripped)
+        errors.append(f"invalid {key}")
+        return None
+    try:
+        decimal_value = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        decimal_value = None
+    is_integral_decimal = (
+        decimal_value is not None
+        and decimal_value.is_finite()
+        and decimal_value == decimal_value.to_integral_value()
+    )
+    if is_integral_decimal:
+        return int(decimal_value)
+    errors.append(f"invalid {key}")
+    return None
 
 
 def _read_decimal(event, key, errors):
@@ -132,10 +151,18 @@ def _read_decimal(event, key, errors):
     if value in (None, ""):
         return None
     try:
-        return Decimal(str(value))
+        decimal_value = Decimal(str(value))
     except (InvalidOperation, ValueError):
         errors.append(f"invalid {key}")
         return None
+    if (
+        not decimal_value.is_finite()
+        or abs(decimal_value) > Decimal("999.99")
+        or decimal_value.as_tuple().exponent < -2
+    ):
+        errors.append(f"invalid {key}")
+        return None
+    return decimal_value
 
 
 def validate_codereview_event(event):
@@ -176,7 +203,8 @@ def validate_codereview_event(event):
             value[field] = _read(event, field, errors)
         value["bypassCount"] = _read_int(event, "bypassCount", errors)
         value["finalScore"] = _read_decimal(event, "finalScore", errors)
-        value["issueCounts"] = _read_json(event, "issueCounts", errors)
+        for field in SUMMARY_JSON_FIELDS:
+            value[field] = _read_json(event, field, errors)
         submission_time = _read(event, "submissionTime", errors)
         value["submissionTime"] = _parse_datetime(
             submission_time, errors, "submissionTime"
