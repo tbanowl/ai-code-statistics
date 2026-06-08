@@ -168,12 +168,18 @@ class CxUsageDatabase(BaseDatabase):
 
     def insert_codereview_batch(self, events: List[Dict], token_name: Optional[str] = None) -> Dict:
         accepted, duplicated, failed = [], [], []
+        accepted_event_ids = set()
 
         for event in events:
             try:
+                event_id = event["eventId"]
+                if event_id in accepted_event_ids or self._codereview_event_exists(event_id):
+                    duplicated.append(event_id)
+                    continue
+
                 if event["eventType"] == "cx_codereview_issue_bypass":
                     record = CxCodereviewBypass(
-                        event_id=event["eventId"],
+                        event_id=event_id,
                         schema_version=event["schemaVersion"],
                         event_type=event["eventType"],
                         event_time=event["eventTime"],
@@ -206,7 +212,7 @@ class CxUsageDatabase(BaseDatabase):
                     )
                 elif event["eventType"] == "cx_codereview_push_summary":
                     record = CxCodereviewSummary(
-                        event_id=event["eventId"],
+                        event_id=event_id,
                         schema_version=event["schemaVersion"],
                         event_type=event["eventType"],
                         event_time=event["eventTime"],
@@ -240,10 +246,28 @@ class CxUsageDatabase(BaseDatabase):
                 with session_scope(self.engine) as session:
                     session.add(record)
                     session.flush()
-                accepted.append(event["eventId"])
+                accepted.append(event_id)
+                accepted_event_ids.add(event_id)
             except IntegrityError:
                 duplicated.append(event["eventId"])
             except Exception:
                 failed.append(event["eventId"])
 
         return {"accepted": accepted, "duplicated": duplicated, "failed": failed}
+
+    def _codereview_event_exists(self, event_id: str) -> bool:
+        with session_scope(self.engine) as session:
+            bypass_exists = (
+                session.query(CxCodereviewBypass.id)
+                .filter_by(event_id=event_id)
+                .first()
+                is not None
+            )
+            if bypass_exists:
+                return True
+            return (
+                session.query(CxCodereviewSummary.id)
+                .filter_by(event_id=event_id)
+                .first()
+                is not None
+            )

@@ -53,6 +53,21 @@ def _bypass_event(event_id, **overrides):
     return event
 
 
+def _summary_event(event_id, **overrides):
+    event = {
+        "eventId": event_id,
+        "schemaVersion": "1.0",
+        "eventType": "cx_codereview_push_summary",
+        "eventTime": datetime(2026, 6, 8, 10, 30, 0),
+        "specId": "spec-1",
+        "pushId": "push-1",
+        "commitSha": "b" * 40,
+        "rawEvent": {"eventId": event_id},
+    }
+    event.update(overrides)
+    return event
+
+
 def _constraint_sql(model, constraint_name):
     constraints = [
         constraint
@@ -244,5 +259,56 @@ def test_insert_codereview_batch_persists_accepted_event_before_same_batch_dupli
                 .one_or_none()
             )
             assert persisted is not None
+    finally:
+        _cleanup_cx_usage_db(db, path)
+
+
+def test_insert_codereview_batch_reports_cross_type_duplicate_in_same_batch():
+    db, path = _cx_usage_db()
+    try:
+        event_id = "evt_codereview_202606080106"
+        bypass_event = _bypass_event(event_id)
+        summary_event = _summary_event(event_id)
+
+        result = db.insert_codereview_batch([bypass_event, summary_event])
+
+        assert result == {
+            "accepted": [event_id],
+            "duplicated": [event_id],
+            "failed": [],
+        }
+        with session_scope(db.engine) as session:
+            assert session.query(CxCodereviewBypass).filter_by(event_id=event_id).one()
+            assert (
+                session.query(CxCodereviewSummary)
+                .filter_by(event_id=event_id)
+                .one_or_none()
+                is None
+            )
+    finally:
+        _cleanup_cx_usage_db(db, path)
+
+
+def test_insert_codereview_batch_reports_cross_table_duplicate_from_existing_event():
+    db, path = _cx_usage_db()
+    try:
+        event_id = "evt_codereview_202606080107"
+        first = db.insert_codereview_batch([_summary_event(event_id)])
+        second = db.insert_codereview_batch([_bypass_event(event_id)])
+
+        assert first["accepted"] == [event_id]
+        assert second == {
+            "accepted": [],
+            "duplicated": [event_id],
+            "failed": [],
+        }
+        with session_scope(db.engine) as session:
+            assert session.query(CxCodereviewSummary).filter_by(event_id=event_id).one()
+            assert (
+                session.query(CxCodereviewBypass)
+                .filter_by(event_id=event_id)
+                .one_or_none()
+                is None
+            )
     finally:
         _cleanup_cx_usage_db(db, path)
