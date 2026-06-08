@@ -168,31 +168,22 @@ class CxUsageDatabase(BaseDatabase):
 
     def insert_codereview_batch(self, events: List[Dict], token_name: Optional[str] = None) -> Dict:
         accepted, duplicated, failed = [], [], []
-        accepted_event_ids = set()
+        existing_event_ids = self._existing_codereview_event_ids(
+            event["eventId"] for event in events if event.get("eventId")
+        )
+        seen_event_ids = set()
 
         for event in events:
             try:
                 event_id = event["eventId"]
-                if event_id in accepted_event_ids or self._codereview_event_exists(event_id):
+                if event_id in seen_event_ids or event_id in existing_event_ids:
                     duplicated.append(event_id)
                     continue
 
+                common_fields = self._codereview_common_fields(event, token_name)
                 if event["eventType"] == "cx_codereview_issue_bypass":
                     record = CxCodereviewBypass(
-                        event_id=event_id,
-                        schema_version=event["schemaVersion"],
-                        event_type=event["eventType"],
-                        event_time=event["eventTime"],
-                        spec_id=event.get("specId") or None,
-                        spec_id_source=event.get("specIdSource") or None,
-                        project_id=event.get("projectId") or None,
-                        git_user_name=event.get("gitUserName") or None,
-                        git_user_email=event.get("gitUserEmail") or None,
-                        session_id=event.get("sessionId") or None,
-                        plugin_version=event.get("pluginVersion") or None,
-                        source=event.get("source") or None,
-                        push_id=event.get("pushId") or None,
-                        commit_sha=event.get("commitSha") or None,
+                        **common_fields,
                         issue_id=event.get("issueId") or None,
                         issue_title=event.get("issueTitle") or None,
                         issue_description=event.get("issueDescription") or None,
@@ -207,25 +198,10 @@ class CxUsageDatabase(BaseDatabase):
                         reason=event.get("reason") or None,
                         original_marker=event.get("originalMarker"),
                         bypassed_marker=event.get("bypassedMarker"),
-                        token_name=token_name,
-                        raw_event=event.get("rawEvent"),
                     )
                 elif event["eventType"] == "cx_codereview_push_summary":
                     record = CxCodereviewSummary(
-                        event_id=event_id,
-                        schema_version=event["schemaVersion"],
-                        event_type=event["eventType"],
-                        event_time=event["eventTime"],
-                        spec_id=event.get("specId") or None,
-                        spec_id_source=event.get("specIdSource") or None,
-                        project_id=event.get("projectId") or None,
-                        git_user_name=event.get("gitUserName") or None,
-                        git_user_email=event.get("gitUserEmail") or None,
-                        session_id=event.get("sessionId") or None,
-                        plugin_version=event.get("pluginVersion") or None,
-                        source=event.get("source") or None,
-                        push_id=event.get("pushId") or None,
-                        commit_sha=event.get("commitSha") or None,
+                        **common_fields,
                         commit_short=event.get("commitShort") or None,
                         push_branch=event.get("pushBranch") or None,
                         push_remote=event.get("pushRemote") or None,
@@ -236,8 +212,6 @@ class CxUsageDatabase(BaseDatabase):
                         grade=event.get("grade") or None,
                         issue_counts=event.get("issueCounts"),
                         submission_time=event.get("submissionTime"),
-                        token_name=token_name,
-                        raw_event=event.get("rawEvent"),
                     )
                 else:
                     failed.append(event.get("eventId", ""))
@@ -247,7 +221,7 @@ class CxUsageDatabase(BaseDatabase):
                     session.add(record)
                     session.flush()
                 accepted.append(event_id)
-                accepted_event_ids.add(event_id)
+                seen_event_ids.add(event_id)
             except IntegrityError:
                 duplicated.append(event["eventId"])
             except Exception:
@@ -255,19 +229,42 @@ class CxUsageDatabase(BaseDatabase):
 
         return {"accepted": accepted, "duplicated": duplicated, "failed": failed}
 
-    def _codereview_event_exists(self, event_id: str) -> bool:
+    def _existing_codereview_event_ids(self, event_ids) -> set:
+        event_ids = set(event_ids)
+        if not event_ids:
+            return set()
+
         with session_scope(self.engine) as session:
-            bypass_exists = (
-                session.query(CxCodereviewBypass.id)
-                .filter_by(event_id=event_id)
-                .first()
-                is not None
+            bypass_event_ids = (
+                event_id
+                for event_id, in session.query(CxCodereviewBypass.event_id)
+                .filter(CxCodereviewBypass.event_id.in_(event_ids))
+                .all()
             )
-            if bypass_exists:
-                return True
-            return (
-                session.query(CxCodereviewSummary.id)
-                .filter_by(event_id=event_id)
-                .first()
-                is not None
+            summary_event_ids = (
+                event_id
+                for event_id, in session.query(CxCodereviewSummary.event_id)
+                .filter(CxCodereviewSummary.event_id.in_(event_ids))
+                .all()
             )
+            return set(bypass_event_ids) | set(summary_event_ids)
+
+    def _codereview_common_fields(self, event: Dict, token_name: Optional[str]) -> Dict:
+        return {
+            "event_id": event["eventId"],
+            "schema_version": event["schemaVersion"],
+            "event_type": event["eventType"],
+            "event_time": event["eventTime"],
+            "spec_id": event.get("specId") or None,
+            "spec_id_source": event.get("specIdSource") or None,
+            "project_id": event.get("projectId") or None,
+            "git_user_name": event.get("gitUserName") or None,
+            "git_user_email": event.get("gitUserEmail") or None,
+            "session_id": event.get("sessionId") or None,
+            "plugin_version": event.get("pluginVersion") or None,
+            "source": event.get("source") or None,
+            "push_id": event.get("pushId") or None,
+            "commit_sha": event.get("commitSha") or None,
+            "token_name": token_name,
+            "raw_event": event.get("rawEvent"),
+        }
