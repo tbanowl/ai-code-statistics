@@ -1,6 +1,10 @@
 from flask import Blueprint, request, jsonify
 from core.config.logging import Logger
 from core.middleware.auth import auth_required
+from core.database.authorship_notes_db import (
+    RewriteIdConflictError,
+    RewriteValidationError,
+)
 from core.services.notes_service import NotesRestService
 
 git_notes_rest_bp = Blueprint("notes_rest", __name__, url_prefix="/worker/notes")
@@ -302,6 +306,46 @@ def batch_push_notes():
     except Exception as e:
         logger.error("批量推送（创建/更新）注释错误", exc_info=e)
         return error_response(f"服务器错误", 500)
+
+
+@git_notes_rest_bp.route("/rewrite", methods=["POST"])
+@authorship_notes_rest_bp.route("/rewrite", methods=["POST"])
+@auth_required
+def rewrite_notes():
+    try:
+        payload = request.get_json(silent=True)
+        if not payload:
+            return error_response("请求体不能为空", 400)
+
+        required_fields = [
+            "repo_url",
+            "rewrite_id",
+            "operation",
+            "branch",
+            "mappings",
+        ]
+        for field in required_fields:
+            if field not in payload:
+                return error_response(f"缺少必需字段: {field}", 400)
+
+        result = get_notes_service().rewrite_notes(
+            repo_url=payload["repo_url"],
+            rewrite_id=payload["rewrite_id"],
+            operation=payload["operation"],
+            branch=payload["branch"],
+            original_head=payload.get("original_head"),
+            new_head=payload.get("new_head"),
+            mappings=payload["mappings"],
+        )
+        return ok_response(result)
+
+    except RewriteIdConflictError as exc:
+        return error_response(str(exc), 409)
+    except RewriteValidationError as exc:
+        return error_response(str(exc), 400)
+    except Exception as e:
+        logger.error("rewrite authorship notes 错误", exc_info=e)
+        return error_response("服务器错误", 500)
 
 
 @git_notes_rest_bp.route("/list", methods=["POST"])
