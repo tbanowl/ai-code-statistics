@@ -81,7 +81,6 @@ class NotesRestService:
         new_head: str | None,
         mappings: list[dict],
     ):
-        repo_url = normalize_repo_url(repo_url)
         return self.database.rewrite_notes(
             repo_url=repo_url,
             rewrite_id=rewrite_id,

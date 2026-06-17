@@ -321,7 +321,6 @@ class AuthorshipNotesDatabase(BaseDatabase):
         new_head: str | None,
         mappings: list[dict],
     ) -> Dict[str, Any]:
-        repo_url = normalize_repo_url(repo_url)
         self._validate_rewrite_request(
             repo_url=repo_url,
             rewrite_id=rewrite_id,
@@ -329,6 +328,7 @@ class AuthorshipNotesDatabase(BaseDatabase):
             branch=branch,
             mappings=mappings,
         )
+        repo_url = normalize_repo_url(repo_url)
         request_hash = compute_rewrite_request_hash(
             repo_url=repo_url,
             rewrite_id=rewrite_id,
@@ -393,7 +393,7 @@ class AuthorshipNotesDatabase(BaseDatabase):
         branch: str,
         mappings: list[dict],
     ) -> None:
-        if not repo_url:
+        if not repo_url or not str(repo_url).strip():
             raise RewriteValidationError("缺少必需字段: repo_url")
         if not rewrite_id:
             raise RewriteValidationError("缺少必需字段: rewrite_id")

@@ -555,9 +555,9 @@ def test_batch_list_and_search_exclude_superseded_by_default(service):
     assert set(audit_search) == {"active-sha", "superseded-sha"}
 
 
-import pytest
 from core.database.authorship_notes_db import (
     RewriteIdConflictError,
+    RewriteValidationError,
     compute_rewrite_request_hash,
 )
 
@@ -604,6 +604,15 @@ def test_rewrite_request_hash_normalizes_repo_url():
     )
     assert first == second
     assert first.startswith("sha256:")
+
+
+@pytest.mark.parametrize("repo_url", ["", "   ", None])
+def test_rewrite_rejects_missing_repo_url_before_normalization(service, repo_url):
+    payload = rewrite_payload()
+    payload["repo_url"] = repo_url
+
+    with pytest.raises(RewriteValidationError, match="缺少必需字段: repo_url"):
+        service.rewrite_notes(**payload)
 
 
 def test_rewrite_creates_target_and_supersedes_source(service):
