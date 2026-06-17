@@ -116,6 +116,58 @@ def test_authorship_note_rewrite_mapping_model_columns():
     )
 
 
+def test_authorship_note_rewrite_repo_url_lengths_match_mysql_schema():
+    """Test rewrite repo_url columns match MySQL schema length"""
+    assert AuthorshipNoteRewrite.__table__.c.repo_url.type.length == 400
+    assert AuthorshipNoteRewriteMapping.__table__.c.repo_url.type.length == 400
+
+
+def test_authorship_note_rewrite_unique_constraint():
+    """Test AuthorshipNoteRewrite has unique constraint on rewrite_id"""
+    unique_constraints = [
+        c
+        for c in AuthorshipNoteRewrite.__table__.constraints
+        if c.__class__.__name__ == "UniqueConstraint"
+    ]
+
+    assert any(
+        [col.name for col in constraint.columns] == ["rewrite_id"]
+        for constraint in unique_constraints
+    )
+
+
+def test_authorship_note_rewrite_mapping_unique_constraint():
+    """Test rewrite mappings are unique by repo/source/target/rewrite"""
+    unique_constraints = [
+        c
+        for c in AuthorshipNoteRewriteMapping.__table__.constraints
+        if c.__class__.__name__ == "UniqueConstraint"
+    ]
+
+    assert any(
+        [col.name for col in constraint.columns]
+        == ["repo_url", "source_commit", "target_commit", "rewrite_id"]
+        for constraint in unique_constraints
+    )
+
+
+def test_authorship_note_rewrite_mapping_indexes_column_order():
+    """Test rewrite mapping source and target indexes preserve column order"""
+    indexes = {
+        index.name: [column.name for column in index.columns]
+        for index in AuthorshipNoteRewriteMapping.__table__.indexes
+    }
+
+    assert indexes["idx_authorship_note_rewrite_source"] == [
+        "repo_url",
+        "source_commit",
+    ]
+    assert indexes["idx_authorship_note_rewrite_target"] == [
+        "repo_url",
+        "target_commit",
+    ]
+
+
 def test_authorship_notes_defaults():
     """Test AuthorshipNotes creates with proper defaults"""
     note = AuthorshipNotes(

@@ -547,7 +547,7 @@ class AuthorshipNoteRewrite(ModelBase):
 
     id: Mapped[str] = mapped_column(String(20), primary_key=True, default=gen_xid)
     rewrite_id: Mapped[str] = mapped_column(String(200), nullable=False)
-    repo_url: Mapped[str] = mapped_column(String, nullable=False)
+    repo_url: Mapped[str] = mapped_column(String(400), nullable=False)
     operation: Mapped[str] = mapped_column(String(50), nullable=False)
     branch: Mapped[str] = mapped_column(String(100), nullable=False)
     original_head: Mapped[str] = mapped_column(String(40), nullable=True)
@@ -569,7 +569,7 @@ class AuthorshipNoteRewriteMapping(ModelBase):
 
     id: Mapped[str] = mapped_column(String(20), primary_key=True, default=gen_xid)
     rewrite_id: Mapped[str] = mapped_column(String(200), nullable=False)
-    repo_url: Mapped[str] = mapped_column(String, nullable=False)
+    repo_url: Mapped[str] = mapped_column(String(400), nullable=False)
     source_commit: Mapped[str] = mapped_column(String(40), nullable=False)
     target_commit: Mapped[str] = mapped_column(String(40), nullable=False)
     source_note_blob_oid: Mapped[str] = mapped_column(String(40), nullable=True)
