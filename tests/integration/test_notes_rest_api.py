@@ -619,7 +619,7 @@ class TestSearchNotes:
 
 class TestRewriteNotes:
     def test_authorship_notes_rewrite_creates_target_and_supersedes_source(self, client):
-        client.put('/worker/authorship_notes',
+        setup_response = client.put('/worker/authorship_notes',
             json={
                 "repo_url": "https://github.com/test/repo.git",
                 "branch": "main",
@@ -631,6 +631,7 @@ class TestRewriteNotes:
             },
             headers={'X-API-Key': 'test-key'}
         )
+        assert setup_response.status_code == 200
 
         response = client.post('/worker/authorship_notes/rewrite',
             json={
@@ -682,7 +683,7 @@ class TestRewriteNotes:
         assert json.loads(source_audit.data)['data']['status'] == "superseded"
 
     def test_notes_rewrite_alias_matches_canonical_endpoint(self, client):
-        client.put('/worker/notes',
+        setup_response = client.put('/worker/notes',
             json={
                 "repo_url": "https://github.com/test/repo.git",
                 "branch": "main",
@@ -694,6 +695,7 @@ class TestRewriteNotes:
             },
             headers={'X-API-Key': 'test-key'}
         )
+        assert setup_response.status_code == 200
 
         response = client.post('/worker/notes/rewrite',
             json={
@@ -718,7 +720,93 @@ class TestRewriteNotes:
         )
 
         assert response.status_code == 200
-        assert json.loads(response.data)['data']['created'] == 1
+        data = json.loads(response.data)
+        assert data['ok'] is True
+        assert data['data']['created'] == 1
+        assert data['data']['superseded'] == 1
+        assert data['data']['conflicts'] == []
+
+    def test_rewrite_empty_request_body_returns_400(self, client):
+        response = client.post('/worker/notes/rewrite',
+            headers={'X-API-Key': 'test-key'}
+        )
+
+        assert response.status_code == 400
+        assert json.loads(response.data)['ok'] is False
+
+    def test_rewrite_non_object_json_body_returns_400(self, client):
+        response = client.post('/worker/notes/rewrite',
+            json=[
+                "repo_url",
+                "rewrite_id",
+                "operation",
+                "branch",
+                "mappings",
+            ],
+            headers={'X-API-Key': 'test-key'}
+        )
+
+        assert response.status_code == 400
+        assert json.loads(response.data)['ok'] is False
+
+    def test_rewrite_missing_required_field_returns_400(self, client):
+        response = client.post('/worker/notes/rewrite',
+            json={
+                "repo_url": "https://github.com/test/repo.git",
+                "rewrite_id": "rewrite-missing-field",
+                "operation": "rebase_conflict_manual_commit",
+                "mappings": [],
+            },
+            headers={'X-API-Key': 'test-key'}
+        )
+
+        assert response.status_code == 400
+        data = json.loads(response.data)
+        assert data['ok'] is False
+        assert "branch" in data['error']
+
+    def test_rewrite_invalid_operation_returns_400(self, client):
+        response = client.post('/worker/notes/rewrite',
+            json={
+                "repo_url": "https://github.com/test/repo.git",
+                "rewrite_id": "rewrite-invalid-operation",
+                "operation": "unsupported_operation",
+                "branch": "main",
+                "mappings": [
+                    {
+                        "source_commit": "invalid-operation-source",
+                        "target_commit": "invalid-operation-target",
+                        "target_content": "target content",
+                        "author_name": "Target User",
+                        "author_email": "target@example.com",
+                        "disposition": "supersede_source"
+                    }
+                ],
+            },
+            headers={'X-API-Key': 'test-key'}
+        )
+
+        assert response.status_code == 400
+        data = json.loads(response.data)
+        assert data['ok'] is False
+        assert "不支持的 rewrite operation" in data['error']
+
+    def test_rewrite_empty_mappings_returns_400(self, client):
+        response = client.post('/worker/notes/rewrite',
+            json={
+                "repo_url": "https://github.com/test/repo.git",
+                "rewrite_id": "rewrite-empty-mappings",
+                "operation": "rebase_conflict_manual_commit",
+                "branch": "main",
+                "mappings": [],
+            },
+            headers={'X-API-Key': 'test-key'}
+        )
+
+        assert response.status_code == 400
+        data = json.loads(response.data)
+        assert data['ok'] is False
+        assert "mappings" in data['error']
 
     def test_rewrite_id_conflict_returns_409(self, client):
         payload = {
@@ -739,7 +827,11 @@ class TestRewriteNotes:
                 }
             ]
         }
-        client.post('/worker/notes/rewrite', json=payload, headers={'X-API-Key': 'test-key'})
+        setup_response = client.post('/worker/notes/rewrite',
+            json=payload,
+            headers={'X-API-Key': 'test-key'}
+        )
+        assert setup_response.status_code == 200
 
         changed = dict(payload)
         changed["new_head"] = "target-two"
@@ -762,7 +854,7 @@ class TestRewriteNotes:
         assert json.loads(response.data)['ok'] is False
 
     def test_rewrite_filters_source_from_default_reads(self, client):
-        client.put('/worker/notes',
+        setup_response = client.put('/worker/notes',
             json={
                 "repo_url": "https://github.com/test/repo.git",
                 "branch": "main",
@@ -774,8 +866,9 @@ class TestRewriteNotes:
             },
             headers={'X-API-Key': 'test-key'}
         )
+        assert setup_response.status_code == 200
 
-        client.post('/worker/notes/rewrite',
+        rewrite_response = client.post('/worker/notes/rewrite',
             json={
                 "repo_url": "https://github.com/test/repo.git",
                 "rewrite_id": "rewrite-filter",
@@ -796,6 +889,7 @@ class TestRewriteNotes:
             },
             headers={'X-API-Key': 'test-key'}
         )
+        assert rewrite_response.status_code == 200
 
         default_get = client.post('/worker/notes/get',
             json={

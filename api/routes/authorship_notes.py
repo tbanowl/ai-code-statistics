@@ -316,6 +316,8 @@ def rewrite_notes():
         payload = request.get_json(silent=True)
         if not payload:
             return error_response("请求体不能为空", 400)
+        if not isinstance(payload, dict):
+            return error_response("请求体必须是对象", 400)
 
         required_fields = [
             "repo_url",
