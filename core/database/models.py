@@ -496,6 +496,12 @@ class AuthorshipNotes(ModelBase):
         Index("idx_authorship_notes_repo_url", "repo_url"),
         Index("idx_authorship_notes_repo_commit", "repo_url", "commit_sha"),
         Index("idx_authorship_notes_repo_change_seq", "repo_url", "change_seq"),
+        Index("idx_authorship_notes_repo_status", "repo_url", "status"),
+        Index(
+            "idx_authorship_notes_superseded_rewrite",
+            "repo_url",
+            "superseded_rewrite_id",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(20), primary_key=True, default=gen_xid)
@@ -510,6 +516,10 @@ class AuthorshipNotes(ModelBase):
     commit_date: Mapped[int] = mapped_column(BigInteger, nullable=True, index=True)
     content_hash: Mapped[str] = mapped_column(String(71), nullable=False)
     change_seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    superseded_by: Mapped[str] = mapped_column(String(40), nullable=True)
+    superseded_at: Mapped[int] = mapped_column(BigInteger, nullable=True)
+    superseded_rewrite_id: Mapped[str] = mapped_column(String(200), nullable=True)
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
     updated_at: Mapped[int] = mapped_column(
         BigInteger, nullable=False, default=now_ts, onupdate=now_ts
@@ -522,6 +532,50 @@ class AuthorshipNotesSeq(ModelBase):
     __tablename__ = "authorship_notes_seq"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
+
+
+class AuthorshipNoteRewrite(ModelBase):
+    """作者注释重写操作记录表"""
+
+    __tablename__ = "authorship_note_rewrites"
+
+    __table_args__ = (
+        UniqueConstraint("rewrite_id"),
+        Index("idx_authorship_note_rewrites_repo", "repo_url"),
+    )
+
+    id: Mapped[str] = mapped_column(String(20), primary_key=True, default=gen_xid)
+    rewrite_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    repo_url: Mapped[str] = mapped_column(String, nullable=False)
+    operation: Mapped[str] = mapped_column(String(50), nullable=False)
+    branch: Mapped[str] = mapped_column(String(100), nullable=False)
+    original_head: Mapped[str] = mapped_column(String(40), nullable=True)
+    new_head: Mapped[str] = mapped_column(String(40), nullable=True)
+    request_hash: Mapped[str] = mapped_column(String(71), nullable=False)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
+
+
+class AuthorshipNoteRewriteMapping(ModelBase):
+    """作者注释重写提交映射表"""
+
+    __tablename__ = "authorship_note_rewrite_mappings"
+
+    __table_args__ = (
+        UniqueConstraint("repo_url", "source_commit", "target_commit", "rewrite_id"),
+        Index("idx_authorship_note_rewrite_source", "repo_url", "source_commit"),
+        Index("idx_authorship_note_rewrite_target", "repo_url", "target_commit"),
+    )
+
+    id: Mapped[str] = mapped_column(String(20), primary_key=True, default=gen_xid)
+    rewrite_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    repo_url: Mapped[str] = mapped_column(String, nullable=False)
+    source_commit: Mapped[str] = mapped_column(String(40), nullable=False)
+    target_commit: Mapped[str] = mapped_column(String(40), nullable=False)
+    source_note_blob_oid: Mapped[str] = mapped_column(String(40), nullable=True)
+    target_note_blob_oid: Mapped[str] = mapped_column(String(40), nullable=True)
+    target_content_hash: Mapped[str] = mapped_column(String(71), nullable=False)
+    disposition: Mapped[str] = mapped_column(String(50), nullable=False)
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
 
 

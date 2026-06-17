@@ -2,7 +2,11 @@
 Tests for AuthorshipNotes model
 """
 
-from core.database.models import AuthorshipNotes
+from core.database.models import (
+    AuthorshipNoteRewrite,
+    AuthorshipNoteRewriteMapping,
+    AuthorshipNotes,
+)
 
 
 def test_authorship_notes_model_columns():
@@ -20,8 +24,13 @@ def test_authorship_notes_model_columns():
         "author_email",
         "note_content",
         "commit_time",
+        "commit_date",
         "content_hash",
         "change_seq",
+        "status",
+        "superseded_by",
+        "superseded_at",
+        "superseded_rewrite_id",
         "created_at",
         "updated_at",
     }
@@ -51,11 +60,60 @@ def test_authorship_notes_indexes():
     """Test AuthorshipNotes has required indexes"""
     indexes = {i.name for i in getattr(AuthorshipNotes.__table__, "indexes", set())}
 
-    assert "idx_authorship_notes_repo_url" in indexes, "Missing repo_url index"
-    assert "idx_authorship_notes_repo_commit" in indexes, "Missing repo_commit index"
-    assert (
-        "idx_authorship_notes_repo_change_seq" in indexes
-    ), "Missing repo_change_seq index"
+    expected_indexes = {
+        "idx_authorship_notes_repo_url",
+        "idx_authorship_notes_repo_commit",
+        "idx_authorship_notes_repo_change_seq",
+        "idx_authorship_notes_repo_status",
+        "idx_authorship_notes_superseded_rewrite",
+    }
+
+    assert expected_indexes.issubset(indexes), (
+        f"Missing indexes: {expected_indexes - indexes}"
+    )
+
+
+def test_authorship_note_rewrite_model_columns():
+    """Test AuthorshipNoteRewrite has all required columns"""
+    columns = {c.name for c in AuthorshipNoteRewrite.__table__.columns}
+
+    expected_columns = {
+        "id",
+        "rewrite_id",
+        "repo_url",
+        "operation",
+        "branch",
+        "original_head",
+        "new_head",
+        "request_hash",
+        "created_at",
+    }
+
+    assert expected_columns.issubset(columns), (
+        f"Missing columns: {expected_columns - columns}"
+    )
+
+
+def test_authorship_note_rewrite_mapping_model_columns():
+    """Test AuthorshipNoteRewriteMapping has all required columns"""
+    columns = {c.name for c in AuthorshipNoteRewriteMapping.__table__.columns}
+
+    expected_columns = {
+        "id",
+        "rewrite_id",
+        "repo_url",
+        "source_commit",
+        "target_commit",
+        "source_note_blob_oid",
+        "target_note_blob_oid",
+        "target_content_hash",
+        "disposition",
+        "created_at",
+    }
+
+    assert expected_columns.issubset(columns), (
+        f"Missing columns: {expected_columns - columns}"
+    )
 
 
 def test_authorship_notes_defaults():
