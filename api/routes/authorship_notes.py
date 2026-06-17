@@ -58,6 +58,13 @@ def optional_bool(payload, field):
     raise ValueError(field)
 
 
+def include_superseded_flag(payload):
+    """从查询参数优先解析 include_superseded，缺省回退到请求体。"""
+    if "include_superseded" in request.args:
+        return optional_bool(request.args, "include_superseded")
+    return optional_bool(payload, "include_superseded")
+
+
 @git_notes_rest_bp.route("", methods=["PUT"])
 @authorship_notes_rest_bp.route("", methods=["PUT"])
 @auth_required
@@ -159,7 +166,7 @@ def get_note():
             return error_response("缺少必需字段: repo_url 和 commit_sha", 400)
 
         try:
-            include_superseded = optional_bool(payload, "include_superseded")
+            include_superseded = include_superseded_flag(payload)
         except ValueError as exc:
             return error_response(f"无效的布尔参数: {exc}", 400)
 
@@ -233,7 +240,7 @@ def batch_get_notes():
             return error_response("缺少必需字段: repo_url 和 commit_shas", 400)
 
         try:
-            include_superseded = optional_bool(payload, "include_superseded")
+            include_superseded = include_superseded_flag(payload)
         except ValueError as exc:
             return error_response(f"无效的布尔参数: {exc}", 400)
 
@@ -327,7 +334,7 @@ def list_notes():
         try:
             since_change_seq = optional_non_negative_int(payload, "since_change_seq")
             limit = optional_non_negative_int(payload, "limit")
-            include_superseded = optional_bool(payload, "include_superseded")
+            include_superseded = include_superseded_flag(payload)
         except ValueError as exc:
             if str(exc) == "include_superseded":
                 return error_response(f"无效的布尔参数: {exc}", 400)
@@ -377,7 +384,7 @@ def search_notes():
             return error_response("缺少必需字段: repo_url 和 pattern", 400)
 
         try:
-            include_superseded = optional_bool(payload, "include_superseded")
+            include_superseded = include_superseded_flag(payload)
         except ValueError as exc:
             return error_response(f"无效的布尔参数: {exc}", 400)
 

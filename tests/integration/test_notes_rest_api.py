@@ -12,7 +12,8 @@ from sqlalchemy import create_engine
 
 import core.config.loader as loader
 import core.database.base as database_base
-from core.database.base import Base
+from core.database.base import Base, session_scope
+from core.database.models import AuthorshipNotes
 from core.services.notes_service import NotesRestService
 
 
@@ -52,6 +53,7 @@ def app():
     app.config['TESTING'] = True
     app.config['DEBUG'] = True
     app.register_blueprint(authorship_notes.git_notes_rest_bp)
+    app.register_blueprint(authorship_notes.authorship_notes_rest_bp)
 
     yield app
 
@@ -75,6 +77,38 @@ def app():
 def client(app):
     """Create test client"""
     return app.test_client()
+
+
+def mark_note_superseded(commit_sha: str):
+    from api.routes import authorship_notes
+
+    with session_scope(authorship_notes.service.database.engine) as session:
+        note = (
+            session.query(AuthorshipNotes)
+            .filter(AuthorshipNotes.commit_sha == commit_sha)
+            .one()
+        )
+        note.status = "superseded"
+        note.superseded_by = f"{commit_sha}-target"
+        note.superseded_rewrite_id = f"rewrite-{commit_sha}"
+        note.superseded_at = 1710000000000
+
+
+def create_active_and_superseded_notes(client):
+    for sha in ["active-sha", "superseded-sha"]:
+        client.put('/worker/notes',
+            json={
+                "repo_url": "https://github.com/test/repo.git",
+                "branch": "main",
+                "commit_sha": sha,
+                "original_commit_sha": None,
+                "author_name": "Test",
+                "author_email": "test@test.com",
+                "content": f"content {sha}",
+            },
+            headers={'X-API-Key': 'test-key'}
+        )
+    mark_note_superseded("superseded-sha")
 
 
 class TestCreateOrUpdateNote:
@@ -440,6 +474,63 @@ class TestListNotes:
         assert data['data']['items'][0]['change_seq'] > 0
         assert data['data']['next_change_seq'] == data['data']['items'][0]['change_seq']
         assert data['data']['has_more'] is True
+
+    def test_notes_list_filters_superseded_by_default_and_reads_query_flag(self, client):
+        create_active_and_superseded_notes(client)
+
+        default_response = client.post('/worker/notes/list',
+            json={"repo_url": "https://github.com/test/repo.git"},
+            headers={'X-API-Key': 'test-key'}
+        )
+        audit_response = client.post('/worker/notes/list?include_superseded=true',
+            json={"repo_url": "https://github.com/test/repo.git"},
+            headers={'X-API-Key': 'test-key'}
+        )
+
+        assert default_response.status_code == 200
+        default_data = json.loads(default_response.data)
+        assert default_data['data']['commit_shas'] == ["active-sha"]
+
+        assert audit_response.status_code == 200
+        audit_data = json.loads(audit_response.data)
+        assert set(audit_data['data']['commit_shas']) == {
+            "active-sha",
+            "superseded-sha",
+        }
+
+    def test_authorship_notes_list_filters_superseded_by_default_and_reads_query_flag(self, client):
+        create_active_and_superseded_notes(client)
+
+        default_response = client.post('/worker/authorship_notes/list',
+            json={"repo_url": "https://github.com/test/repo.git"},
+            headers={'X-API-Key': 'test-key'}
+        )
+        audit_response = client.post('/worker/authorship_notes/list?include_superseded=true',
+            json={"repo_url": "https://github.com/test/repo.git"},
+            headers={'X-API-Key': 'test-key'}
+        )
+
+        assert default_response.status_code == 200
+        default_data = json.loads(default_response.data)
+        assert default_data['data']['commit_shas'] == ["active-sha"]
+
+        assert audit_response.status_code == 200
+        audit_data = json.loads(audit_response.data)
+        assert set(audit_data['data']['commit_shas']) == {
+            "active-sha",
+            "superseded-sha",
+        }
+
+    def test_list_notes_rejects_invalid_include_superseded_query_param(self, client):
+        response = client.post('/worker/notes/list?include_superseded=maybe',
+            json={"repo_url": "https://github.com/test/repo.git"},
+            headers={'X-API-Key': 'test-key'}
+        )
+
+        assert response.status_code == 400
+        data = json.loads(response.data)
+        assert data['ok'] is False
+        assert "include_superseded" in data['error']
 
     def test_batch_get_returns_hash_and_change_seq(self, client):
         client.put('/worker/notes',
