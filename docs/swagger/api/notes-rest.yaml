@@ -216,6 +216,70 @@ paths:
                       updated:
                         type: integer
 
+  /worker/authorship_notes/rewrite:
+    post:
+      summary: Rewrite authorship notes
+      security:
+        - bearerAuth: []
+        - apiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RewriteNotesRequest'
+      responses:
+        '200':
+          description: Rewrite processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RewriteNotesResponse'
+        '400':
+          description: Invalid rewrite request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: rewrite_id exists with different request content
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /worker/notes/rewrite:
+    post:
+      summary: Rewrite authorship notes compatibility alias
+      security:
+        - bearerAuth: []
+        - apiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RewriteNotesRequest'
+      responses:
+        '200':
+          description: Rewrite processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RewriteNotesResponse'
+        '400':
+          description: Invalid rewrite request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: rewrite_id exists with different request content
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /worker/notes/list:
     post:
       summary: List all commit SHAs with notes for a repository
@@ -313,6 +377,108 @@ components:
         updated_at:
           type: integer
           format: int64
+
+    RewriteNotesRequest:
+      type: object
+      required:
+        - repo_url
+        - rewrite_id
+        - operation
+        - branch
+        - mappings
+      properties:
+        repo_url:
+          type: string
+        rewrite_id:
+          type: string
+        operation:
+          type: string
+          enum:
+            - rebase_conflict_manual_commit
+            - rebase_complete
+            - cherry_pick_complete
+            - amend
+        branch:
+          type: string
+        original_head:
+          type: string
+          nullable: true
+        new_head:
+          type: string
+          nullable: true
+        mappings:
+          type: array
+          items:
+            $ref: '#/components/schemas/RewriteNotesMapping'
+
+    RewriteNotesMapping:
+      type: object
+      required:
+        - source_commit
+        - target_commit
+        - target_content
+        - author_name
+        - author_email
+        - disposition
+      properties:
+        source_commit:
+          type: string
+        target_commit:
+          type: string
+        source_note_blob_oid:
+          type: string
+          nullable: true
+        target_note_blob_oid:
+          type: string
+          nullable: true
+        target_content:
+          type: string
+        commit_time:
+          type: integer
+          format: int64
+        author_name:
+          type: string
+        author_email:
+          type: string
+        disposition:
+          type: string
+          enum:
+            - supersede_source
+
+    RewriteNotesResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        data:
+          type: object
+          properties:
+            created:
+              type: integer
+            updated:
+              type: integer
+            superseded:
+              type: integer
+            unchanged:
+              type: integer
+            conflicts:
+              type: array
+              items:
+                $ref: '#/components/schemas/RewriteNotesConflict'
+
+    RewriteNotesConflict:
+      type: object
+      properties:
+        source_commit:
+          type: string
+        target_commit:
+          type: string
+        reason:
+          type: string
+        remote_content_hash:
+          type: string
+        local_content_hash:
+          type: string
 
     Error:
       type: object

@@ -38,6 +38,58 @@
 
 ---
 
+# Authorship Notes Rewrite API
+
+## Rewrite Notes
+
+**接口**: `POST /worker/authorship_notes/rewrite`
+
+兼容别名: `POST /worker/notes/rewrite`
+
+普通新 note 仍使用 `/worker/authorship_notes/push`。当客户端执行 rebase、cherry-pick、amend 等历史改写并明确知道 source commit 被 target commit 替代时，必须调用 `/rewrite`，因为 `/push` 只能 upsert target note，不能把 source note 标记为 superseded。
+
+**请求**:
+
+```json
+{
+  "repo_url": "https://github.com/org/repo",
+  "rewrite_id": "sha256:client-generated-id",
+  "operation": "rebase_conflict_manual_commit",
+  "branch": "main",
+  "original_head": "B",
+  "new_head": "D",
+  "mappings": [
+    {
+      "source_commit": "B",
+      "target_commit": "D",
+      "target_content": "authorship note content",
+      "author_name": "User",
+      "author_email": "user@example.com",
+      "disposition": "supersede_source"
+    }
+  ]
+}
+```
+
+**响应**:
+
+```json
+{
+  "ok": true,
+  "data": {
+    "created": 1,
+    "updated": 0,
+    "superseded": 1,
+    "unchanged": 0,
+    "conflicts": []
+  }
+}
+```
+
+同一个 `rewrite_id` 和同一个规范化请求体可以安全重放。相同 `rewrite_id` 携带不同请求体时返回 `409`。
+
+---
+
 # OAuth API
 
 ## 安全要求
