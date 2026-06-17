@@ -3,7 +3,7 @@
 import hashlib
 import json
 from typing import Any, Dict, List, Optional
-from sqlalchemy import create_engine, or_, select
+from sqlalchemy import create_engine, or_, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
@@ -576,12 +576,29 @@ class AuthorshipNotesDatabase(BaseDatabase):
                     }
                 )
         else:
-            source.status = "superseded"
-            source.superseded_by = target_commit
-            source.superseded_rewrite_id = rewrite_id
-            source.superseded_at = now_ts()
-            source.change_seq = self._next_change_seq(session)
-            result["superseded"] += 1
+            if self._supersede_active_source_note(
+                session=session,
+                repo_url=repo_url,
+                source_commit=source_commit,
+                target_commit=target_commit,
+                rewrite_id=rewrite_id,
+            ):
+                result["superseded"] += 1
+            else:
+                session.expire(source)
+                if (
+                    source.superseded_by == target_commit
+                    and source.superseded_rewrite_id == rewrite_id
+                ):
+                    pass
+                else:
+                    result["conflicts"].append(
+                        {
+                            "source_commit": source_commit,
+                            "target_commit": target_commit,
+                            "reason": "source_already_superseded",
+                        }
+                    )
 
         if mapping_exists is None:
             session.add(
@@ -597,6 +614,30 @@ class AuthorshipNotesDatabase(BaseDatabase):
                     disposition=mapping["disposition"],
                 )
             )
+
+    def _supersede_active_source_note(
+        self,
+        *,
+        session,
+        repo_url: str,
+        source_commit: str,
+        target_commit: str,
+        rewrite_id: str,
+    ) -> bool:
+        updated = session.execute(
+            update(AuthorshipNotes)
+            .where(AuthorshipNotes.repo_url == repo_url)
+            .where(AuthorshipNotes.commit_sha == source_commit)
+            .where(active_authorship_note_filter())
+            .values(
+                status="superseded",
+                superseded_by=target_commit,
+                superseded_rewrite_id=rewrite_id,
+                superseded_at=now_ts(),
+                change_seq=self._next_change_seq(session),
+            )
+        )
+        return updated.rowcount == 1
 
     def list_notes(
         self,

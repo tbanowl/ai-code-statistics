@@ -883,6 +883,72 @@ def test_rewrite_already_superseded_source_persists_new_target_and_mapping_edge(
     assert rewrite_row_counts(service) == {"rewrites": 1, "mappings": 1}
 
 
+def test_rewrite_concurrent_source_supersede_reports_conflict_without_overwrite(
+    service,
+    monkeypatch,
+):
+    service.create_or_update_note(
+        repo_url="https://github.com/test/repo.git",
+        branch="main",
+        commit_sha="source-sha",
+        original_commit_sha=None,
+        content="source content",
+        author_name="Source User",
+        author_email="source@example.com",
+    )
+    original_supersede = service.database._supersede_active_source_note
+
+    def concurrent_supersede(**kwargs):
+        kwargs["session"].query(AuthorshipNotes).filter(
+            AuthorshipNotes.repo_url == "github.com/test/repo",
+            AuthorshipNotes.commit_sha == "source-sha",
+        ).update(
+            {
+                "status": "superseded",
+                "superseded_by": "winning-target",
+                "superseded_rewrite_id": "winning-rewrite",
+                "superseded_at": 1710000000000,
+            },
+            synchronize_session=False,
+        )
+        return original_supersede(**kwargs)
+
+    monkeypatch.setattr(
+        service.database,
+        "_supersede_active_source_note",
+        concurrent_supersede,
+    )
+
+    result = service.rewrite_notes(
+        **rewrite_payload(
+            "losing target content",
+            rewrite_id="losing-rewrite",
+            target_commit="losing-target",
+        )
+    )
+
+    assert result == {
+        "created": 1,
+        "updated": 0,
+        "superseded": 0,
+        "unchanged": 0,
+        "conflicts": [
+            {
+                "source_commit": "source-sha",
+                "target_commit": "losing-target",
+                "reason": "source_already_superseded",
+            }
+        ],
+    }
+    source = service.get_note(
+        repo_url="https://github.com/test/repo.git",
+        commit_sha="source-sha",
+        include_superseded=True,
+    )
+    assert source.superseded_by == "winning-target"
+    assert source.superseded_rewrite_id == "winning-rewrite"
+
+
 def test_rewrite_replay_repairs_target_content_drift(service):
     service.create_or_update_note(
         repo_url="https://github.com/test/repo.git",
