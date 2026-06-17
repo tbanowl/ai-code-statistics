@@ -1,6 +1,7 @@
 """Authorship Notes 数据库操作类。"""
 
 import hashlib
+import json
 from typing import Any, Dict, List, Optional
 from sqlalchemy import create_engine, or_, select
 from sqlalchemy.engine import Engine
@@ -8,15 +9,65 @@ from sqlalchemy.engine import Engine
 from core.config import loader
 from core.utils.repo_url import normalize_repo_url
 from .base import session_scope, BaseDatabase
-from .models import AuthorshipNotes, AuthorshipNotesSeq, gen_xid
+from .models import (
+    AuthorshipNoteRewrite,
+    AuthorshipNoteRewriteMapping,
+    AuthorshipNotes,
+    AuthorshipNotesSeq,
+    gen_xid,
+    now_ts,
+)
 
 
 DEFAULT_LIST_LIMIT = 1000
 MAX_LIST_LIMIT = 5000
+ALLOWED_REWRITE_OPERATIONS = {
+    "rebase_conflict_manual_commit",
+    "rebase_complete",
+    "cherry_pick_complete",
+    "amend",
+}
+ALLOWED_REWRITE_DISPOSITIONS = {"supersede_source"}
+
+
+class RewriteValidationError(ValueError):
+    pass
+
+
+class RewriteIdConflictError(ValueError):
+    pass
 
 
 def compute_note_content_hash(content: str) -> str:
     return "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def compute_rewrite_request_hash(
+    *,
+    repo_url: str,
+    rewrite_id: str,
+    operation: str,
+    branch: str,
+    original_head: str | None,
+    new_head: str | None,
+    mappings: list[dict],
+) -> str:
+    normalized = {
+        "repo_url": normalize_repo_url(repo_url),
+        "rewrite_id": rewrite_id,
+        "operation": operation,
+        "branch": branch,
+        "original_head": original_head,
+        "new_head": new_head,
+        "mappings": mappings,
+    }
+    body = json.dumps(
+        normalized,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
 def normalize_list_limit(limit: int | None) -> int:
@@ -258,6 +309,248 @@ class AuthorshipNotesDatabase(BaseDatabase):
                 updated += 1
 
         return {"created": created, "updated": updated, "unchanged": unchanged}
+
+    def rewrite_notes(
+        self,
+        *,
+        repo_url: str,
+        rewrite_id: str,
+        operation: str,
+        branch: str,
+        original_head: str | None,
+        new_head: str | None,
+        mappings: list[dict],
+    ) -> Dict[str, Any]:
+        repo_url = normalize_repo_url(repo_url)
+        self._validate_rewrite_request(
+            repo_url=repo_url,
+            rewrite_id=rewrite_id,
+            operation=operation,
+            branch=branch,
+            mappings=mappings,
+        )
+        request_hash = compute_rewrite_request_hash(
+            repo_url=repo_url,
+            rewrite_id=rewrite_id,
+            operation=operation,
+            branch=branch,
+            original_head=original_head,
+            new_head=new_head,
+            mappings=mappings,
+        )
+
+        result = {
+            "created": 0,
+            "updated": 0,
+            "superseded": 0,
+            "unchanged": 0,
+            "conflicts": [],
+        }
+
+        with session_scope(self.engine) as session:
+            existing = session.execute(
+                select(AuthorshipNoteRewrite).where(
+                    AuthorshipNoteRewrite.rewrite_id == rewrite_id
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                if existing.request_hash != request_hash:
+                    raise RewriteIdConflictError(
+                        "rewrite_id already exists with different request content"
+                    )
+            else:
+                rewrite = AuthorshipNoteRewrite(
+                    id=gen_xid(),
+                    rewrite_id=rewrite_id,
+                    repo_url=repo_url,
+                    operation=operation,
+                    branch=branch,
+                    original_head=original_head,
+                    new_head=new_head,
+                    request_hash=request_hash,
+                )
+                session.add(rewrite)
+                session.flush()
+
+            for mapping in mappings:
+                self._apply_rewrite_mapping(
+                    session=session,
+                    repo_url=repo_url,
+                    rewrite_id=rewrite_id,
+                    branch=branch,
+                    mapping=mapping,
+                    result=result,
+                )
+
+        return result
+
+    def _validate_rewrite_request(
+        self,
+        *,
+        repo_url: str,
+        rewrite_id: str,
+        operation: str,
+        branch: str,
+        mappings: list[dict],
+    ) -> None:
+        if not repo_url:
+            raise RewriteValidationError("缺少必需字段: repo_url")
+        if not rewrite_id:
+            raise RewriteValidationError("缺少必需字段: rewrite_id")
+        if operation not in ALLOWED_REWRITE_OPERATIONS:
+            raise RewriteValidationError(f"不支持的 rewrite operation: {operation}")
+        if not branch:
+            raise RewriteValidationError("缺少必需字段: branch")
+        if not isinstance(mappings, list) or not mappings:
+            raise RewriteValidationError("mappings 必须是非空数组")
+        required_mapping_fields = {
+            "source_commit",
+            "target_commit",
+            "target_content",
+            "author_name",
+            "author_email",
+            "disposition",
+        }
+        for mapping in mappings:
+            missing = required_mapping_fields - set(mapping)
+            if missing:
+                raise RewriteValidationError(
+                    f"mapping 缺少必需字段: {', '.join(sorted(missing))}"
+                )
+            if mapping["disposition"] not in ALLOWED_REWRITE_DISPOSITIONS:
+                raise RewriteValidationError(
+                    f"不支持的 disposition: {mapping['disposition']}"
+                )
+            if mapping["source_commit"] == mapping["target_commit"]:
+                raise RewriteValidationError("source_commit 不能等于 target_commit")
+
+    def _apply_rewrite_mapping(
+        self,
+        *,
+        session,
+        repo_url: str,
+        rewrite_id: str,
+        branch: str,
+        mapping: dict,
+        result: dict,
+    ) -> None:
+        source_commit = mapping["source_commit"]
+        target_commit = mapping["target_commit"]
+        target_content = mapping["target_content"]
+        target_hash = compute_note_content_hash(target_content)
+
+        target_stmt = select(AuthorshipNotes).where(
+            AuthorshipNotes.repo_url == repo_url,
+            AuthorshipNotes.commit_sha == target_commit,
+        )
+        target = session.execute(target_stmt).scalar_one_or_none()
+
+        mapping_exists = session.execute(
+            select(AuthorshipNoteRewriteMapping).where(
+                AuthorshipNoteRewriteMapping.repo_url == repo_url,
+                AuthorshipNoteRewriteMapping.source_commit == source_commit,
+                AuthorshipNoteRewriteMapping.target_commit == target_commit,
+                AuthorshipNoteRewriteMapping.rewrite_id == rewrite_id,
+            )
+        ).scalar_one_or_none()
+
+        if (
+            target is not None
+            and target.content_hash != target_hash
+            and mapping_exists is None
+        ):
+            result["conflicts"].append(
+                {
+                    "source_commit": source_commit,
+                    "target_commit": target_commit,
+                    "reason": "target_note_conflict",
+                    "remote_content_hash": target.content_hash,
+                    "local_content_hash": target_hash,
+                }
+            )
+            return
+
+        if target is None:
+            target = AuthorshipNotes(
+                id=gen_xid(),
+                repo_url=repo_url,
+                branch=branch,
+                commit_sha=target_commit,
+                note_blob_oid=mapping.get("target_note_blob_oid"),
+                note_content=target_content,
+                content_hash=target_hash,
+                change_seq=self._next_change_seq(session),
+                author_name=mapping["author_name"],
+                author_email=mapping["author_email"],
+                commit_time=mapping.get("commit_time"),
+                status="active",
+            )
+            session.add(target)
+            result["created"] += 1
+        elif target.content_hash == target_hash:
+            result["unchanged"] += 1
+        else:
+            target.branch = branch
+            target.note_blob_oid = mapping.get("target_note_blob_oid")
+            target.note_content = target_content
+            target.content_hash = target_hash
+            target.change_seq = self._next_change_seq(session)
+            target.author_name = mapping["author_name"]
+            target.author_email = mapping["author_email"]
+            target.commit_time = mapping.get("commit_time")
+            target.status = "active"
+            result["updated"] += 1
+
+        source = session.execute(
+            select(AuthorshipNotes).where(
+                AuthorshipNotes.repo_url == repo_url,
+                AuthorshipNotes.commit_sha == source_commit,
+            )
+        ).scalar_one_or_none()
+        if source is None:
+            result["conflicts"].append(
+                {
+                    "source_commit": source_commit,
+                    "target_commit": target_commit,
+                    "reason": "source_note_missing",
+                }
+            )
+        elif source.status == "superseded":
+            if (
+                source.superseded_by == target_commit
+                and source.superseded_rewrite_id == rewrite_id
+            ):
+                pass
+            else:
+                result["conflicts"].append(
+                    {
+                        "source_commit": source_commit,
+                        "target_commit": target_commit,
+                        "reason": "source_already_superseded",
+                    }
+                )
+        else:
+            source.status = "superseded"
+            source.superseded_by = target_commit
+            source.superseded_rewrite_id = rewrite_id
+            source.superseded_at = now_ts()
+            source.change_seq = self._next_change_seq(session)
+            result["superseded"] += 1
+
+        if mapping_exists is None:
+            session.add(
+                AuthorshipNoteRewriteMapping(
+                    id=gen_xid(),
+                    rewrite_id=rewrite_id,
+                    repo_url=repo_url,
+                    source_commit=source_commit,
+                    target_commit=target_commit,
+                    source_note_blob_oid=mapping.get("source_note_blob_oid"),
+                    target_note_blob_oid=mapping.get("target_note_blob_oid"),
+                    target_content_hash=target_hash,
+                    disposition=mapping["disposition"],
+                )
+            )
 
     def list_notes(
         self,

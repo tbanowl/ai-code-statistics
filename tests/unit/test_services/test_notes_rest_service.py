@@ -553,3 +553,209 @@ def test_batch_list_and_search_exclude_superseded_by_default(service):
         include_superseded=True,
     )
     assert set(audit_search) == {"active-sha", "superseded-sha"}
+
+
+import pytest
+from core.database.authorship_notes_db import (
+    RewriteIdConflictError,
+    compute_rewrite_request_hash,
+)
+
+
+def rewrite_payload(content: str = "target content"):
+    return {
+        "repo_url": "https://github.com/test/repo.git",
+        "rewrite_id": "rewrite-1",
+        "operation": "rebase_conflict_manual_commit",
+        "branch": "main",
+        "original_head": "source-sha",
+        "new_head": "target-sha",
+        "mappings": [
+            {
+                "source_commit": "source-sha",
+                "target_commit": "target-sha",
+                "target_content": content,
+                "author_name": "Target User",
+                "author_email": "target@example.com",
+                "disposition": "supersede_source",
+            }
+        ],
+    }
+
+
+def test_rewrite_request_hash_normalizes_repo_url():
+    first = compute_rewrite_request_hash(
+        repo_url="https://github.com/test/repo.git",
+        rewrite_id="rewrite-1",
+        operation="rebase_conflict_manual_commit",
+        branch="main",
+        original_head="source-sha",
+        new_head="target-sha",
+        mappings=rewrite_payload()["mappings"],
+    )
+    second = compute_rewrite_request_hash(
+        repo_url="git@github.com:test/repo.git",
+        rewrite_id="rewrite-1",
+        operation="rebase_conflict_manual_commit",
+        branch="main",
+        original_head="source-sha",
+        new_head="target-sha",
+        mappings=rewrite_payload()["mappings"],
+    )
+    assert first == second
+    assert first.startswith("sha256:")
+
+
+def test_rewrite_creates_target_and_supersedes_source(service):
+    service.create_or_update_note(
+        repo_url="https://github.com/test/repo.git",
+        branch="main",
+        commit_sha="source-sha",
+        original_commit_sha=None,
+        content="source content",
+        author_name="Source User",
+        author_email="source@example.com",
+    )
+
+    result = service.rewrite_notes(**rewrite_payload())
+
+    assert result == {
+        "created": 1,
+        "updated": 0,
+        "superseded": 1,
+        "unchanged": 0,
+        "conflicts": [],
+    }
+    assert service.get_note(
+        repo_url="https://github.com/test/repo.git",
+        commit_sha="source-sha",
+    ) is None
+    source = service.get_note(
+        repo_url="https://github.com/test/repo.git",
+        commit_sha="source-sha",
+        include_superseded=True,
+    )
+    target = service.get_note(
+        repo_url="https://github.com/test/repo.git",
+        commit_sha="target-sha",
+    )
+    assert source.status == "superseded"
+    assert source.superseded_by == "target-sha"
+    assert source.superseded_rewrite_id == "rewrite-1"
+    assert target.note_content == "target content"
+    assert target.status == "active"
+
+
+def test_rewrite_replay_is_idempotent(service):
+    service.create_or_update_note(
+        repo_url="https://github.com/test/repo.git",
+        branch="main",
+        commit_sha="source-sha",
+        original_commit_sha=None,
+        content="source content",
+        author_name="Source User",
+        author_email="source@example.com",
+    )
+
+    first = service.rewrite_notes(**rewrite_payload())
+    second = service.rewrite_notes(**rewrite_payload())
+
+    assert first["created"] == 1
+    assert first["superseded"] == 1
+    assert second == {
+        "created": 0,
+        "updated": 0,
+        "superseded": 0,
+        "unchanged": 1,
+        "conflicts": [],
+    }
+
+
+def test_rewrite_replay_repairs_target_content_drift(service):
+    service.create_or_update_note(
+        repo_url="https://github.com/test/repo.git",
+        branch="main",
+        commit_sha="source-sha",
+        original_commit_sha=None,
+        content="source content",
+        author_name="Source User",
+        author_email="source@example.com",
+    )
+    service.rewrite_notes(**rewrite_payload("target content"))
+    service.batch_push_notes(
+        repo_url="https://github.com/test/repo.git",
+        notes_data=[
+            {
+                "branch": "main",
+                "commit_sha": "target-sha",
+                "original_commit_sha": None,
+                "author_name": "Drift User",
+                "author_email": "drift@example.com",
+                "content": "drifted target content",
+            }
+        ],
+    )
+
+    result = service.rewrite_notes(**rewrite_payload("target content"))
+
+    assert result == {
+        "created": 0,
+        "updated": 1,
+        "superseded": 0,
+        "unchanged": 0,
+        "conflicts": [],
+    }
+    target = service.get_note(
+        repo_url="https://github.com/test/repo.git",
+        commit_sha="target-sha",
+    )
+    assert target.note_content == "target content"
+
+
+def test_rewrite_same_id_different_request_raises_conflict(service):
+    service.create_or_update_note(
+        repo_url="https://github.com/test/repo.git",
+        branch="main",
+        commit_sha="source-sha",
+        original_commit_sha=None,
+        content="source content",
+        author_name="Source User",
+        author_email="source@example.com",
+    )
+    service.rewrite_notes(**rewrite_payload("target content"))
+
+    changed = rewrite_payload("different target content")
+    with pytest.raises(RewriteIdConflictError):
+        service.rewrite_notes(**changed)
+
+
+def test_rewrite_target_note_conflict_does_not_overwrite(service):
+    service.create_or_update_note(
+        repo_url="https://github.com/test/repo.git",
+        branch="main",
+        commit_sha="source-sha",
+        original_commit_sha=None,
+        content="source content",
+        author_name="Source User",
+        author_email="source@example.com",
+    )
+    service.create_or_update_note(
+        repo_url="https://github.com/test/repo.git",
+        branch="main",
+        commit_sha="target-sha",
+        original_commit_sha=None,
+        content="remote target content",
+        author_name="Remote User",
+        author_email="remote@example.com",
+    )
+
+    result = service.rewrite_notes(**rewrite_payload("local target content"))
+
+    assert result["created"] == 0
+    assert result["superseded"] == 0
+    assert result["conflicts"][0]["reason"] == "target_note_conflict"
+    target = service.get_note(
+        repo_url="https://github.com/test/repo.git",
+        commit_sha="target-sha",
+    )
+    assert target.note_content == "remote target content"

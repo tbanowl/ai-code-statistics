@@ -71,6 +71,27 @@ class NotesRestService:
         repo_url = normalize_repo_url(repo_url)
         return self.database.batch_push_notes(repo_url=repo_url, notes_data=notes_data)
 
+    def rewrite_notes(
+        self,
+        repo_url: str,
+        rewrite_id: str,
+        operation: str,
+        branch: str,
+        original_head: str | None,
+        new_head: str | None,
+        mappings: list[dict],
+    ):
+        repo_url = normalize_repo_url(repo_url)
+        return self.database.rewrite_notes(
+            repo_url=repo_url,
+            rewrite_id=rewrite_id,
+            operation=operation,
+            branch=branch,
+            original_head=original_head,
+            new_head=new_head,
+            mappings=mappings,
+        )
+
     def list_notes(
         self,
         repo_url: str,
