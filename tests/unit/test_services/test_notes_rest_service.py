@@ -523,6 +523,10 @@ def test_batch_list_and_search_exclude_superseded_by_default(service):
         "active-sha",
         "superseded-sha",
     }
+    audit_batch_superseded = next(
+        note for note in audit_batch["notes"] if note["commit_sha"] == "superseded-sha"
+    )
+    assert audit_batch_superseded["superseded_at"] == 1710000000000
 
     listed = service.list_notes(repo_url="https://github.com/test/repo.git")
     assert listed["commit_shas"] == ["active-sha"]
@@ -532,6 +536,10 @@ def test_batch_list_and_search_exclude_superseded_by_default(service):
         include_superseded=True,
     )
     assert set(audit_listed["commit_shas"]) == {"active-sha", "superseded-sha"}
+    audit_listed_superseded = next(
+        item for item in audit_listed["items"] if item["commit_sha"] == "superseded-sha"
+    )
+    assert audit_listed_superseded["superseded_at"] == 1710000000000
 
     search = service.search_notes(
         repo_url="https://github.com/test/repo.git",

@@ -183,6 +183,7 @@ class AuthorshipNotesDatabase(BaseDatabase):
                     "change_seq": note.change_seq,
                     "status": note.status,
                     "superseded_by": note.superseded_by,
+                    "superseded_at": note.superseded_at,
                     "superseded_rewrite_id": note.superseded_rewrite_id,
                 }
                 for note in results
@@ -293,6 +294,7 @@ class AuthorshipNotesDatabase(BaseDatabase):
                 "updated_at": note.updated_at,
                 "status": note.status,
                 "superseded_by": note.superseded_by,
+                "superseded_at": note.superseded_at,
                 "superseded_rewrite_id": note.superseded_rewrite_id,
             }
             for note in page_rows
