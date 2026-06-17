@@ -7,6 +7,7 @@ import re
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from core.config.logging import Logger
+from core.database.authorship_notes_db import active_authorship_note_filter
 from core.services.git_clone_service import GitCloneService
 
 
@@ -223,6 +224,7 @@ class BlameStatsService:
                     AuthorshipNotes.repo_url == repo_url,
                     AuthorshipNotes.commit_sha == commit_sha,
                 )
+                .filter(active_authorship_note_filter())
                 .all()
             )
 
@@ -680,6 +682,7 @@ class BlameStatsService:
                     AuthorshipNotes.repo_url == repo_url,
                     AuthorshipNotes.commit_sha == commit_sha,
                 )
+                .filter(active_authorship_note_filter())
                 .first()
             )
 

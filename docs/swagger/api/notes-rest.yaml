@@ -74,6 +74,14 @@ paths:
       security:
         - bearerAuth: []
         - apiKeyAuth: []
+      parameters:
+        - name: include_superseded
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: Include notes superseded by rewrite operations.
       requestBody:
         required: true
         content:
@@ -88,6 +96,10 @@ paths:
                   type: string
                 commit_sha:
                   type: string
+                include_superseded:
+                  type: boolean
+                  default: false
+                  description: Include notes superseded by rewrite operations.
       responses:
         '200':
           description: Note found
@@ -113,6 +125,14 @@ paths:
       security:
         - bearerAuth: []
         - apiKeyAuth: []
+      parameters:
+        - name: include_superseded
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: Include notes superseded by rewrite operations.
       requestBody:
         required: true
         content:
@@ -129,6 +149,10 @@ paths:
                   type: array
                   items:
                     type: string
+                include_superseded:
+                  type: boolean
+                  default: false
+                  description: Include notes superseded by rewrite operations.
       responses:
         '200':
           description: Batch notes retrieved
@@ -151,6 +175,26 @@ paths:
                               type: string
                             content:
                               type: string
+                            content_hash:
+                              type: string
+                            change_seq:
+                              type: integer
+                            status:
+                              type: string
+                              nullable: true
+                              enum:
+                                - active
+                                - superseded
+                            superseded_by:
+                              type: string
+                              nullable: true
+                            superseded_at:
+                              type: integer
+                              format: int64
+                              nullable: true
+                            superseded_rewrite_id:
+                              type: string
+                              nullable: true
                       missing:
                         type: array
                         items:
@@ -216,12 +260,84 @@ paths:
                       updated:
                         type: integer
 
+  /worker/authorship_notes/rewrite:
+    post:
+      summary: Rewrite authorship notes
+      security:
+        - bearerAuth: []
+        - apiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RewriteNotesRequest'
+      responses:
+        '200':
+          description: Rewrite processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RewriteNotesResponse'
+        '400':
+          description: Invalid rewrite request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: rewrite_id exists with different request content
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /worker/notes/rewrite:
+    post:
+      summary: Rewrite authorship notes compatibility alias
+      security:
+        - bearerAuth: []
+        - apiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RewriteNotesRequest'
+      responses:
+        '200':
+          description: Rewrite processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RewriteNotesResponse'
+        '400':
+          description: Invalid rewrite request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: rewrite_id exists with different request content
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /worker/notes/list:
     post:
       summary: List all commit SHAs with notes for a repository
       security:
         - bearerAuth: []
         - apiKeyAuth: []
+      parameters:
+        - name: include_superseded
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: Include notes superseded by rewrite operations.
       requestBody:
         required: true
         content:
@@ -233,6 +349,17 @@ paths:
               properties:
                 repo_url:
                   type: string
+                since_commit_time:
+                  type: integer
+                  format: int64
+                since_change_seq:
+                  type: integer
+                limit:
+                  type: integer
+                include_superseded:
+                  type: boolean
+                  default: false
+                  description: Include notes superseded by rewrite operations.
       responses:
         '200':
           description: List of commit SHAs
@@ -250,6 +377,14 @@ paths:
                         type: array
                         items:
                           type: string
+                      items:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/NoteSummary'
+                      next_change_seq:
+                        type: integer
+                      has_more:
+                        type: boolean
 
   /worker/notes/search:
     post:
@@ -257,6 +392,14 @@ paths:
       security:
         - bearerAuth: []
         - apiKeyAuth: []
+      parameters:
+        - name: include_superseded
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: Include notes superseded by rewrite operations.
       requestBody:
         required: true
         content:
@@ -272,6 +415,10 @@ paths:
                 pattern:
                   type: string
                   description: Search pattern (uses LIKE)
+                include_superseded:
+                  type: boolean
+                  default: false
+                  description: Include notes superseded by rewrite operations.
       responses:
         '200':
           description: Matching commit SHAs
@@ -313,6 +460,181 @@ components:
         updated_at:
           type: integer
           format: int64
+        status:
+          type: string
+          nullable: true
+          enum:
+            - active
+            - superseded
+        superseded_by:
+          type: string
+          nullable: true
+        superseded_at:
+          type: integer
+          format: int64
+          nullable: true
+        superseded_rewrite_id:
+          type: string
+          nullable: true
+
+    NoteSummary:
+      type: object
+      properties:
+        commit_sha:
+          type: string
+        content_hash:
+          type: string
+        change_seq:
+          type: integer
+        updated_at:
+          type: integer
+          format: int64
+        status:
+          type: string
+          nullable: true
+          enum:
+            - active
+            - superseded
+        superseded_by:
+          type: string
+          nullable: true
+        superseded_at:
+          type: integer
+          format: int64
+          nullable: true
+        superseded_rewrite_id:
+          type: string
+          nullable: true
+
+    RewriteNotesRequest:
+      type: object
+      required:
+        - repo_url
+        - rewrite_id
+        - operation
+        - branch
+        - mappings
+      properties:
+        repo_url:
+          type: string
+          minLength: 1
+        rewrite_id:
+          type: string
+          minLength: 1
+        operation:
+          type: string
+          minLength: 1
+          enum:
+            - rebase_conflict_manual_commit
+            - rebase_complete
+            - cherry_pick_complete
+            - amend
+        branch:
+          type: string
+          minLength: 1
+        original_head:
+          type: string
+          nullable: true
+        new_head:
+          type: string
+          nullable: true
+        mappings:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/RewriteNotesMapping'
+
+    RewriteNotesMapping:
+      type: object
+      required:
+        - source_commit
+        - target_commit
+        - target_content
+        - author_name
+        - author_email
+        - disposition
+      properties:
+        source_commit:
+          type: string
+          minLength: 1
+          description: Source commit being replaced; must differ from target_commit.
+        target_commit:
+          type: string
+          minLength: 1
+          description: Target commit that replaces source_commit; must differ from source_commit.
+        source_note_blob_oid:
+          type: string
+          minLength: 1
+          nullable: true
+        target_note_blob_oid:
+          type: string
+          minLength: 1
+          nullable: true
+        target_content:
+          type: string
+          minLength: 1
+        commit_time:
+          type: integer
+          format: int64
+        author_name:
+          type: string
+          minLength: 1
+        author_email:
+          type: string
+          minLength: 1
+        disposition:
+          type: string
+          minLength: 1
+          enum:
+            - supersede_source
+
+    RewriteNotesResponse:
+      type: object
+      required:
+        - ok
+        - data
+      properties:
+        ok:
+          type: boolean
+        data:
+          type: object
+          required:
+            - created
+            - updated
+            - superseded
+            - unchanged
+            - conflicts
+          properties:
+            created:
+              type: integer
+            updated:
+              type: integer
+            superseded:
+              type: integer
+            unchanged:
+              type: integer
+            conflicts:
+              type: array
+              items:
+                $ref: '#/components/schemas/RewriteNotesConflict'
+
+    RewriteNotesConflict:
+      type: object
+      properties:
+        source_commit:
+          type: string
+        target_commit:
+          type: string
+        reason:
+          type: string
+          enum:
+            - target_note_conflict
+            - source_note_missing
+            - source_already_superseded
+        remote_content_hash:
+          type: string
+        local_content_hash:
+          type: string
 
     Error:
       type: object

@@ -2,6 +2,7 @@
 
 import time
 from core.config.logging import Logger
+from core.database.authorship_notes_db import active_authorship_note_filter
 from core.database.base import BaseDatabase, session_scope
 from core.database.models import (
     AuthorshipNotes,
@@ -626,6 +627,7 @@ class BlameStatsDatabase(BaseDatabase):
             notes = (
                 session.query(AuthorshipNotes)
                 .filter(AuthorshipNotes.commit_sha.in_(commit_shas))
+                .filter(active_authorship_note_filter())
                 .all()
             )
 

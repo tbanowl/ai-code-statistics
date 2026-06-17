@@ -44,20 +44,52 @@ class NotesRestService:
             author_email=author_email,
         )
 
-    def get_note(self, repo_url: str, commit_sha: str):
+    def get_note(
+        self, repo_url: str, commit_sha: str, include_superseded: bool = False
+    ):
         """获取单个 note"""
         repo_url = normalize_repo_url(repo_url)
-        return self.database.get_note(repo_url=repo_url, commit_sha=commit_sha)
+        return self.database.get_note(
+            repo_url=repo_url,
+            commit_sha=commit_sha,
+            include_superseded=include_superseded,
+        )
 
-    def batch_get_notes(self, repo_url: str, commit_shas: list):
+    def batch_get_notes(
+        self, repo_url: str, commit_shas: list, include_superseded: bool = False
+    ):
         """批量获取 notes"""
         repo_url = normalize_repo_url(repo_url)
-        return self.database.batch_get_notes(repo_url=repo_url, commit_shas=commit_shas)
+        return self.database.batch_get_notes(
+            repo_url=repo_url,
+            commit_shas=commit_shas,
+            include_superseded=include_superseded,
+        )
 
     def batch_push_notes(self, repo_url: str, notes_data: list):
         """批量推送（创建/更新）notes"""
         repo_url = normalize_repo_url(repo_url)
         return self.database.batch_push_notes(repo_url=repo_url, notes_data=notes_data)
+
+    def rewrite_notes(
+        self,
+        repo_url: str,
+        rewrite_id: str,
+        operation: str,
+        branch: str,
+        original_head: str | None,
+        new_head: str | None,
+        mappings: list[dict],
+    ):
+        return self.database.rewrite_notes(
+            repo_url=repo_url,
+            rewrite_id=rewrite_id,
+            operation=operation,
+            branch=branch,
+            original_head=original_head,
+            new_head=new_head,
+            mappings=mappings,
+        )
 
     def list_notes(
         self,
@@ -65,6 +97,7 @@ class NotesRestService:
         since_commit_time: int | None = None,
         since_change_seq: int | None = None,
         limit: int | None = None,
+        include_superseded: bool = False,
     ):
         repo_url = normalize_repo_url(repo_url)
         return self.database.list_notes(
@@ -72,12 +105,19 @@ class NotesRestService:
             since_commit_time=since_commit_time,
             since_change_seq=since_change_seq,
             limit=limit,
+            include_superseded=include_superseded,
         )
 
-    def search_notes(self, repo_url: str, pattern: str):
+    def search_notes(
+        self, repo_url: str, pattern: str, include_superseded: bool = False
+    ):
         """在注释内容中搜索"""
         repo_url = normalize_repo_url(repo_url)
-        return self.database.search_notes(repo_url=repo_url, pattern=pattern)
+        return self.database.search_notes(
+            repo_url=repo_url,
+            pattern=pattern,
+            include_superseded=include_superseded,
+        )
 
     def close(self):
         self.database.close()

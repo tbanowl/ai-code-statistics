@@ -1,6 +1,10 @@
 from flask import Blueprint, request, jsonify
 from core.config.logging import Logger
 from core.middleware.auth import auth_required
+from core.database.authorship_notes_db import (
+    RewriteIdConflictError,
+    RewriteValidationError,
+)
 from core.services.notes_service import NotesRestService
 
 git_notes_rest_bp = Blueprint("notes_rest", __name__, url_prefix="/worker/notes")
@@ -40,6 +44,29 @@ def optional_non_negative_int(payload, field):
     if parsed < 0:
         raise ValueError(field)
     return parsed
+
+
+def optional_bool(payload, field):
+    """解析可选布尔请求字段。"""
+    value = payload.get(field)
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    raise ValueError(field)
+
+
+def include_superseded_flag(payload):
+    """从查询参数优先解析 include_superseded，缺省回退到请求体。"""
+    if "include_superseded" in request.args:
+        return optional_bool(request.args, "include_superseded")
+    return optional_bool(payload, "include_superseded")
 
 
 @git_notes_rest_bp.route("", methods=["PUT"])
@@ -142,8 +169,15 @@ def get_note():
         if "repo_url" not in payload or "commit_sha" not in payload:
             return error_response("缺少必需字段: repo_url 和 commit_sha", 400)
 
+        try:
+            include_superseded = include_superseded_flag(payload)
+        except ValueError as exc:
+            return error_response(f"无效的布尔参数: {exc}", 400)
+
         note = get_notes_service().get_note(
-            repo_url=payload["repo_url"], commit_sha=payload["commit_sha"]
+            repo_url=payload["repo_url"],
+            commit_sha=payload["commit_sha"],
+            include_superseded=include_superseded,
         )
 
         if not note:
@@ -159,6 +193,10 @@ def get_note():
                 "content": note.note_content,
                 "created_at": note.created_at,
                 "updated_at": note.updated_at,
+                "status": note.status,
+                "superseded_by": note.superseded_by,
+                "superseded_at": note.superseded_at,
+                "superseded_rewrite_id": note.superseded_rewrite_id,
             }
         )
 
@@ -205,8 +243,15 @@ def batch_get_notes():
         if "repo_url" not in payload or "commit_shas" not in payload:
             return error_response("缺少必需字段: repo_url 和 commit_shas", 400)
 
+        try:
+            include_superseded = include_superseded_flag(payload)
+        except ValueError as exc:
+            return error_response(f"无效的布尔参数: {exc}", 400)
+
         result = get_notes_service().batch_get_notes(
-            repo_url=payload["repo_url"], commit_shas=payload["commit_shas"]
+            repo_url=payload["repo_url"],
+            commit_shas=payload["commit_shas"],
+            include_superseded=include_superseded,
         )
 
         return ok_response(result)
@@ -263,6 +308,48 @@ def batch_push_notes():
         return error_response(f"服务器错误", 500)
 
 
+@git_notes_rest_bp.route("/rewrite", methods=["POST"])
+@authorship_notes_rest_bp.route("/rewrite", methods=["POST"])
+@auth_required
+def rewrite_notes():
+    try:
+        payload = request.get_json(silent=True)
+        if not payload:
+            return error_response("请求体不能为空", 400)
+        if not isinstance(payload, dict):
+            return error_response("请求体必须是对象", 400)
+
+        required_fields = [
+            "repo_url",
+            "rewrite_id",
+            "operation",
+            "branch",
+            "mappings",
+        ]
+        for field in required_fields:
+            if field not in payload:
+                return error_response(f"缺少必需字段: {field}", 400)
+
+        result = get_notes_service().rewrite_notes(
+            repo_url=payload["repo_url"],
+            rewrite_id=payload["rewrite_id"],
+            operation=payload["operation"],
+            branch=payload["branch"],
+            original_head=payload.get("original_head"),
+            new_head=payload.get("new_head"),
+            mappings=payload["mappings"],
+        )
+        return ok_response(result)
+
+    except RewriteIdConflictError as exc:
+        return error_response(str(exc), 409)
+    except RewriteValidationError as exc:
+        return error_response(str(exc), 400)
+    except Exception as e:
+        logger.error("rewrite authorship notes 错误", exc_info=e)
+        return error_response("服务器错误", 500)
+
+
 @git_notes_rest_bp.route("/list", methods=["POST"])
 @authorship_notes_rest_bp.route("/list", methods=["POST"])
 @auth_required
@@ -293,7 +380,10 @@ def list_notes():
         try:
             since_change_seq = optional_non_negative_int(payload, "since_change_seq")
             limit = optional_non_negative_int(payload, "limit")
+            include_superseded = include_superseded_flag(payload)
         except ValueError as exc:
+            if str(exc) == "include_superseded":
+                return error_response(f"无效的布尔参数: {exc}", 400)
             return error_response(f"无效的整数参数: {exc}", 400)
 
         result = get_notes_service().list_notes(
@@ -301,6 +391,7 @@ def list_notes():
             since_commit_time=payload.get("since_commit_time"),
             since_change_seq=since_change_seq,
             limit=limit,
+            include_superseded=include_superseded,
         )
 
         return ok_response(result)
@@ -338,8 +429,15 @@ def search_notes():
         if "repo_url" not in payload or "pattern" not in payload:
             return error_response("缺少必需字段: repo_url 和 pattern", 400)
 
+        try:
+            include_superseded = include_superseded_flag(payload)
+        except ValueError as exc:
+            return error_response(f"无效的布尔参数: {exc}", 400)
+
         commit_shas = get_notes_service().search_notes(
-            repo_url=payload["repo_url"], pattern=payload["pattern"]
+            repo_url=payload["repo_url"],
+            pattern=payload["pattern"],
+            include_superseded=include_superseded,
         )
 
         return ok_response({"commit_shas": commit_shas})

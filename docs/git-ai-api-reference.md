@@ -38,6 +38,75 @@
 
 ---
 
+# Authorship Notes Rewrite API
+
+## Rewrite Notes
+
+**接口**: `POST /worker/authorship_notes/rewrite`
+
+兼容别名: `POST /worker/notes/rewrite`
+
+普通新 note 仍使用 `/worker/authorship_notes/push`。当客户端执行 rebase、cherry-pick、amend 等历史改写并明确知道 source commit 被 target commit 替代时，必须调用 `/rewrite`，因为 `/push` 只能 upsert target note，不能把 source note 标记为 superseded。
+
+**请求**:
+
+```json
+{
+  "repo_url": "https://github.com/org/repo",
+  "rewrite_id": "sha256:client-generated-id",
+  "operation": "rebase_conflict_manual_commit",
+  "branch": "main",
+  "original_head": "B",
+  "new_head": "D",
+  "mappings": [
+    {
+      "source_commit": "B",
+      "target_commit": "D",
+      "target_content": "authorship note content",
+      "author_name": "User",
+      "author_email": "user@example.com",
+      "disposition": "supersede_source"
+    }
+  ]
+}
+```
+
+**响应**:
+
+冲突不使用非 2xx 状态码表达；它们会出现在 `200` 响应的 `data.conflicts` 数组中，因此一个响应可以同时包含已创建/已更新/已 supersede 的结果和部分失败的 mapping。
+
+```json
+{
+  "ok": true,
+  "data": {
+    "created": 1,
+    "updated": 0,
+    "superseded": 1,
+    "unchanged": 0,
+    "conflicts": []
+  }
+}
+```
+
+`conflicts[].reason` 可能为：
+
+| reason | 说明 |
+|--------|------|
+| `target_note_conflict` | target note 已存在但内容不同；服务端不会覆盖 target，也不会把 source 标记为 superseded。 |
+| `source_note_missing` | target/mapping 可能已经写入，但 source note 不存在，因此无法 supersede source。 |
+| `source_already_superseded` | target/mapping 可能已经写入，但 source 已经被其他 rewrite/target supersede。 |
+
+同一个 `rewrite_id` 和同一个规范化请求体可以安全重放。重放时计数可能不同于首次执行，例如已写入的 target note 可能计入 `unchanged`。相同 `rewrite_id` 携带不同请求体时返回 `409`：
+
+```json
+{
+  "ok": false,
+  "error": "rewrite_id already exists with different request content"
+}
+```
+
+---
+
 # OAuth API
 
 ## 安全要求

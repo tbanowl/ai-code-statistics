@@ -12,7 +12,8 @@ from sqlalchemy import create_engine
 
 import core.config.loader as loader
 import core.database.base as database_base
-from core.database.base import Base
+from core.database.base import Base, session_scope
+from core.database.models import AuthorshipNotes
 from core.services.notes_service import NotesRestService
 
 
@@ -52,6 +53,7 @@ def app():
     app.config['TESTING'] = True
     app.config['DEBUG'] = True
     app.register_blueprint(authorship_notes.git_notes_rest_bp)
+    app.register_blueprint(authorship_notes.authorship_notes_rest_bp)
 
     yield app
 
@@ -75,6 +77,38 @@ def app():
 def client(app):
     """Create test client"""
     return app.test_client()
+
+
+def mark_note_superseded(commit_sha: str):
+    from api.routes import authorship_notes
+
+    with session_scope(authorship_notes.service.database.engine) as session:
+        note = (
+            session.query(AuthorshipNotes)
+            .filter(AuthorshipNotes.commit_sha == commit_sha)
+            .one()
+        )
+        note.status = "superseded"
+        note.superseded_by = f"{commit_sha}-target"
+        note.superseded_rewrite_id = f"rewrite-{commit_sha}"
+        note.superseded_at = 1710000000000
+
+
+def create_active_and_superseded_notes(client):
+    for sha in ["active-sha", "superseded-sha"]:
+        client.put('/worker/notes',
+            json={
+                "repo_url": "https://github.com/test/repo.git",
+                "branch": "main",
+                "commit_sha": sha,
+                "original_commit_sha": None,
+                "author_name": "Test",
+                "author_email": "test@test.com",
+                "content": f"content {sha}",
+            },
+            headers={'X-API-Key': 'test-key'}
+        )
+    mark_note_superseded("superseded-sha")
 
 
 class TestCreateOrUpdateNote:
@@ -441,6 +475,63 @@ class TestListNotes:
         assert data['data']['next_change_seq'] == data['data']['items'][0]['change_seq']
         assert data['data']['has_more'] is True
 
+    def test_notes_list_filters_superseded_by_default_and_reads_query_flag(self, client):
+        create_active_and_superseded_notes(client)
+
+        default_response = client.post('/worker/notes/list',
+            json={"repo_url": "https://github.com/test/repo.git"},
+            headers={'X-API-Key': 'test-key'}
+        )
+        audit_response = client.post('/worker/notes/list?include_superseded=true',
+            json={"repo_url": "https://github.com/test/repo.git"},
+            headers={'X-API-Key': 'test-key'}
+        )
+
+        assert default_response.status_code == 200
+        default_data = json.loads(default_response.data)
+        assert default_data['data']['commit_shas'] == ["active-sha"]
+
+        assert audit_response.status_code == 200
+        audit_data = json.loads(audit_response.data)
+        assert set(audit_data['data']['commit_shas']) == {
+            "active-sha",
+            "superseded-sha",
+        }
+
+    def test_authorship_notes_list_filters_superseded_by_default_and_reads_query_flag(self, client):
+        create_active_and_superseded_notes(client)
+
+        default_response = client.post('/worker/authorship_notes/list',
+            json={"repo_url": "https://github.com/test/repo.git"},
+            headers={'X-API-Key': 'test-key'}
+        )
+        audit_response = client.post('/worker/authorship_notes/list?include_superseded=true',
+            json={"repo_url": "https://github.com/test/repo.git"},
+            headers={'X-API-Key': 'test-key'}
+        )
+
+        assert default_response.status_code == 200
+        default_data = json.loads(default_response.data)
+        assert default_data['data']['commit_shas'] == ["active-sha"]
+
+        assert audit_response.status_code == 200
+        audit_data = json.loads(audit_response.data)
+        assert set(audit_data['data']['commit_shas']) == {
+            "active-sha",
+            "superseded-sha",
+        }
+
+    def test_list_notes_rejects_invalid_include_superseded_query_param(self, client):
+        response = client.post('/worker/notes/list?include_superseded=maybe',
+            json={"repo_url": "https://github.com/test/repo.git"},
+            headers={'X-API-Key': 'test-key'}
+        )
+
+        assert response.status_code == 400
+        data = json.loads(response.data)
+        assert data['ok'] is False
+        assert "include_superseded" in data['error']
+
     def test_batch_get_returns_hash_and_change_seq(self, client):
         client.put('/worker/notes',
             json={
@@ -524,3 +615,324 @@ class TestSearchNotes:
         assert response.status_code == 200
         data = json.loads(response.data)
         assert data['data']['commit_shas'] == []
+
+
+class TestRewriteNotes:
+    def test_authorship_notes_rewrite_creates_target_and_supersedes_source(self, client):
+        setup_response = client.put('/worker/authorship_notes',
+            json={
+                "repo_url": "https://github.com/test/repo.git",
+                "branch": "main",
+                "commit_sha": "source-sha",
+                "original_commit_sha": None,
+                "author_name": "Source User",
+                "author_email": "source@example.com",
+                "content": "source content"
+            },
+            headers={'X-API-Key': 'test-key'}
+        )
+        assert setup_response.status_code == 200
+
+        response = client.post('/worker/authorship_notes/rewrite',
+            json={
+                "repo_url": "https://github.com/test/repo.git",
+                "rewrite_id": "rewrite-api-1",
+                "operation": "rebase_conflict_manual_commit",
+                "branch": "main",
+                "original_head": "source-sha",
+                "new_head": "target-sha",
+                "mappings": [
+                    {
+                        "source_commit": "source-sha",
+                        "target_commit": "target-sha",
+                        "target_content": "target content",
+                        "author_name": "Target User",
+                        "author_email": "target@example.com",
+                        "disposition": "supersede_source"
+                    }
+                ]
+            },
+            headers={'X-API-Key': 'test-key'}
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert data['ok'] is True
+        assert data['data']['created'] == 1
+        assert data['data']['superseded'] == 1
+        assert data['data']['conflicts'] == []
+
+        source_default = client.post('/worker/authorship_notes/get',
+            json={
+                "repo_url": "https://github.com/test/repo.git",
+                "commit_sha": "source-sha"
+            },
+            headers={'X-API-Key': 'test-key'}
+        )
+        assert source_default.status_code == 404
+
+        source_audit = client.post('/worker/authorship_notes/get',
+            json={
+                "repo_url": "https://github.com/test/repo.git",
+                "commit_sha": "source-sha",
+                "include_superseded": True
+            },
+            headers={'X-API-Key': 'test-key'}
+        )
+        assert source_audit.status_code == 200
+        assert json.loads(source_audit.data)['data']['status'] == "superseded"
+
+    def test_notes_rewrite_alias_matches_canonical_endpoint(self, client):
+        setup_response = client.put('/worker/notes',
+            json={
+                "repo_url": "https://github.com/test/repo.git",
+                "branch": "main",
+                "commit_sha": "alias-source",
+                "original_commit_sha": None,
+                "author_name": "Source User",
+                "author_email": "source@example.com",
+                "content": "source content"
+            },
+            headers={'X-API-Key': 'test-key'}
+        )
+        assert setup_response.status_code == 200
+
+        response = client.post('/worker/notes/rewrite',
+            json={
+                "repo_url": "https://github.com/test/repo.git",
+                "rewrite_id": "rewrite-alias-1",
+                "operation": "rebase_conflict_manual_commit",
+                "branch": "main",
+                "original_head": "alias-source",
+                "new_head": "alias-target",
+                "mappings": [
+                    {
+                        "source_commit": "alias-source",
+                        "target_commit": "alias-target",
+                        "target_content": "alias target content",
+                        "author_name": "Target User",
+                        "author_email": "target@example.com",
+                        "disposition": "supersede_source"
+                    }
+                ]
+            },
+            headers={'X-API-Key': 'test-key'}
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert data['ok'] is True
+        assert data['data']['created'] == 1
+        assert data['data']['superseded'] == 1
+        assert data['data']['conflicts'] == []
+
+    def test_rewrite_empty_request_body_returns_400(self, client):
+        response = client.post('/worker/notes/rewrite',
+            headers={'X-API-Key': 'test-key'}
+        )
+
+        assert response.status_code == 400
+        assert json.loads(response.data)['ok'] is False
+
+    def test_rewrite_non_object_json_body_returns_400(self, client):
+        response = client.post('/worker/notes/rewrite',
+            json=[
+                "repo_url",
+                "rewrite_id",
+                "operation",
+                "branch",
+                "mappings",
+            ],
+            headers={'X-API-Key': 'test-key'}
+        )
+
+        assert response.status_code == 400
+        assert json.loads(response.data)['ok'] is False
+
+    def test_rewrite_missing_required_field_returns_400(self, client):
+        response = client.post('/worker/notes/rewrite',
+            json={
+                "repo_url": "https://github.com/test/repo.git",
+                "rewrite_id": "rewrite-missing-field",
+                "operation": "rebase_conflict_manual_commit",
+                "mappings": [],
+            },
+            headers={'X-API-Key': 'test-key'}
+        )
+
+        assert response.status_code == 400
+        data = json.loads(response.data)
+        assert data['ok'] is False
+        assert "branch" in data['error']
+
+    def test_rewrite_invalid_operation_returns_400(self, client):
+        response = client.post('/worker/notes/rewrite',
+            json={
+                "repo_url": "https://github.com/test/repo.git",
+                "rewrite_id": "rewrite-invalid-operation",
+                "operation": "unsupported_operation",
+                "branch": "main",
+                "mappings": [
+                    {
+                        "source_commit": "invalid-operation-source",
+                        "target_commit": "invalid-operation-target",
+                        "target_content": "target content",
+                        "author_name": "Target User",
+                        "author_email": "target@example.com",
+                        "disposition": "supersede_source"
+                    }
+                ],
+            },
+            headers={'X-API-Key': 'test-key'}
+        )
+
+        assert response.status_code == 400
+        data = json.loads(response.data)
+        assert data['ok'] is False
+        assert "不支持的 rewrite operation" in data['error']
+
+    def test_rewrite_empty_mappings_returns_400(self, client):
+        response = client.post('/worker/notes/rewrite',
+            json={
+                "repo_url": "https://github.com/test/repo.git",
+                "rewrite_id": "rewrite-empty-mappings",
+                "operation": "rebase_conflict_manual_commit",
+                "branch": "main",
+                "mappings": [],
+            },
+            headers={'X-API-Key': 'test-key'}
+        )
+
+        assert response.status_code == 400
+        data = json.loads(response.data)
+        assert data['ok'] is False
+        assert "mappings" in data['error']
+
+    def test_rewrite_id_conflict_returns_409(self, client):
+        payload = {
+            "repo_url": "https://github.com/test/repo.git",
+            "rewrite_id": "rewrite-conflict",
+            "operation": "rebase_conflict_manual_commit",
+            "branch": "main",
+            "original_head": "source-one",
+            "new_head": "target-one",
+            "mappings": [
+                {
+                    "source_commit": "source-one",
+                    "target_commit": "target-one",
+                    "target_content": "target content",
+                    "author_name": "Target User",
+                    "author_email": "target@example.com",
+                    "disposition": "supersede_source"
+                }
+            ]
+        }
+        setup_response = client.post('/worker/notes/rewrite',
+            json=payload,
+            headers={'X-API-Key': 'test-key'}
+        )
+        assert setup_response.status_code == 200
+
+        changed = dict(payload)
+        changed["new_head"] = "target-two"
+        changed["mappings"] = [
+            {
+                "source_commit": "source-one",
+                "target_commit": "target-two",
+                "target_content": "target content two",
+                "author_name": "Target User",
+                "author_email": "target@example.com",
+                "disposition": "supersede_source"
+            }
+        ]
+        response = client.post('/worker/notes/rewrite',
+            json=changed,
+            headers={'X-API-Key': 'test-key'}
+        )
+
+        assert response.status_code == 409
+        assert json.loads(response.data)['ok'] is False
+
+    def test_rewrite_filters_source_from_default_reads(self, client):
+        setup_response = client.put('/worker/notes',
+            json={
+                "repo_url": "https://github.com/test/repo.git",
+                "branch": "main",
+                "commit_sha": "filter-source",
+                "original_commit_sha": None,
+                "author_name": "Source User",
+                "author_email": "source@example.com",
+                "content": "shared rewrite content"
+            },
+            headers={'X-API-Key': 'test-key'}
+        )
+        assert setup_response.status_code == 200
+
+        rewrite_response = client.post('/worker/notes/rewrite',
+            json={
+                "repo_url": "https://github.com/test/repo.git",
+                "rewrite_id": "rewrite-filter",
+                "operation": "rebase_conflict_manual_commit",
+                "branch": "main",
+                "original_head": "filter-source",
+                "new_head": "filter-target",
+                "mappings": [
+                    {
+                        "source_commit": "filter-source",
+                        "target_commit": "filter-target",
+                        "target_content": "shared rewrite content target",
+                        "author_name": "Target User",
+                        "author_email": "target@example.com",
+                        "disposition": "supersede_source"
+                    }
+                ]
+            },
+            headers={'X-API-Key': 'test-key'}
+        )
+        assert rewrite_response.status_code == 200
+
+        default_get = client.post('/worker/notes/get',
+            json={
+                "repo_url": "https://github.com/test/repo.git",
+                "commit_sha": "filter-source"
+            },
+            headers={'X-API-Key': 'test-key'}
+        )
+        assert default_get.status_code == 404
+
+        audit_get = client.post('/worker/notes/get',
+            json={
+                "repo_url": "https://github.com/test/repo.git",
+                "commit_sha": "filter-source",
+                "include_superseded": True
+            },
+            headers={'X-API-Key': 'test-key'}
+        )
+        assert audit_get.status_code == 200
+        assert json.loads(audit_get.data)['data']['status'] == "superseded"
+
+        listed = client.post('/worker/notes/list',
+            json={"repo_url": "https://github.com/test/repo.git"},
+            headers={'X-API-Key': 'test-key'}
+        )
+        assert json.loads(listed.data)['data']['commit_shas'] == ["filter-target"]
+
+        batch = client.post('/worker/notes/batch',
+            json={
+                "repo_url": "https://github.com/test/repo.git",
+                "commit_shas": ["filter-source", "filter-target"]
+            },
+            headers={'X-API-Key': 'test-key'}
+        )
+        batch_data = json.loads(batch.data)['data']
+        assert {note["commit_sha"] for note in batch_data["notes"]} == {"filter-target"}
+        assert "filter-source" in batch_data["missing"]
+
+        searched = client.post('/worker/notes/search',
+            json={
+                "repo_url": "https://github.com/test/repo.git",
+                "pattern": "shared rewrite content"
+            },
+            headers={'X-API-Key': 'test-key'}
+        )
+        assert json.loads(searched.data)['data']['commit_shas'] == ["filter-target"]

@@ -71,8 +71,25 @@ def test_get_git_notes_batch_returns_matching_notes(blame_stats_db):
                 change_seq=2,
             )
         )
+        session.add(
+            AuthorshipNotes(
+                id="note-superseded",
+                repo_url="github.com/test/repo",
+                branch="main",
+                commit_sha="superseded",
+                note_blob_oid=None,
+                author_name="Test",
+                author_email="test@example.com",
+                note_content="superseded content",
+                content_hash="sha256:superseded",
+                change_seq=3,
+                status="superseded",
+                superseded_by="replacement",
+                superseded_rewrite_id="rewrite-1",
+            )
+        )
 
-    result = blame_stats_db.get_git_notes_batch(["abc123", "missing"])
+    result = blame_stats_db.get_git_notes_batch(["abc123", "missing", "superseded"])
 
     assert result == {"abc123": "note-a"}
 
