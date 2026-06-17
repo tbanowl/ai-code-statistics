@@ -74,6 +74,14 @@ paths:
       security:
         - bearerAuth: []
         - apiKeyAuth: []
+      parameters:
+        - name: include_superseded
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: Include notes superseded by rewrite operations.
       requestBody:
         required: true
         content:
@@ -88,6 +96,10 @@ paths:
                   type: string
                 commit_sha:
                   type: string
+                include_superseded:
+                  type: boolean
+                  default: false
+                  description: Include notes superseded by rewrite operations.
       responses:
         '200':
           description: Note found
@@ -113,6 +125,14 @@ paths:
       security:
         - bearerAuth: []
         - apiKeyAuth: []
+      parameters:
+        - name: include_superseded
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: Include notes superseded by rewrite operations.
       requestBody:
         required: true
         content:
@@ -129,6 +149,10 @@ paths:
                   type: array
                   items:
                     type: string
+                include_superseded:
+                  type: boolean
+                  default: false
+                  description: Include notes superseded by rewrite operations.
       responses:
         '200':
           description: Batch notes retrieved
@@ -151,6 +175,26 @@ paths:
                               type: string
                             content:
                               type: string
+                            content_hash:
+                              type: string
+                            change_seq:
+                              type: integer
+                            status:
+                              type: string
+                              nullable: true
+                              enum:
+                                - active
+                                - superseded
+                            superseded_by:
+                              type: string
+                              nullable: true
+                            superseded_at:
+                              type: integer
+                              format: int64
+                              nullable: true
+                            superseded_rewrite_id:
+                              type: string
+                              nullable: true
                       missing:
                         type: array
                         items:
@@ -286,6 +330,14 @@ paths:
       security:
         - bearerAuth: []
         - apiKeyAuth: []
+      parameters:
+        - name: include_superseded
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: Include notes superseded by rewrite operations.
       requestBody:
         required: true
         content:
@@ -297,6 +349,17 @@ paths:
               properties:
                 repo_url:
                   type: string
+                since_commit_time:
+                  type: integer
+                  format: int64
+                since_change_seq:
+                  type: integer
+                limit:
+                  type: integer
+                include_superseded:
+                  type: boolean
+                  default: false
+                  description: Include notes superseded by rewrite operations.
       responses:
         '200':
           description: List of commit SHAs
@@ -314,6 +377,14 @@ paths:
                         type: array
                         items:
                           type: string
+                      items:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/NoteSummary'
+                      next_change_seq:
+                        type: integer
+                      has_more:
+                        type: boolean
 
   /worker/notes/search:
     post:
@@ -321,6 +392,14 @@ paths:
       security:
         - bearerAuth: []
         - apiKeyAuth: []
+      parameters:
+        - name: include_superseded
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: Include notes superseded by rewrite operations.
       requestBody:
         required: true
         content:
@@ -336,6 +415,10 @@ paths:
                 pattern:
                   type: string
                   description: Search pattern (uses LIKE)
+                include_superseded:
+                  type: boolean
+                  default: false
+                  description: Include notes superseded by rewrite operations.
       responses:
         '200':
           description: Matching commit SHAs
@@ -377,6 +460,51 @@ components:
         updated_at:
           type: integer
           format: int64
+        status:
+          type: string
+          nullable: true
+          enum:
+            - active
+            - superseded
+        superseded_by:
+          type: string
+          nullable: true
+        superseded_at:
+          type: integer
+          format: int64
+          nullable: true
+        superseded_rewrite_id:
+          type: string
+          nullable: true
+
+    NoteSummary:
+      type: object
+      properties:
+        commit_sha:
+          type: string
+        content_hash:
+          type: string
+        change_seq:
+          type: integer
+        updated_at:
+          type: integer
+          format: int64
+        status:
+          type: string
+          nullable: true
+          enum:
+            - active
+            - superseded
+        superseded_by:
+          type: string
+          nullable: true
+        superseded_at:
+          type: integer
+          format: int64
+          nullable: true
+        superseded_rewrite_id:
+          type: string
+          nullable: true
 
     RewriteNotesRequest:
       type: object
