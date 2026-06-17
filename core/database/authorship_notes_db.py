@@ -2,7 +2,7 @@
 
 import hashlib
 from typing import Any, Dict, List, Optional
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, or_, select
 from sqlalchemy.engine import Engine
 
 from core.config import loader
@@ -23,6 +23,16 @@ def normalize_list_limit(limit: int | None) -> int:
     if limit is None or limit <= 0:
         return DEFAULT_LIST_LIMIT
     return min(limit, MAX_LIST_LIMIT)
+
+
+def active_authorship_note_filter():
+    return or_(AuthorshipNotes.status.is_(None), AuthorshipNotes.status == "active")
+
+
+def apply_active_filter(stmt, include_superseded: bool):
+    if include_superseded:
+        return stmt
+    return stmt.where(active_authorship_note_filter())
 
 
 class AuthorshipNotesDatabase(BaseDatabase):
@@ -116,7 +126,9 @@ class AuthorshipNotesDatabase(BaseDatabase):
             session.flush()
             return session.execute(stmt).scalar_one()
 
-    def get_note(self, repo_url: str, commit_sha: str) -> Optional[AuthorshipNotes]:
+    def get_note(
+        self, repo_url: str, commit_sha: str, include_superseded: bool = False
+    ) -> Optional[AuthorshipNotes]:
         """获取单个 note
 
         Args:
@@ -132,9 +144,15 @@ class AuthorshipNotesDatabase(BaseDatabase):
                 AuthorshipNotes.repo_url == repo_url,
                 AuthorshipNotes.commit_sha == commit_sha,
             )
+            stmt = apply_active_filter(stmt, include_superseded)
             return session.execute(stmt).scalar_one_or_none()
 
-    def batch_get_notes(self, repo_url: str, commit_shas: List[str]) -> Dict[str, List]:
+    def batch_get_notes(
+        self,
+        repo_url: str,
+        commit_shas: List[str],
+        include_superseded: bool = False,
+    ) -> Dict[str, List]:
         """批量获取 notes
 
         Args:
@@ -153,6 +171,7 @@ class AuthorshipNotesDatabase(BaseDatabase):
                 AuthorshipNotes.repo_url == repo_url,
                 AuthorshipNotes.commit_sha.in_(commit_shas),
             )
+            stmt = apply_active_filter(stmt, include_superseded)
             results = session.execute(stmt).scalars().all()
 
             found_shas = set(note.commit_sha for note in results)
@@ -162,6 +181,9 @@ class AuthorshipNotesDatabase(BaseDatabase):
                     "content": note.note_content,
                     "content_hash": note.content_hash,
                     "change_seq": note.change_seq,
+                    "status": note.status,
+                    "superseded_by": note.superseded_by,
+                    "superseded_rewrite_id": note.superseded_rewrite_id,
                 }
                 for note in results
             ]
@@ -242,12 +264,14 @@ class AuthorshipNotesDatabase(BaseDatabase):
         since_commit_time: int | None = None,
         since_change_seq: int | None = None,
         limit: int | None = None,
+        include_superseded: bool = False,
     ) -> Dict[str, Any]:
         page_limit = normalize_list_limit(limit)
         repo_url = normalize_repo_url(repo_url)
 
         with session_scope(self.engine) as session:
             stmt = select(AuthorshipNotes).where(AuthorshipNotes.repo_url == repo_url)
+            stmt = apply_active_filter(stmt, include_superseded)
 
             if since_change_seq is not None:
                 stmt = stmt.where(AuthorshipNotes.change_seq > since_change_seq)
@@ -267,6 +291,9 @@ class AuthorshipNotesDatabase(BaseDatabase):
                 "content_hash": note.content_hash,
                 "change_seq": note.change_seq,
                 "updated_at": note.updated_at,
+                "status": note.status,
+                "superseded_by": note.superseded_by,
+                "superseded_rewrite_id": note.superseded_rewrite_id,
             }
             for note in page_rows
         ]
@@ -279,7 +306,9 @@ class AuthorshipNotesDatabase(BaseDatabase):
             "has_more": has_more,
         }
 
-    def search_notes(self, repo_url: str, pattern: str) -> List[str]:
+    def search_notes(
+        self, repo_url: str, pattern: str, include_superseded: bool = False
+    ) -> List[str]:
         """在注释内容中搜索
 
         Args:
@@ -295,4 +324,5 @@ class AuthorshipNotesDatabase(BaseDatabase):
                 AuthorshipNotes.repo_url == repo_url,
                 AuthorshipNotes.note_content.like(f"%{pattern}%"),
             )
+            stmt = apply_active_filter(stmt, include_superseded)
             return list(session.execute(stmt).scalars().all())

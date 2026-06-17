@@ -42,6 +42,22 @@ def optional_non_negative_int(payload, field):
     return parsed
 
 
+def optional_bool(payload, field):
+    """解析可选布尔请求字段。"""
+    value = payload.get(field)
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    raise ValueError(field)
+
+
 @git_notes_rest_bp.route("", methods=["PUT"])
 @authorship_notes_rest_bp.route("", methods=["PUT"])
 @auth_required
@@ -142,8 +158,15 @@ def get_note():
         if "repo_url" not in payload or "commit_sha" not in payload:
             return error_response("缺少必需字段: repo_url 和 commit_sha", 400)
 
+        try:
+            include_superseded = optional_bool(payload, "include_superseded")
+        except ValueError as exc:
+            return error_response(f"无效的布尔参数: {exc}", 400)
+
         note = get_notes_service().get_note(
-            repo_url=payload["repo_url"], commit_sha=payload["commit_sha"]
+            repo_url=payload["repo_url"],
+            commit_sha=payload["commit_sha"],
+            include_superseded=include_superseded,
         )
 
         if not note:
@@ -159,6 +182,10 @@ def get_note():
                 "content": note.note_content,
                 "created_at": note.created_at,
                 "updated_at": note.updated_at,
+                "status": note.status,
+                "superseded_by": note.superseded_by,
+                "superseded_at": note.superseded_at,
+                "superseded_rewrite_id": note.superseded_rewrite_id,
             }
         )
 
@@ -205,8 +232,15 @@ def batch_get_notes():
         if "repo_url" not in payload or "commit_shas" not in payload:
             return error_response("缺少必需字段: repo_url 和 commit_shas", 400)
 
+        try:
+            include_superseded = optional_bool(payload, "include_superseded")
+        except ValueError as exc:
+            return error_response(f"无效的布尔参数: {exc}", 400)
+
         result = get_notes_service().batch_get_notes(
-            repo_url=payload["repo_url"], commit_shas=payload["commit_shas"]
+            repo_url=payload["repo_url"],
+            commit_shas=payload["commit_shas"],
+            include_superseded=include_superseded,
         )
 
         return ok_response(result)
@@ -293,7 +327,10 @@ def list_notes():
         try:
             since_change_seq = optional_non_negative_int(payload, "since_change_seq")
             limit = optional_non_negative_int(payload, "limit")
+            include_superseded = optional_bool(payload, "include_superseded")
         except ValueError as exc:
+            if str(exc) == "include_superseded":
+                return error_response(f"无效的布尔参数: {exc}", 400)
             return error_response(f"无效的整数参数: {exc}", 400)
 
         result = get_notes_service().list_notes(
@@ -301,6 +338,7 @@ def list_notes():
             since_commit_time=payload.get("since_commit_time"),
             since_change_seq=since_change_seq,
             limit=limit,
+            include_superseded=include_superseded,
         )
 
         return ok_response(result)
@@ -338,8 +376,15 @@ def search_notes():
         if "repo_url" not in payload or "pattern" not in payload:
             return error_response("缺少必需字段: repo_url 和 pattern", 400)
 
+        try:
+            include_superseded = optional_bool(payload, "include_superseded")
+        except ValueError as exc:
+            return error_response(f"无效的布尔参数: {exc}", 400)
+
         commit_shas = get_notes_service().search_notes(
-            repo_url=payload["repo_url"], pattern=payload["pattern"]
+            repo_url=payload["repo_url"],
+            pattern=payload["pattern"],
+            include_superseded=include_superseded,
         )
 
         return ok_response({"commit_shas": commit_shas})

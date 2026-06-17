@@ -10,12 +10,26 @@ from sqlalchemy import create_engine
 
 import core.config.loader as loader
 import core.database.base as database_base
-from core.database.base import Base
+from core.database.base import Base, session_scope
+from core.database.models import AuthorshipNotes
 from core.services.notes_service import NotesRestService
 
 
 def expected_note_hash(content: str) -> str:
     return "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def mark_note_superseded(service, commit_sha: str):
+    with session_scope(service.database.engine) as session:
+        note = (
+            session.query(AuthorshipNotes)
+            .filter(AuthorshipNotes.commit_sha == commit_sha)
+            .one()
+        )
+        note.status = "superseded"
+        note.superseded_by = f"{commit_sha}-target"
+        note.superseded_rewrite_id = f"rewrite-{commit_sha}"
+        note.superseded_at = 1710000000000
 
 
 def test_initialization_reads_db_url_from_loader_config(temp_db):
@@ -236,6 +250,36 @@ def test_get_note_not_found(service):
     assert result is None
 
 
+def test_get_note_excludes_superseded_by_default(service):
+    service.create_or_update_note(
+        repo_url="https://github.com/test/repo.git",
+        branch="main",
+        commit_sha="source-sha",
+        original_commit_sha=None,
+        content="source note",
+        author_name="Test User",
+        author_email="test@example.com",
+    )
+    mark_note_superseded(service, "source-sha")
+
+    assert (
+        service.get_note(
+            repo_url="https://github.com/test/repo.git",
+            commit_sha="source-sha",
+        )
+        is None
+    )
+
+    note = service.get_note(
+        repo_url="https://github.com/test/repo.git",
+        commit_sha="source-sha",
+        include_superseded=True,
+    )
+
+    assert note is not None
+    assert note.status == "superseded"
+
+
 def test_batch_get_notes(service):
     """Test batch getting notes"""
     # Create notes
@@ -448,3 +492,56 @@ def test_search_notes(service):
 
     assert "sha1" in result
     assert "sha2" not in result
+
+
+def test_batch_list_and_search_exclude_superseded_by_default(service):
+    for sha in ["active-sha", "superseded-sha"]:
+        service.create_or_update_note(
+            repo_url="https://github.com/test/repo.git",
+            branch="main",
+            commit_sha=sha,
+            original_commit_sha=None,
+            content=f"shared search content {sha}",
+            author_name="Test",
+            author_email="test@test.com",
+        )
+    mark_note_superseded(service, "superseded-sha")
+
+    batch = service.batch_get_notes(
+        repo_url="https://github.com/test/repo.git",
+        commit_shas=["active-sha", "superseded-sha"],
+    )
+    assert [note["commit_sha"] for note in batch["notes"]] == ["active-sha"]
+    assert batch["missing"] == ["superseded-sha"]
+
+    audit_batch = service.batch_get_notes(
+        repo_url="https://github.com/test/repo.git",
+        commit_shas=["active-sha", "superseded-sha"],
+        include_superseded=True,
+    )
+    assert {note["commit_sha"] for note in audit_batch["notes"]} == {
+        "active-sha",
+        "superseded-sha",
+    }
+
+    listed = service.list_notes(repo_url="https://github.com/test/repo.git")
+    assert listed["commit_shas"] == ["active-sha"]
+
+    audit_listed = service.list_notes(
+        repo_url="https://github.com/test/repo.git",
+        include_superseded=True,
+    )
+    assert set(audit_listed["commit_shas"]) == {"active-sha", "superseded-sha"}
+
+    search = service.search_notes(
+        repo_url="https://github.com/test/repo.git",
+        pattern="shared search content",
+    )
+    assert search == ["active-sha"]
+
+    audit_search = service.search_notes(
+        repo_url="https://github.com/test/repo.git",
+        pattern="shared search content",
+        include_superseded=True,
+    )
+    assert set(audit_search) == {"active-sha", "superseded-sha"}
