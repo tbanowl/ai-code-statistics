@@ -5,6 +5,7 @@ import json
 from typing import Any, Dict, List, Optional
 from sqlalchemy import create_engine, or_, select
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError
 
 from core.config import loader
 from core.utils.repo_url import normalize_repo_url
@@ -339,6 +340,41 @@ class AuthorshipNotesDatabase(BaseDatabase):
             mappings=mappings,
         )
 
+        try:
+            return self._rewrite_notes_once(
+                repo_url=repo_url,
+                rewrite_id=rewrite_id,
+                operation=operation,
+                branch=branch,
+                original_head=original_head,
+                new_head=new_head,
+                mappings=mappings,
+                request_hash=request_hash,
+            )
+        except IntegrityError:
+            return self._rewrite_notes_once(
+                repo_url=repo_url,
+                rewrite_id=rewrite_id,
+                operation=operation,
+                branch=branch,
+                original_head=original_head,
+                new_head=new_head,
+                mappings=mappings,
+                request_hash=request_hash,
+            )
+
+    def _rewrite_notes_once(
+        self,
+        *,
+        repo_url: str,
+        rewrite_id: str,
+        operation: str,
+        branch: str,
+        original_head: str | None,
+        new_head: str | None,
+        mappings: list[dict],
+        request_hash: str,
+    ) -> Dict[str, Any]:
         result = {
             "created": 0,
             "updated": 0,
@@ -395,11 +431,11 @@ class AuthorshipNotesDatabase(BaseDatabase):
     ) -> None:
         if not repo_url or not str(repo_url).strip():
             raise RewriteValidationError("缺少必需字段: repo_url")
-        if not rewrite_id:
+        if not isinstance(rewrite_id, str) or not rewrite_id.strip():
             raise RewriteValidationError("缺少必需字段: rewrite_id")
         if operation not in ALLOWED_REWRITE_OPERATIONS:
             raise RewriteValidationError(f"不支持的 rewrite operation: {operation}")
-        if not branch:
+        if not isinstance(branch, str) or not branch.strip():
             raise RewriteValidationError("缺少必需字段: branch")
         if not isinstance(mappings, list) or not mappings:
             raise RewriteValidationError("mappings 必须是非空数组")
@@ -412,11 +448,21 @@ class AuthorshipNotesDatabase(BaseDatabase):
             "disposition",
         }
         for mapping in mappings:
+            if not isinstance(mapping, dict):
+                raise RewriteValidationError("mapping 必须是对象")
             missing = required_mapping_fields - set(mapping)
             if missing:
                 raise RewriteValidationError(
                     f"mapping 缺少必需字段: {', '.join(sorted(missing))}"
                 )
+            for field in required_mapping_fields:
+                if (
+                    not isinstance(mapping[field], str)
+                    or not mapping[field].strip()
+                ):
+                    raise RewriteValidationError(
+                        f"mapping 字段必须是非空字符串: {field}"
+                    )
             if mapping["disposition"] not in ALLOWED_REWRITE_DISPOSITIONS:
                 raise RewriteValidationError(
                     f"不支持的 disposition: {mapping['disposition']}"
