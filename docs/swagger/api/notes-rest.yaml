@@ -389,10 +389,13 @@ components:
       properties:
         repo_url:
           type: string
+          minLength: 1
         rewrite_id:
           type: string
+          minLength: 1
         operation:
           type: string
+          minLength: 1
           enum:
             - rebase_conflict_manual_commit
             - rebase_complete
@@ -400,6 +403,7 @@ components:
             - amend
         branch:
           type: string
+          minLength: 1
         original_head:
           type: string
           nullable: true
@@ -408,6 +412,7 @@ components:
           nullable: true
         mappings:
           type: array
+          minItems: 1
           items:
             $ref: '#/components/schemas/RewriteNotesMapping'
 
@@ -423,35 +428,54 @@ components:
       properties:
         source_commit:
           type: string
+          minLength: 1
+          description: Source commit being replaced; must differ from target_commit.
         target_commit:
           type: string
+          minLength: 1
+          description: Target commit that replaces source_commit; must differ from source_commit.
         source_note_blob_oid:
           type: string
+          minLength: 1
           nullable: true
         target_note_blob_oid:
           type: string
+          minLength: 1
           nullable: true
         target_content:
           type: string
+          minLength: 1
         commit_time:
           type: integer
           format: int64
         author_name:
           type: string
+          minLength: 1
         author_email:
           type: string
+          minLength: 1
         disposition:
           type: string
+          minLength: 1
           enum:
             - supersede_source
 
     RewriteNotesResponse:
       type: object
+      required:
+        - ok
+        - data
       properties:
         ok:
           type: boolean
         data:
           type: object
+          required:
+            - created
+            - updated
+            - superseded
+            - unchanged
+            - conflicts
           properties:
             created:
               type: integer
@@ -475,6 +499,10 @@ components:
           type: string
         reason:
           type: string
+          enum:
+            - target_note_conflict
+            - source_note_missing
+            - source_already_superseded
         remote_content_hash:
           type: string
         local_content_hash:
