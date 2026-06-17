@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Tuple
 from sqlalchemy import exists, func, or_
 
 from .base import BaseDatabase, now_ts, session_scope
+from core.database.authorship_notes_db import active_authorship_note_filter
 from core.utils.repo_url import normalize_repo_url, UNKNOWN_REPO
 from .models import (
     AuthorshipNotes,
@@ -398,6 +399,7 @@ class StatsDatabase(BaseDatabase):
                         session.query(AuthorshipNotes.repo_url, AuthorshipNotes.commit_sha)
                         .filter(AuthorshipNotes.repo_url.in_(note_repo_urls))
                         .filter(AuthorshipNotes.commit_sha.in_(note_commit_shas))
+                        .filter(active_authorship_note_filter())
                         .all()
                     )
                     matching_note_keys = {
@@ -648,6 +650,7 @@ class StatsDatabase(BaseDatabase):
                     exists()
                     .where(AuthorshipNotes.repo_url == MetricsEventsCommitted.repo_url)
                     .where(AuthorshipNotes.commit_sha == MetricsEventsCommitted.commit_sha)
+                    .where(active_authorship_note_filter())
                 )
                 valid_query = valid_query.filter(
                     MetricsEventsCommitted.commit_sha.isnot(None)
@@ -706,7 +709,7 @@ class StatsDatabase(BaseDatabase):
                     AuthorshipNotes,
                     (MetricsEventsCommitted.repo_url == AuthorshipNotes.repo_url)
                     & (MetricsEventsCommitted.commit_sha == AuthorshipNotes.commit_sha),
-                )
+                ).filter(active_authorship_note_filter())
             rows = (
                 query.group_by(
                     MetricsEventsCommitted.commit_date,

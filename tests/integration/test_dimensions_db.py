@@ -407,6 +407,59 @@ def test_query_committed_events_authorship_notes_match_normalized_repo_url(setup
     assert filtered[0]["repo_url"] == "example.com/org/repo"
 
 
+def test_query_committed_events_require_authorship_notes_ignores_superseded(setup_dbs):
+    metrics_db, stats_db = setup_dbs
+
+    raw_id = metrics_db.save_metrics_raw(
+        version=1,
+        event_count=1,
+        payload_json="{}",
+        received_at=1710000000000,
+    )
+    committed = MetricsEventsCommitted(
+        raw_id=raw_id,
+        timestamp=1710000001,
+        commit_date=20260617,
+        repo_url="github.com/test/repo",
+        author="Test User <test@example.com>",
+        commit_sha="superseded-sha",
+        human_additions=0,
+        git_diff_deleted_lines=0,
+        git_diff_added_lines=1,
+        ai_additions=[1, 1],
+        ai_accepted=[1, 1],
+        total_ai_additions=[1, 1],
+    )
+    committed.uid = gen_commited_uid(committed)
+    metrics_db.upsert_committed_event(committed)
+
+    with session_scope(stats_db.engine) as session:
+        session.add(
+            AuthorshipNotes(
+                repo_url="github.com/test/repo",
+                branch="main",
+                commit_sha="superseded-sha",
+                note_blob_oid=None,
+                author_name="Test User",
+                author_email="test@example.com",
+                note_content="superseded note",
+                content_hash="sha256:superseded",
+                change_seq=1,
+                status="superseded",
+                superseded_by="replacement-sha",
+                superseded_rewrite_id="rewrite-1",
+            )
+        )
+
+    rows = stats_db.query_committed_events(
+        1710000000,
+        1710000010,
+        require_authorship_notes=True,
+    )
+
+    assert rows == []
+
+
 def test_update_repository_last_daily_aggregation_id(setup_dbs):
     _, stats_db = setup_dbs
     repo_id = stats_db.get_or_create_repository("https://example.com/org/repo.git")
