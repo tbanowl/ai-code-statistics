@@ -1,7 +1,8 @@
 """Git-AI Worker API 路由"""
 import json
 import time
-from flask import Blueprint, request, jsonify
+from io import BytesIO
+from flask import Blueprint, request, jsonify, send_file
 from core.config.logging import Logger
 from core.middleware.auth import auth_required
 
@@ -20,7 +21,6 @@ logger = Logger.get_logger('api.git_ai_worker')
 # @auth_required
 def metrics_upload():
     """上传 metrics 数据 - 仅保存原始数据，由定时任务处理"""
-    from core.services.metrics_service import MetricsService
     errors = []
     try:
         data = request.get_json()
@@ -142,8 +142,6 @@ def device_code():
     from core.services.oauth_service import OAuthService
 
     try:
-        data = request.get_json() or {}
-
         service = OAuthService()
         result = service.create_device_code()
 
@@ -159,8 +157,6 @@ def device_code():
 @oauth_bp.route('/verify_device')
 def verfiy_device():
     try:
-        # data = request.get_json()
-        # logger.info(f'verify device: {data.get('device_code')}')
         return jsonify({'error': None})
     except Exception as e:
         logger.error(f'OAuth token error: {e}')
@@ -209,22 +205,121 @@ def oauth_token():
 @releases_bp.route('/', methods=['GET'])
 def get_releases():
     """获取发布信息"""
-    from core.config import load_config
-
     try:
-        releases_config = load_config().get('git_ai', {}).get('releases', {})
-        version = releases_config.get('version', '0.0.0')
-        checksum = releases_config.get('checksum', '')
-
-        channels = {
-            'latest': {'version': version, 'checksum': checksum},
-            'next': {'version': '', 'checksum': ''},
-            'enterprise-latest': {'version': '', 'checksum': ''},
-            'enterprise-next': {'version': '', 'checksum': ''}
-        }
+        channels = _release_service().list_channel_metadata()
 
         return jsonify({'channels': channels}), 200
 
     except Exception as e:
         logger.error(f'Releases API error: {e}')
         return jsonify({'error': str(e)}), 500
+
+
+def _release_service():
+    from core.services.release_service import ReleaseService
+
+    return ReleaseService()
+
+
+@releases_bp.route('/<channel>/download/<path:filename>', methods=['GET'])
+def download_release_artifact(channel, filename):
+    try:
+        artifact = _release_service().get_active_artifact(channel, filename)
+        if artifact is None:
+            return jsonify({'error': 'Release artifact not found'}), 404
+        response = send_file(
+            BytesIO(artifact['content_blob']),
+            mimetype=artifact['content_type'],
+            as_attachment=True,
+            download_name=artifact['filename'],
+        )
+        response.headers['ETag'] = f'"sha256:{artifact["sha256"]}"'
+        response.headers['X-Git-AI-SHA256'] = artifact['sha256']
+        return response
+    except Exception as e:
+        logger.error(f'Release artifact download error: {e}', exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@releases_bp.route('/admin/list', methods=['GET'])
+def list_admin_releases():
+    try:
+        service = _release_service()
+        releases = service.database.list_releases(
+            channel=request.args.get('channel') or None,
+            status=request.args.get('status') or None,
+        )
+        for release in releases:
+            artifacts = service.database.list_artifacts(release['id'])
+            release['artifact_count'] = len(artifacts)
+            release['total_size_bytes'] = sum(item['size_bytes'] for item in artifacts)
+        return jsonify({'success': True, 'releases': releases, 'data': {'releases': releases}}), 200
+    except Exception as e:
+        logger.error(f'Release admin list error: {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@releases_bp.route('/admin/<release_id>', methods=['GET'])
+def get_admin_release(release_id):
+    try:
+        service = _release_service()
+        release = service.database.get_release(release_id)
+        if release is None:
+            return jsonify({'success': False, 'error': 'Release not found'}), 404
+        artifacts = service.database.list_artifacts(release_id)
+        return jsonify({
+            'success': True,
+            'release': release,
+            'artifacts': artifacts,
+            'data': {'release': release, 'artifacts': artifacts},
+        }), 200
+    except Exception as e:
+        logger.error(f'Release admin detail error: {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@releases_bp.route('/admin/upload', methods=['POST'])
+def upload_admin_release():
+    from core.services.release_service import ReleaseValidationError
+
+    try:
+        release = _release_service().create_release(
+            tag=request.form.get('tag', ''),
+            version=request.form.get('version'),
+            channel=request.form.get('channel', ''),
+            description=request.form.get('description'),
+            created_by=request.headers.get('X-User') or request.headers.get('X-API-Key'),
+            files=request.files.getlist('files'),
+        )
+        return jsonify({'success': True, 'release': release, 'data': {'release': release}}), 200
+    except ReleaseValidationError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        logger.error(f'Release admin upload error: {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@releases_bp.route('/admin/<release_id>/activate', methods=['POST'])
+def activate_admin_release(release_id):
+    try:
+        release = _release_service().database.activate_release(release_id)
+        if release is None:
+            return jsonify({'success': False, 'error': 'Release not found'}), 404
+        return jsonify({'success': True, 'release': release, 'data': {'release': release}}), 200
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 409
+    except Exception as e:
+        logger.error(f'Release admin activate error: {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@releases_bp.route('/admin/<release_id>', methods=['DELETE'])
+def delete_admin_release(release_id):
+    try:
+        deleted = _release_service().database.delete_release(release_id)
+        if not deleted:
+            return jsonify({'success': False, 'error': 'Release not found or active'}), 400
+        return jsonify({'success': True}), 200
+    except Exception as e:
+        logger.error(f'Release admin delete error: {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500

@@ -1,60 +1,117 @@
 tags:
   - name: releases
-    description: Releases API - 发布信息和版本管理
+    description: Git-AI 发布管理 API，用于内部上传、激活和下载升级文件
 
 endpoints:
   /worker/releases/:
     GET:
-      summary: 获取发布信息
-      description: 获取各发布渠道的版本和校验和信息
+      summary: 获取当前发布通道元数据
+      description: 供 git-ai upgrade 读取各通道 active release 的 tag、版本、可用平台和 SHA256SUMS 校验值
       responses:
         '200':
-          description: 发布信息
-          schema:
-            type: object
-            properties:
-              channels:
-                type: object
-                properties:
-                  latest:
-                    type: object
-                    description: 最新稳定版
-                    properties:
-                      version:
-                        type: string
-                        description: 版本号
-                      checksum:
-                        type: string
-                        description: 校验和
-                  next:
-                    type: object
-                    description: 下一个版本
-                    properties:
-                      version:
-                        type: string
-                        description: 版本号
-                      checksum:
-                        type: string
-                        description: 校验和
-                  enterprise-latest:
-                    type: object
-                    description: 企业版最新稳定版
-                    properties:
-                      version:
-                        type: string
-                        description: 版本号
-                      checksum:
-                        type: string
-                        description: 校验和
-                  enterprise-next:
-                    type: object
-                    description: 企业版下一个版本
-                    properties:
-                      version:
-                        type: string
-                        description: 版本号
-                      checksum:
-                        type: string
-                        description: 校验和
-        '500':
-          description: 服务器内部错误
+          description: 当前通道信息，channels 下每个通道包含 tag、version、checksum、platforms
+
+  /worker/releases/{channel}/download/{filename}:
+    GET:
+      summary: 下载发布文件
+      description: 从数据库 BLOB 返回 active release 下的 SHA256SUMS、install.ps1 或 Windows 可执行文件
+      parameters:
+        - name: channel
+          in: path
+          type: string
+          required: true
+        - name: filename
+          in: path
+          type: string
+          required: true
+      responses:
+        '200':
+          description: 文件内容
+        '404':
+          description: 通道未发布或文件不存在
+
+  /worker/releases/admin/upload:
+    POST:
+      summary: 上传 Git-AI Windows 发布包
+      description: 管理员上传本地构建的 install.ps1 和 git-ai-windows-x64.exe，服务端生成 SHA256SUMS 并保存到数据库
+      parameters:
+        - name: tag
+          in: formData
+          type: string
+          required: true
+        - name: version
+          in: formData
+          type: string
+          required: false
+        - name: channel
+          in: formData
+          type: string
+          required: true
+        - name: description
+          in: formData
+          type: string
+          required: false
+        - name: files
+          in: formData
+          type: file
+          required: true
+      responses:
+        '200':
+          description: 上传成功，release 默认为 inactive
+        '400':
+          description: 参数或文件校验失败
+        '401':
+          description: 未授权
+
+  /worker/releases/admin/list:
+    GET:
+      summary: 查询发布列表
+      description: 返回 release 摘要，不包含 content_blob
+      responses:
+        '200':
+          description: 发布列表
+
+  /worker/releases/admin/{release_id}:
+    GET:
+      summary: 查询发布详情
+      description: 返回 release 详情和 artifact 元数据，不返回 content_blob
+      parameters:
+        - name: release_id
+          in: path
+          type: string
+          required: true
+      responses:
+        '200':
+          description: 发布详情
+        '404':
+          description: release 不存在
+    DELETE:
+      summary: 删除未激活发布
+      description: active release 不能直接删除
+      parameters:
+        - name: release_id
+          in: path
+          type: string
+          required: true
+      responses:
+        '200':
+          description: 删除成功
+        '400':
+          description: release 不存在或处于 active 状态
+
+  /worker/releases/admin/{release_id}/activate:
+    POST:
+      summary: 激活发布
+      description: 将目标 release 设置为通道 active，并把同通道旧 active release 置为 inactive
+      parameters:
+        - name: release_id
+          in: path
+          type: string
+          required: true
+      responses:
+        '200':
+          description: 激活成功
+        '409':
+          description: 同通道已有并发激活冲突
+        '404':
+          description: release 不存在
