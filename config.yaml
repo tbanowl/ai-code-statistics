@@ -88,6 +88,14 @@ swagger:
     name: MIT
 git_ai:
   api_key: git-ai123456789
+  releases:
+    max_file_size_mb: 200
+    max_files_per_release: 12
+    allowed_channels:
+      - latest
+      - next
+      - enterprise-latest
+      - enterprise-next
 
 codeup_webhook:
   repo_cache_dir: .cache/codeup_repos
