@@ -16,7 +16,9 @@ from sqlalchemy import (
     ForeignKey,
     JSON,
     Index,
+    LargeBinary,
     UniqueConstraint,
+    Computed,
 )
 from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import Mapped, mapped_column
@@ -479,6 +481,66 @@ class TelemetryEnvelope(ModelBase):
     updated_at: Mapped[int] = mapped_column(
         BigInteger, nullable=False, default=now_ts, onupdate=now_ts
     )
+
+
+# ============================================================================
+# Git-AI 发布文件
+# ============================================================================
+
+
+class GitAiRelease(ModelBase):
+    """Git-AI 客户端发布版本。"""
+
+    __tablename__ = "git_ai_releases"
+    __table_args__ = (
+        UniqueConstraint("channel", "tag"),
+        UniqueConstraint("active_channel"),
+        Index("idx_git_ai_releases_channel_status", "channel", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(20), primary_key=True, default=gen_xid)
+    tag: Mapped[str] = mapped_column(String(100), nullable=False)
+    version: Mapped[str] = mapped_column(String(100), nullable=False)
+    channel: Mapped[str] = mapped_column(String(50), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="inactive")
+    active_channel: Mapped[str] = mapped_column(
+        String(50),
+        Computed("CASE WHEN status = 'active' THEN channel ELSE NULL END"),
+        nullable=True,
+    )
+    sha256sums_checksum: Mapped[str] = mapped_column(String(64), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str] = mapped_column(String(100), nullable=True)
+    published_at: Mapped[int] = mapped_column(BigInteger, nullable=True)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
+    updated_at: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=now_ts, onupdate=now_ts
+    )
+
+
+class GitAiReleaseArtifact(ModelBase):
+    """Git-AI 发布文件，内容保存到数据库。"""
+
+    __tablename__ = "git_ai_release_artifacts"
+    __table_args__ = (
+        UniqueConstraint("release_id", "filename"),
+        Index("idx_git_ai_release_artifacts_release", "release_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(20), primary_key=True, default=gen_xid)
+    release_id: Mapped[str] = mapped_column(
+        String(20), ForeignKey("git_ai_releases.id", ondelete="CASCADE"), nullable=False
+    )
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    artifact_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    platform: Mapped[str] = mapped_column(String(50), nullable=True)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    content_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    content_blob: Mapped[bytes] = mapped_column(
+        LargeBinary(length=(2**32) - 1), nullable=False
+    )
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ts)
 
 
 # ============================================================================

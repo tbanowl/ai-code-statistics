@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS metrics_events_raw (
     received_at BIGINT NOT NULL COMMENT '接收时间戳（毫秒）',
     created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
     INDEX idx_metrics_raw_received_at (received_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='Metrics 原始事件表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Metrics 原始事件表';
 
 -- Committed 事件表
 CREATE TABLE IF NOT EXISTS metrics_events_committed (
@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS metrics_events_committed (
     INDEX idx_committed_commit_sha (commit_sha),
     INDEX idx_committed_repo_id (repo_url, id),
     INDEX idx_committed_repo_commit_date (repo_url, commit_date)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='Committed 事件表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Committed 事件表';
 
 -- Checkpoint 事件表
 CREATE TABLE IF NOT EXISTS metrics_events_checkpoint (
@@ -84,7 +84,7 @@ CREATE TABLE IF NOT EXISTS metrics_events_checkpoint (
     created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
     INDEX idx_checkpoint_timestamp (timestamp),
     INDEX idx_checkpoint_file_path (file_path)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='Checkpoint 事件表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Checkpoint 事件表';
 
 -- AgentUsage 事件表
 CREATE TABLE IF NOT EXISTS metrics_events_agent_usage (
@@ -105,7 +105,7 @@ CREATE TABLE IF NOT EXISTS metrics_events_agent_usage (
     external_prompt_id VARCHAR(200) COMMENT '外部提示词 ID',
     created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
     INDEX idx_agent_usage_timestamp (timestamp)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='AgentUsage 事件表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AgentUsage 事件表';
 
 -- InstallHooks 事件表
 CREATE TABLE IF NOT EXISTS metrics_events_install_hooks (
@@ -119,7 +119,7 @@ CREATE TABLE IF NOT EXISTS metrics_events_install_hooks (
     message TEXT COMMENT '安装消息',
     git_ai_version VARCHAR(20) COMMENT 'Git-AI 客户端版本号',
     created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）'
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='InstallHooks 事件表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='InstallHooks 事件表';
 
 -- 事件解析错误记录表
 CREATE TABLE IF NOT EXISTS metrics_event_errors (
@@ -133,7 +133,7 @@ CREATE TABLE IF NOT EXISTS metrics_event_errors (
     last_retry_at BIGINT COMMENT '最后重试时间（毫秒）',
     created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
     INDEX idx_raw_event_index (raw_id, event_index)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='事件解析错误记录表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='事件解析错误记录表';
 
 -- Claude Code OTLP Logs Skill 调用计数表
 CREATE TABLE IF NOT EXISTS otel_invocation_counts (
@@ -154,7 +154,7 @@ CREATE TABLE IF NOT EXISTS otel_invocation_counts (
     INDEX idx_otel_invocation_received_at (received_at),
     INDEX idx_otel_invocation_org_plugin_skill (org_user, plugin_name, skill_name),
     INDEX idx_otel_log_date_plugin_skill_user (otel_log_date, plugin_name, skill_name, org_user)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='Claude Code OTLP Logs Skill 调用计数表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Claude Code OTLP Logs Skill 调用计数表';
 
 -- CAS 对象表
 CREATE TABLE IF NOT EXISTS cas_objects (
@@ -165,7 +165,7 @@ CREATE TABLE IF NOT EXISTS cas_objects (
     created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
     updated_at BIGINT NOT NULL COMMENT '更新时间戳（毫秒）',
     INDEX idx_cas_hash (hash)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='CAS 对象表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='CAS 对象表';
 
 -- 仓库表
 CREATE TABLE IF NOT EXISTS stats_repositories (
@@ -186,7 +186,7 @@ CREATE TABLE IF NOT EXISTS stats_repositories (
     created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
     updated_at BIGINT NOT NULL COMMENT '更新时间戳（毫秒）',
     INDEX idx_stats_repositories_name (repo_name)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='仓库表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='仓库表';
 
 -- 仓库分支表
 CREATE TABLE IF NOT EXISTS stats_repo_branch_config (
@@ -199,7 +199,7 @@ CREATE TABLE IF NOT EXISTS stats_repo_branch_config (
     updated_at BIGINT NULL COMMENT '更新时间戳（毫秒）',
     INDEX idx_repo_branch_config_repo (repo_id),
     INDEX idx_repo_branch_config_enabled (repo_id, enabled)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='仓库分支表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='仓库分支表';
 
 -- 仓库实际分支表
 CREATE TABLE IF NOT EXISTS stats_repositories_branch (
@@ -212,7 +212,7 @@ CREATE TABLE IF NOT EXISTS stats_repositories_branch (
     updated_at BIGINT NOT NULL COMMENT '更新时间戳（毫秒）',
     UNIQUE KEY uk_repositories_branch_repo_name (repo_id, branch_name),
     INDEX idx_repositories_branch_repo (repo_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='仓库实际分支表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='仓库实际分支表';
 
 -- 贡献者表
 CREATE TABLE IF NOT EXISTS stats_contributors (
@@ -223,7 +223,7 @@ CREATE TABLE IF NOT EXISTS stats_contributors (
     created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
     updated_at BIGINT NOT NULL COMMENT '更新时间戳（毫秒）',
     INDEX idx_stats_contributors_email (email)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='贡献者表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='贡献者表';
 
 -- 仓库贡献者关联表
 CREATE TABLE IF NOT EXISTS stats_repo_contributors (
@@ -234,7 +234,7 @@ CREATE TABLE IF NOT EXISTS stats_repo_contributors (
     updated_at BIGINT NOT NULL COMMENT '更新时间戳（毫秒）',
     INDEX idx_stats_repo_contributors_repo (repo_id),
     INDEX idx_stats_repo_contributors_contributor (contributor_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='仓库贡献者关联表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='仓库贡献者关联表';
 
 -- Commit 每日统计表
 CREATE TABLE IF NOT EXISTS stats_commit_daily (
@@ -259,7 +259,7 @@ CREATE TABLE IF NOT EXISTS stats_commit_daily (
     INDEX idx_stats_commit_daily_repo (repo_id),
     INDEX idx_stats_commit_daily_contributor_email (contributor_email),
     UNIQUE KEY uk_stats_commit_daily_identity (stat_date, repo_id, contributor_name, contributor_email)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='Commit 每日统计表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Commit 每日统计表';
 
 -- GIT AI 数据收集表
 CREATE TABLE IF NOT EXISTS telemetry_envelope (
@@ -267,7 +267,42 @@ CREATE TABLE IF NOT EXISTS telemetry_envelope (
     envelope_data JSON NOT NULL COMMENT '包络 JSON 数据',
     created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
     updated_at BIGINT NOT NULL COMMENT '更新时间戳（毫秒）'
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='GIT AI 数据收集表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='GIT AI 数据收集表';
+
+-- Git-AI 客户端发布版本表
+CREATE TABLE IF NOT EXISTS git_ai_releases (
+    id VARCHAR(20) PRIMARY KEY COMMENT '主键，使用 XID',
+    tag VARCHAR(100) NOT NULL COMMENT '发布标签',
+    version VARCHAR(100) NOT NULL COMMENT '版本号',
+    channel VARCHAR(50) NOT NULL COMMENT '发布通道',
+    status VARCHAR(20) NOT NULL DEFAULT 'inactive' COMMENT '发布状态：active/inactive',
+    active_channel VARCHAR(50) GENERATED ALWAYS AS (CASE WHEN status = 'active' THEN channel ELSE NULL END) STORED COMMENT '激活状态唯一约束辅助列',
+    sha256sums_checksum VARCHAR(64) NOT NULL COMMENT 'SHA256SUMS 文件的 SHA-256',
+    description TEXT COMMENT '发布说明',
+    created_by VARCHAR(100) COMMENT '创建人',
+    published_at BIGINT COMMENT '激活发布时间戳（毫秒）',
+    created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
+    updated_at BIGINT NOT NULL COMMENT '更新时间戳（毫秒）',
+    UNIQUE KEY uk_git_ai_releases_channel_tag (channel, tag),
+    UNIQUE KEY uk_git_ai_releases_active_channel (active_channel),
+    INDEX idx_git_ai_releases_channel_status (channel, status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Git-AI 客户端发布版本表';
+
+-- Git-AI 客户端发布文件表
+CREATE TABLE IF NOT EXISTS git_ai_release_artifacts (
+    id VARCHAR(20) PRIMARY KEY COMMENT '主键，使用 XID',
+    release_id VARCHAR(20) NOT NULL COMMENT '发布版本 ID',
+    filename VARCHAR(255) NOT NULL COMMENT '文件名',
+    artifact_type VARCHAR(30) NOT NULL COMMENT '文件类型：installer/executable/checksums',
+    platform VARCHAR(50) COMMENT '目标平台',
+    sha256 VARCHAR(64) NOT NULL COMMENT '文件内容 SHA-256',
+    size_bytes BIGINT NOT NULL COMMENT '文件大小（字节）',
+    content_type VARCHAR(100) NOT NULL COMMENT 'MIME 类型',
+    content_blob LONGBLOB NOT NULL COMMENT '文件内容',
+    created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
+    UNIQUE KEY uk_git_ai_release_artifacts_release_filename (release_id, filename),
+    INDEX idx_git_ai_release_artifacts_release (release_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Git-AI 客户端发布文件表';
 
 -- 作者注释表
 CREATE TABLE IF NOT EXISTS authorship_notes (
@@ -296,12 +331,12 @@ CREATE TABLE IF NOT EXISTS authorship_notes (
     INDEX idx_authorship_notes_repo_status (repo_url, status),
     INDEX idx_authorship_notes_superseded_rewrite (repo_url, superseded_rewrite_id),
     INDEX idx_authorship_notes_repo_commit_date (repo_url, commit_date)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='作者注释表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='作者注释表';
 
 CREATE TABLE IF NOT EXISTS authorship_notes_seq (
     id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '全局 authorship_notes change_seq',
     created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）'
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='Authorship Notes 变更序列表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Authorship Notes 变更序列表';
 
 CREATE TABLE IF NOT EXISTS authorship_note_rewrites (
     id VARCHAR(20) PRIMARY KEY COMMENT '主键，使用 XID',
@@ -315,7 +350,7 @@ CREATE TABLE IF NOT EXISTS authorship_note_rewrites (
     created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
     UNIQUE KEY uk_authorship_note_rewrites_rewrite_id (rewrite_id),
     INDEX idx_authorship_note_rewrites_repo (repo_url)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='作者注释重写操作记录表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='作者注释重写操作记录表';
 
 CREATE TABLE IF NOT EXISTS authorship_note_rewrite_mappings (
     id VARCHAR(20) PRIMARY KEY COMMENT '主键，使用 XID',
@@ -331,7 +366,7 @@ CREATE TABLE IF NOT EXISTS authorship_note_rewrite_mappings (
     UNIQUE KEY uk_authorship_note_rewrite_mapping (repo_url, source_commit, target_commit, rewrite_id),
     INDEX idx_authorship_note_rewrite_source (repo_url, source_commit),
     INDEX idx_authorship_note_rewrite_target (repo_url, target_commit)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='作者注释重写提交映射表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='作者注释重写提交映射表';
 
 -- SSH Key 表
 CREATE TABLE IF NOT EXISTS stats_ssh_keys (
@@ -342,7 +377,7 @@ CREATE TABLE IF NOT EXISTS stats_ssh_keys (
     created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
     updated_at BIGINT NOT NULL COMMENT '更新时间戳（毫秒）',
     INDEX idx_ssh_key_name (key_name)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='SSH Key 表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='SSH Key 表';
 
 -- 仓库级归因统计表
 CREATE TABLE IF NOT EXISTS stats_blame_repo (
@@ -360,7 +395,7 @@ CREATE TABLE IF NOT EXISTS stats_blame_repo (
     UNIQUE KEY uk_blame_repo_date_branch (repo_id, stat_date, branch),
     INDEX idx_blame_repo_date (repo_id, stat_date),
     INDEX idx_blame_stat_date (stat_date)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='仓库级归因统计表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='仓库级归因统计表';
 
 -- 仓库贡献者归因统计表
 CREATE TABLE IF NOT EXISTS stats_blame_repo_contributor (
@@ -378,7 +413,7 @@ CREATE TABLE IF NOT EXISTS stats_blame_repo_contributor (
     UNIQUE KEY uk_blame_rc_branch_contributor_identity (repo_id, stat_date, branch, contributor_name, contributor_email),
     INDEX idx_blame_rc_repo (repo_id, stat_date),
     INDEX idx_blame_rc_date (stat_date)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='仓库贡献者归因统计表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='仓库贡献者归因统计表';
 
 -- APScheduler JobStore 表
 CREATE TABLE IF NOT EXISTS apscheduler_jobs (
@@ -386,14 +421,14 @@ CREATE TABLE IF NOT EXISTS apscheduler_jobs (
     next_run_time DOUBLE COMMENT '下次运行时间',
     job_state LONGBLOB NOT NULL COMMENT '序列化任务状态',
     INDEX idx_apscheduler_jobs_next_run_time (next_run_time)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='APScheduler JobStore 表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='APScheduler JobStore 表';
 
 
 -- 任务执行表
 CREATE TABLE IF NOT EXISTS task_running (
     job_id VARCHAR(100) PRIMARY KEY  COMMENT '调度任务 ID',
     started_at BIGINT COMMENT '开始执行时间（毫秒）'
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='任务执行表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='任务执行表';
 
 
 -- 任务执行记录表
@@ -408,7 +443,7 @@ CREATE TABLE IF NOT EXISTS task_executions (
     created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
     updated_at BIGINT NOT NULL COMMENT '更新时间戳（毫秒）',
     INDEX idx_task_executions_job (job_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='任务执行记录表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='任务执行记录表';
 
 -- Codeup 合并 authorship 重算任务表
 CREATE TABLE IF NOT EXISTS codeup_merge_authorship_tasks (
@@ -438,7 +473,7 @@ CREATE TABLE IF NOT EXISTS codeup_merge_authorship_tasks (
     INDEX idx_codeup_merge_authorship_commit (merge_commit_sha),
     INDEX idx_codeup_merge_authorship_event_kind (event_kind),
     INDEX idx_codeup_merge_authorship_merge_type (merge_type)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='Codeup 合并 authorship 重算任务表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Codeup 合并 authorship 重算任务表';
 
 -- 系统管理表
 CREATE TABLE IF NOT EXISTS sys_dept (
@@ -448,7 +483,7 @@ CREATE TABLE IF NOT EXISTS sys_dept (
     sort INT NOT NULL DEFAULT 0,
     status INT NOT NULL DEFAULT 1,
     created_at BIGINT NOT NULL
-)  ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='部门表';
+)  ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='部门表';
 
 CREATE TABLE IF NOT EXISTS sys_menu (
     id VARCHAR(20) PRIMARY KEY ,
@@ -464,7 +499,7 @@ CREATE TABLE IF NOT EXISTS sys_menu (
     show_link INT NOT NULL DEFAULT 1,
     keep_alive INT NOT NULL DEFAULT 0,
     created_at BIGINT NOT NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='菜单表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='菜单表';
 
 CREATE TABLE IF NOT EXISTS sys_role (
     id VARCHAR(20) PRIMARY KEY ,
@@ -473,7 +508,7 @@ CREATE TABLE IF NOT EXISTS sys_role (
     status INT NOT NULL DEFAULT 1,
     remark VARCHAR(500),
     created_at BIGINT NOT NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='角色表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='角色表';
 
 CREATE TABLE IF NOT EXISTS sys_user (
     id VARCHAR(20) PRIMARY KEY ,
@@ -486,7 +521,7 @@ CREATE TABLE IF NOT EXISTS sys_user (
     avatar VARCHAR(500),
     status INT NOT NULL DEFAULT 1,
     created_at BIGINT NOT NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='用户表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户表';
 
 CREATE TABLE IF NOT EXISTS sys_user_role (
     id VARCHAR(20) PRIMARY KEY ,
@@ -494,7 +529,7 @@ CREATE TABLE IF NOT EXISTS sys_user_role (
     role_id VARCHAR(20) NOT NULL,
     INDEX idx_user_role_user (user_id),
     INDEX idx_user_role_role (role_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='用户角色表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户角色表';
 
 CREATE TABLE IF NOT EXISTS sys_role_menu (
     id VARCHAR(20) PRIMARY KEY ,
@@ -502,7 +537,7 @@ CREATE TABLE IF NOT EXISTS sys_role_menu (
     menu_id VARCHAR(20) NOT NULL,
     INDEX idx_role_menu_role (role_id),
     INDEX idx_role_menu_menu (menu_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='角色菜单表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='角色菜单表';
 
 CREATE TABLE IF NOT EXISTS cx_command_usage_events (
    id BIGINT AUTO_INCREMENT PRIMARY KEY,
