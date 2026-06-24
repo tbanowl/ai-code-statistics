@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS authorship_note_rewrites (
     created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）',
     UNIQUE KEY uk_authorship_note_rewrites_rewrite_id (rewrite_id),
     INDEX idx_authorship_note_rewrites_repo (repo_url)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='作者注释重写操作记录表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='作者注释重写操作记录表';
 
 CREATE TABLE IF NOT EXISTS authorship_note_rewrite_mappings (
     id VARCHAR(20) PRIMARY KEY COMMENT '主键，使用 XID',
@@ -40,4 +40,4 @@ CREATE TABLE IF NOT EXISTS authorship_note_rewrite_mappings (
     UNIQUE KEY uk_authorship_note_rewrite_mapping (repo_url, source_commit, target_commit, rewrite_id),
     INDEX idx_authorship_note_rewrite_source (repo_url, source_commit),
     INDEX idx_authorship_note_rewrite_target (repo_url, target_commit)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='作者注释重写提交映射表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='作者注释重写提交映射表';

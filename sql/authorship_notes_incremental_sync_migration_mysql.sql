@@ -7,7 +7,7 @@
 CREATE TABLE IF NOT EXISTS authorship_notes_seq (
     id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '全局 authorship_notes change_seq',
     created_at BIGINT NOT NULL COMMENT '创建时间戳（毫秒）'
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='Authorship Notes 变更序列表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Authorship Notes 变更序列表';
 
 ALTER TABLE authorship_notes
     ADD COLUMN content_hash VARCHAR(71) NULL COMMENT 'note_content 的 SHA-256 摘要' AFTER note_content,
