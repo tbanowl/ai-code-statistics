@@ -47,14 +47,19 @@ const detailRelease = ref<GitAiReleaseItem | null>(null);
 const detailArtifacts = ref<GitAiReleaseArtifact[]>([]);
 
 const columns = [
-  { label: "Tag", prop: "tag", minWidth: 120, slot: "tag" },
-  { label: "通道", prop: "channel", minWidth: 150, slot: "channel" },
-  { label: "状态", prop: "status", minWidth: 100, slot: "status" },
-  { label: "文件数", prop: "artifact_count", minWidth: 90 },
-  { label: "总大小", prop: "total_size_bytes", minWidth: 100, slot: "size" },
-  { label: "SHA256SUMS", prop: "sha256sums_checksum", minWidth: 220, slot: "checksum" },
-  { label: "上传时间", prop: "created_at", minWidth: 170, slot: "createdAt" },
-  { label: "操作", fixed: "right", minWidth: 170, slot: "operation" }
+  { label: "Tag", prop: "tag", width: 120, slot: "tag" },
+  { label: "通道", prop: "channel", width: 150, slot: "channel" },
+  { label: "状态", prop: "status", width: 100, slot: "status" },
+  { label: "文件数", prop: "artifact_count", width: 90 },
+  { label: "总大小", prop: "total_size_bytes", width: 100, slot: "size" },
+  {
+    label: "SHA256SUMS",
+    prop: "sha256sums_checksum",
+    minWidth: 220,
+    slot: "checksum"
+  },
+  { label: "上传时间", prop: "created_at", width: 170, slot: "createdAt" },
+  { label: "操作", fixed: "right", minWidth: 250, slot: "operation" }
 ];
 
 const artifactColumns = [
@@ -65,7 +70,9 @@ const artifactColumns = [
   { label: "SHA-256", prop: "sha256", minWidth: 260, slot: "artifactSha" }
 ];
 
-const selectedFileNames = computed(() => uploadFiles.value.map(file => file.name));
+const selectedFileNames = computed(() =>
+  uploadFiles.value.map(file => file.name)
+);
 
 const missingFiles = computed(() =>
   requiredFiles.filter(name => !selectedFileNames.value.includes(name))
@@ -207,21 +214,12 @@ onMounted(onSearch);
         </el-button>
       </template>
       <template v-slot="{ size, dynamicColumns }">
-        <pure-table
-          row-key="id"
-          adaptive
-          :adaptiveConfig="{ offsetBottom: 108 }"
-          align-whole="center"
-          table-layout="auto"
-          :loading="loading"
-          :size="size"
-          :data="dataList"
-          :columns="dynamicColumns"
+        <pure-table row-key="id" adaptive :adaptiveConfig="{ offsetBottom: 108 }" align-whole="center"
+          table-layout="auto" :loading="loading" :size="size" :data="dataList" :columns="dynamicColumns"
           :header-cell-style="{
             background: 'var(--el-fill-color-light)',
             color: 'var(--el-text-color-primary)'
-          }"
-        >
+          }">
           <template #tag="{ row }">
             <span class="font-mono font-semibold">{{ row.tag }}</span>
           </template>
@@ -246,22 +244,15 @@ onMounted(onSearch);
             <el-button link type="primary" :size="size" :icon="useRenderIcon(View)" @click="openDetail(row)">
               详情
             </el-button>
-            <el-popconfirm
-              v-if="row.status !== 'active'"
-              :title="`确认激活 ${row.tag} 到 ${row.channel}？`"
-              @confirm="handleActivate(row)"
-            >
+            <el-popconfirm v-if="row.status !== 'active'" :title="`确认激活 ${row.tag} 到 ${row.channel}？`"
+              @confirm="handleActivate(row)">
               <template #reference>
                 <el-button link type="success" :size="size" :icon="useRenderIcon(Check)">
                   激活
                 </el-button>
               </template>
             </el-popconfirm>
-            <el-popconfirm
-              v-if="row.status !== 'active'"
-              :title="`确认删除 ${row.tag}？`"
-              @confirm="handleDelete(row)"
-            >
+            <el-popconfirm v-if="row.status !== 'active'" :title="`确认删除 ${row.tag}？`" @confirm="handleDelete(row)">
               <template #reference>
                 <el-button link type="danger" :size="size" :icon="useRenderIcon(Delete)">
                   删除
@@ -273,18 +264,9 @@ onMounted(onSearch);
       </template>
     </PureTableBar>
 
-    <el-dialog
-      v-model="uploadVisible"
-      title="上传 Git-AI Windows 发布包"
-      width="min(640px, 92vw)"
-      destroy-on-close
-    >
-      <el-alert
-        class="mb-4"
-        type="info"
-        :closable="false"
-        title="第一版只支持 Windows，必须上传 install.ps1 和 git-ai-windows-x64.exe。SHA256SUMS 由服务端生成。"
-      />
+    <el-dialog v-model="uploadVisible" title="上传 Git-AI Windows 发布包" width="min(640px, 92vw)" destroy-on-close>
+      <el-alert class="mb-4" type="info" :closable="false"
+        title="第一版只支持 Windows，必须上传 install.ps1 和 git-ai-windows-x64.exe。SHA256SUMS 由服务端生成。" />
       <el-form :model="uploadForm" label-width="90px">
         <el-form-item label="Tag" required>
           <el-input v-model="uploadForm.tag" placeholder="例如 v1.2.3" />
@@ -301,23 +283,15 @@ onMounted(onSearch);
           <el-input v-model="uploadForm.description" type="textarea" :rows="3" />
         </el-form-item>
         <el-form-item label="文件" required>
-          <el-upload
-            drag
-            multiple
-            :auto-upload="false"
-            :on-change="handleFileChange"
-            :on-remove="removeUploadFile"
-          >
-            <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
+          <el-upload drag multiple :auto-upload="false" :on-change="handleFileChange" :on-remove="removeUploadFile">
+            <el-icon class="el-icon--upload">
+              <UploadFilled />
+            </el-icon>
             <div class="el-upload__text">拖拽或点击选择本地构建文件</div>
           </el-upload>
           <div class="required-files">
-            <el-tag
-              v-for="name in requiredFiles"
-              :key="name"
-              :type="selectedFileNames.includes(name) ? 'success' : 'danger'"
-              effect="plain"
-            >
+            <el-tag v-for="name in requiredFiles" :key="name"
+              :type="selectedFileNames.includes(name) ? 'success' : 'danger'" effect="plain">
               {{ name }}
             </el-tag>
           </div>
@@ -331,12 +305,7 @@ onMounted(onSearch);
       </template>
     </el-dialog>
 
-    <el-dialog
-      v-model="detailVisible"
-      title="发布详情"
-      width="min(880px, 92vw)"
-      destroy-on-close
-    >
+    <el-dialog v-model="detailVisible" title="发布详情" width="min(880px, 92vw)" destroy-on-close>
       <el-skeleton v-if="detailLoading" :rows="5" animated />
       <template v-else>
         <el-descriptions v-if="detailRelease" :column="2" border class="mb-4">
@@ -348,19 +317,12 @@ onMounted(onSearch);
             <span class="hash-text">{{ detailRelease.sha256sums_checksum }}</span>
           </el-descriptions-item>
         </el-descriptions>
-        <pure-table
-          row-key="id"
-          align-whole="center"
-          table-layout="auto"
-          :data="detailArtifacts"
-          :columns="artifactColumns"
-        >
+        <pure-table row-key="id" align-whole="center" table-layout="auto" :data="detailArtifacts"
+          :columns="artifactColumns">
           <template #filename="{ row }">
-            <a
-              class="artifact-link"
+            <a class="artifact-link"
               :href="detailRelease ? releaseArtifactDownloadUrl(detailRelease.channel, row.filename) : '#'"
-              target="_blank"
-            >
+              target="_blank">
               {{ row.filename }}
             </a>
           </template>
