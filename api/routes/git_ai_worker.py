@@ -240,6 +240,25 @@ def download_release_artifact(channel, filename):
         logger.error(f'Release artifact download error: {e}', exc_info=True)
         return jsonify({'error': str(e)}), 500
 
+@releases_bp.route('/download/<version>/<path:filename>', methods=['GET'])
+def download_release_artifact_by_version(version, filename):
+    try:
+        artifact = _release_service().get_version_artifact(version, filename)
+        if artifact is None:
+            return jsonify({'error': 'Release artifact not found'}), 404
+        response = send_file(
+            BytesIO(artifact['content_blob']),
+            mimetype=artifact['content_type'],
+            as_attachment=True,
+            download_name=artifact['filename'],
+        )
+        response.headers['ETag'] = f'"sha256:{artifact["sha256"]}"'
+        response.headers['X-Git-AI-SHA256'] = artifact['sha256']
+        return response
+    except Exception as e:
+        logger.error(f'Release artifact download error: {e}', exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
 
 @releases_bp.route('/admin/list', methods=['GET'])
 def list_admin_releases():

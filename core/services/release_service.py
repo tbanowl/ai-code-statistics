@@ -99,6 +99,12 @@ class ReleaseService:
         if not release:
             return None
         return self.database.get_artifact(release["id"], filename)
+    
+    def get_version_artifact(self, version: str, filename: str) -> dict[str, Any] | None:
+        release = self.database.get_release_by_version(version)
+        if not release:
+            return None
+        return self.database.get_artifact(release["id"], filename)
 
     def _read_upload_file(self, file: Any) -> dict[str, Any]:
         filename = self._safe_filename(file.filename)

@@ -86,6 +86,15 @@ class ReleaseDatabase(BaseDatabase):
                 .first()
             )
             return self._release_dict(release) if release else None
+    
+    def get_release_by_version(self, version: str) -> dict[str, Any] | None:
+        with session_scope(self.engine) as session:
+            release = (
+                session.query(GitAiRelease)
+                .filter(GitAiRelease.version == version)
+                .first()
+            )
+            return self._release_dict(release) if release else None
 
     def list_releases(
         self, channel: str | None = None, status: str | None = None

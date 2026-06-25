@@ -90,6 +90,33 @@ def test_upload_activate_and_download_release_files(client):
     assert download.data == b"ps"
 
 
+def test_download_release_artifact_by_version(client):
+    response = client.post(
+        "/worker/releases/admin/upload",
+        data={
+            "tag": "v2.3.4",
+            "version": "2.3.4",
+            "channel": "latest",
+            "files": [
+                _bytes_file(b"ps", "install.ps1"),
+                _bytes_file(b"exe", "git-ai-windows-x64.exe"),
+            ],
+        },
+        content_type="multipart/form-data",
+        headers={"X-API-Key": "test-key"},
+    )
+    assert response.status_code == 200
+
+    download = client.get("/worker/releases/download/2.3.4/install.ps1")
+    assert download.status_code == 200
+    assert download.data == b"ps"
+    assert download.headers["X-Git-AI-SHA256"]
+    assert download.headers["ETag"].startswith('"sha256:')
+
+    missing = client.get("/worker/releases/download/9.9.9/install.ps1")
+    assert missing.status_code == 404
+
+
 def test_admin_list_does_not_include_content_blob(client):
     response = client.get(
         "/worker/releases/admin/list",
