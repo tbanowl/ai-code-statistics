@@ -124,3 +124,129 @@ def test_admin_list_does_not_include_content_blob(client):
     )
     assert response.status_code == 200
     assert "content_blob" not in response.get_data(as_text=True)
+
+
+def _upload_release(client, tag="v1.0.0", version="1.0.0"):
+    response = client.post(
+        "/worker/releases/admin/upload",
+        data={
+            "tag": tag,
+            "version": version,
+            "channel": "latest",
+            "files": [
+                _bytes_file(b"ps", "install.ps1"),
+                _bytes_file(b"exe", "git-ai-windows-x64.exe"),
+            ],
+        },
+        content_type="multipart/form-data",
+        headers={"X-API-Key": "test-key"},
+    )
+    assert response.status_code == 200
+    return response.get_json()["release"]["id"]
+
+
+def test_update_active_release_metadata_updates_channel_response(client):
+    release_id = _upload_release(client)
+    active = client.post(
+        f"/worker/releases/admin/{release_id}/activate",
+        headers={"X-API-Key": "test-key"},
+    )
+    assert active.status_code == 200
+
+    response = client.put(
+        f"/worker/releases/admin/{release_id}",
+        data={"tag": "v1.0.1", "version": "1.0.1", "channel": "latest", "description": "edited"},
+        content_type="multipart/form-data",
+        headers={"X-API-Key": "test-key"},
+    )
+
+    assert response.status_code == 200
+    channels = client.get("/worker/releases/").get_json()["channels"]
+    assert channels["latest"]["tag"] == "v1.0.1"
+    assert channels["latest"]["version"] == "1.0.1"
+    download = client.get("/worker/releases/latest/download/install.ps1")
+    assert download.status_code == 200
+    assert download.data == b"ps"
+
+
+def test_update_active_release_files_updates_download(client):
+    release_id = _upload_release(client)
+    active = client.post(
+        f"/worker/releases/admin/{release_id}/activate",
+        headers={"X-API-Key": "test-key"},
+    )
+    assert active.status_code == 200
+
+    previous_checksum = client.get("/worker/releases/").get_json()["channels"]["latest"]["checksum"]
+
+    response = client.put(
+        f"/worker/releases/admin/{release_id}",
+        data={
+            "tag": "v1.0.0",
+            "version": "1.0.0",
+            "channel": "latest",
+            "files": [
+                _bytes_file(b"ps-new", "install.ps1"),
+                _bytes_file(b"exe-new", "git-ai-windows-x64.exe"),
+            ],
+        },
+        content_type="multipart/form-data",
+        headers={"X-API-Key": "test-key"},
+    )
+
+    assert response.status_code == 200
+    download = client.get("/worker/releases/latest/download/install.ps1")
+    assert download.status_code == 200
+    assert download.data == b"ps-new"
+    new_checksum = client.get("/worker/releases/").get_json()["channels"]["latest"]["checksum"]
+    assert new_checksum != ""
+    assert new_checksum != previous_checksum
+
+
+def test_update_missing_release_returns_404(client):
+    response = client.put(
+        "/worker/releases/admin/missing",
+        data={"tag": "v1.0.1", "version": "1.0.1", "channel": "latest"},
+        content_type="multipart/form-data",
+        headers={"X-API-Key": "test-key"},
+    )
+    assert response.status_code == 404
+
+
+def test_update_release_files_requires_required_files(client):
+    release_id = _upload_release(client)
+    response = client.put(
+        f"/worker/releases/admin/{release_id}",
+        data={
+            "tag": "v1.0.0",
+            "version": "1.0.0",
+            "channel": "latest",
+            "files": [_bytes_file(b"ps", "install.ps1")],
+        },
+        content_type="multipart/form-data",
+        headers={"X-API-Key": "test-key"},
+    )
+    assert response.status_code == 400
+    assert "git-ai-windows-x64.exe" in response.get_json()["error"]
+
+
+def test_update_release_rejects_invalid_fields(client):
+    release_id = _upload_release(client)
+
+    empty_tag = client.put(
+        f"/worker/releases/admin/{release_id}",
+        data={"tag": "   ", "version": "1.0.0", "channel": "latest"},
+        content_type="multipart/form-data",
+        headers={"X-API-Key": "test-key"},
+    )
+    assert empty_tag.status_code == 400
+    assert "tag" in empty_tag.get_json()["error"].lower()
+
+    invalid_channel = client.put(
+        f"/worker/releases/admin/{release_id}",
+        data={"tag": "v1.0.1", "version": "1.0.1", "channel": "bogus"},
+        content_type="multipart/form-data",
+        headers={"X-API-Key": "test-key"},
+    )
+    assert invalid_channel.status_code == 400
+    assert "bogus" in invalid_channel.get_json()["error"]

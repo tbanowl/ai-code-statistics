@@ -164,3 +164,145 @@ def test_release_model_rejects_two_active_releases_in_same_channel(sqlite_releas
             session.query(GitAiRelease).filter(GitAiRelease.id == second["id"]).update(
                 {"status": "active"}
             )
+
+
+def test_update_release_changes_metadata_only(sqlite_release_db):
+    db = sqlite_release_db
+    release = db.create_release(
+        tag="v1.0.0",
+        version="1.0.0",
+        channel="latest",
+        sha256sums_checksum="a" * 64,
+        artifacts=[
+            {
+                "filename": "install.ps1",
+                "artifact_type": "installer",
+                "platform": "windows-x64",
+                "sha256": "b" * 64,
+                "size_bytes": 2,
+                "content_type": "text/plain",
+                "content_blob": b"ps",
+            }
+        ],
+        description="old",
+        created_by="tester",
+    )
+
+    updated = db.update_release(
+        release["id"],
+        tag="v1.0.1",
+        version="1.0.1",
+        channel="next",
+        description="new",
+    )
+
+    assert updated["tag"] == "v1.0.1"
+    assert updated["version"] == "1.0.1"
+    assert updated["channel"] == "next"
+    assert updated["description"] == "new"
+    assert updated["sha256sums_checksum"] == "a" * 64
+    artifacts = db.list_artifacts(release["id"], include_content=True)
+    assert len(artifacts) == 1
+    assert artifacts[0]["filename"] == "install.ps1"
+    assert artifacts[0]["content_blob"] == b"ps"
+
+
+def test_update_release_returns_none_for_missing_release(sqlite_release_db):
+    assert sqlite_release_db.update_release(
+        "missing",
+        tag="v1.0.1",
+        version="1.0.1",
+        channel="latest",
+        description=None,
+    ) is None
+
+
+def test_update_release_replaces_artifacts(sqlite_release_db):
+    db = sqlite_release_db
+    release = db.create_release(
+        tag="v1.0.0",
+        version="1.0.0",
+        channel="latest",
+        sha256sums_checksum="a" * 64,
+        artifacts=[
+            {
+                "filename": "install.ps1",
+                "artifact_type": "installer",
+                "platform": "windows-x64",
+                "sha256": "b" * 64,
+                "size_bytes": 2,
+                "content_type": "text/plain",
+                "content_blob": b"old",
+            }
+        ],
+        description=None,
+        created_by="tester",
+    )
+
+    updated = db.update_release(
+        release["id"],
+        tag="v1.0.0",
+        version="1.0.0",
+        channel="latest",
+        description=None,
+        sha256sums_checksum="c" * 64,
+        artifacts=[
+            {
+                "filename": "install.ps1",
+                "artifact_type": "installer",
+                "platform": "windows-x64",
+                "sha256": "d" * 64,
+                "size_bytes": 3,
+                "content_type": "text/plain",
+                "content_blob": b"new",
+            },
+            {
+                "filename": "SHA256SUMS",
+                "artifact_type": "checksums",
+                "platform": None,
+                "sha256": "c" * 64,
+                "size_bytes": 64,
+                "content_type": "text/plain; charset=utf-8",
+                "content_blob": b"checksums",
+            },
+        ],
+    )
+
+    assert updated["sha256sums_checksum"] == "c" * 64
+    artifacts = db.list_artifacts(release["id"], include_content=True)
+    assert [artifact["filename"] for artifact in artifacts] == ["SHA256SUMS", "install.ps1"]
+    assert next(a for a in artifacts if a["filename"] == "install.ps1")["content_blob"] == b"new"
+
+
+def test_update_active_release_into_occupied_channel_raises(sqlite_release_db):
+    db = sqlite_release_db
+    first = db.create_release(
+        tag="v1.0.0",
+        version="v1.0.0",
+        channel="latest",
+        sha256sums_checksum="a" * 64,
+        artifacts=[],
+        description=None,
+        created_by="tester",
+    )
+    second = db.create_release(
+        tag="v2.0.0",
+        version="v2.0.0",
+        channel="next",
+        sha256sums_checksum="b" * 64,
+        artifacts=[],
+        description=None,
+        created_by="tester",
+    )
+
+    db.activate_release(first["id"])
+    db.activate_release(second["id"])
+
+    with pytest.raises(ValueError, match="target channel already has an active release"):
+        db.update_release(
+            first["id"],
+            tag="v1.0.0",
+            version="v1.0.0",
+            channel="next",
+            description=None,
+        )

@@ -66,6 +66,60 @@ class ReleaseDatabase(BaseDatabase):
                 raise ValueError("another release is already active for this channel") from exc
             return self._release_dict(release)
 
+    def update_release(
+        self,
+        release_id: str,
+        *,
+        tag: str,
+        version: str,
+        channel: str,
+        description: str | None,
+        sha256sums_checksum: str | None = None,
+        artifacts: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any] | None:
+        with session_scope(self.engine) as session:
+            release = (
+                session.query(GitAiRelease)
+                .filter(GitAiRelease.id == release_id)
+                .first()
+            )
+            if release is None:
+                return None
+
+            if release.status == "active" and channel != release.channel:
+                active_target = (
+                    session.query(GitAiRelease)
+                    .filter(
+                        GitAiRelease.channel == channel,
+                        GitAiRelease.status == "active",
+                        GitAiRelease.id != release_id,
+                    )
+                    .first()
+                )
+                if active_target is not None:
+                    raise ValueError("target channel already has an active release")
+
+            release.tag = tag
+            release.version = version
+            release.channel = channel
+            release.description = description
+            release.updated_at = now_ts()
+
+            if artifacts is not None:
+                session.query(GitAiReleaseArtifact).filter(
+                    GitAiReleaseArtifact.release_id == release_id
+                ).delete(synchronize_session=False)
+                for artifact in artifacts:
+                    session.add(GitAiReleaseArtifact(release_id=release.id, **artifact))
+            if sha256sums_checksum is not None:
+                release.sha256sums_checksum = sha256sums_checksum
+
+            try:
+                session.flush()
+            except IntegrityError as exc:
+                raise ValueError("release update conflicts with existing release") from exc
+            return self._release_dict(release)
+
     def get_release(self, release_id: str) -> dict[str, Any] | None:
         with session_scope(self.engine) as session:
             release = (

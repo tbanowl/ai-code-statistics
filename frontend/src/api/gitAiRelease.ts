@@ -58,6 +58,14 @@ export const uploadGitAiRelease = (data: FormData) =>
     { headers: { "Content-Type": "multipart/form-data" } }
   );
 
+export const updateGitAiRelease = (id: string, data: FormData) =>
+  http.request<R<{ release: GitAiReleaseItem }>>(
+    "put",
+    `/worker/releases/admin/${id}`,
+    { data },
+    { headers: { "Content-Type": "multipart/form-data" } }
+  );
+
 export const activateGitAiRelease = (id: string) =>
   http.request<R<{ release: GitAiReleaseItem }>>(
     "post",

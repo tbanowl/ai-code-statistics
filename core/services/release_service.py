@@ -41,6 +41,46 @@ class ReleaseService:
         created_by: str | None,
         files: list[Any],
     ) -> dict[str, Any]:
+        tag, version, channel = self._normalize_release_fields(tag, version, channel)
+        artifacts, sha256sums_checksum = self._build_artifacts(files)
+        return self.database.create_release(
+            tag=tag,
+            version=version,
+            channel=channel,
+            sha256sums_checksum=sha256sums_checksum,
+            artifacts=artifacts,
+            description=description,
+            created_by=created_by,
+        )
+
+    def update_release(
+        self,
+        release_id: str,
+        *,
+        tag: str,
+        version: str | None,
+        channel: str,
+        description: str | None,
+        files: list[Any],
+    ) -> dict[str, Any] | None:
+        tag, version, channel = self._normalize_release_fields(tag, version, channel)
+        artifacts = None
+        sha256sums_checksum = None
+        if files:
+            artifacts, sha256sums_checksum = self._build_artifacts(files)
+        return self.database.update_release(
+            release_id,
+            tag=tag,
+            version=version,
+            channel=channel,
+            description=description,
+            sha256sums_checksum=sha256sums_checksum,
+            artifacts=artifacts,
+        )
+
+    def _normalize_release_fields(
+        self, tag: str, version: str | None, channel: str
+    ) -> tuple[str, str, str]:
         tag = tag.strip()
         version = (version or tag).strip()
         channel = channel.strip()
@@ -48,9 +88,11 @@ class ReleaseService:
             raise ReleaseValidationError("tag is required")
         if channel not in self.allowed_channels:
             raise ReleaseValidationError(f"channel {channel} is not allowed")
+        return tag, version, channel
+
+    def _build_artifacts(self, files: list[Any]) -> tuple[list[dict[str, Any]], str]:
         if len(files) > self.max_files:
             raise ReleaseValidationError(f"too many files, maximum {self.max_files}")
-
         artifacts = [self._read_upload_file(file) for file in files]
         names = {artifact["filename"] for artifact in artifacts}
         if "SHA256SUMS" in names:
@@ -60,16 +102,7 @@ class ReleaseService:
             raise ReleaseValidationError(f"missing required files: {', '.join(missing)}")
         checksums_artifact = self._build_sha256sums_artifact(artifacts)
         artifacts.append(checksums_artifact)
-
-        return self.database.create_release(
-            tag=tag,
-            version=version,
-            channel=channel,
-            sha256sums_checksum=checksums_artifact["sha256"],
-            artifacts=artifacts,
-            description=description,
-            created_by=created_by,
-        )
+        return artifacts, checksums_artifact["sha256"]
 
     def list_channel_metadata(self) -> dict[str, dict[str, str]]:
         channels = {

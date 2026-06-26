@@ -332,6 +332,31 @@ def activate_admin_release(release_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@releases_bp.route('/admin/<release_id>', methods=['PUT'])
+def update_admin_release(release_id):
+    from core.services.release_service import ReleaseValidationError
+
+    try:
+        release = _release_service().update_release(
+            release_id,
+            tag=request.form.get('tag', ''),
+            version=request.form.get('version'),
+            channel=request.form.get('channel', ''),
+            description=request.form.get('description'),
+            files=request.files.getlist('files'),
+        )
+        if release is None:
+            return jsonify({'success': False, 'error': 'Release not found'}), 404
+        return jsonify({'success': True, 'release': release, 'data': {'release': release}}), 200
+    except ReleaseValidationError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        logger.error(f'Release admin update error: {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @releases_bp.route('/admin/<release_id>', methods=['DELETE'])
 def delete_admin_release(release_id):
     try:

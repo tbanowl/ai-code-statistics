@@ -10,6 +10,7 @@ import {
   getGitAiReleaseDetail,
   getGitAiReleaseList,
   releaseArtifactDownloadUrl,
+  updateGitAiRelease,
   uploadGitAiRelease,
   type GitAiReleaseArtifact,
   type GitAiReleaseItem
@@ -18,6 +19,7 @@ import {
 import AddFill from "~icons/ri/add-circle-line";
 import Check from "~icons/ep/check";
 import Delete from "~icons/ep/delete";
+import EditPen from "~icons/ep/edit-pen";
 import Refresh from "~icons/ep/refresh";
 import UploadFilled from "~icons/ep/upload-filled";
 import View from "~icons/ep/view";
@@ -33,6 +35,7 @@ const channelCards = ref<Record<string, { version: string; checksum: string }>>(
 
 const uploadVisible = ref(false);
 const uploadLoading = ref(false);
+const editLoading = ref(false);
 const uploadFiles = ref<File[]>([]);
 const uploadForm = ref({
   tag: "",
@@ -45,6 +48,16 @@ const detailVisible = ref(false);
 const detailLoading = ref(false);
 const detailRelease = ref<GitAiReleaseItem | null>(null);
 const detailArtifacts = ref<GitAiReleaseArtifact[]>([]);
+
+const dialogMode = ref<"create" | "edit">("create");
+const editingRelease = ref<GitAiReleaseItem | null>(null);
+const currentArtifacts = ref<GitAiReleaseArtifact[]>([]);
+
+const dialogTitle = computed(() =>
+  dialogMode.value === "edit" ? "修改 Git-AI 发布包" : "上传 Git-AI Windows 发布包"
+);
+
+const hasSelectedReplacementFiles = computed(() => uploadFiles.value.length > 0);
 
 const columns = [
   { label: "Tag", prop: "tag", width: 120, slot: "tag" },
@@ -59,7 +72,7 @@ const columns = [
     slot: "checksum"
   },
   { label: "上传时间", prop: "created_at", width: 170, slot: "createdAt" },
-  { label: "操作", fixed: "right", minWidth: 250, slot: "operation" }
+  { label: "操作", fixed: "right" as const, minWidth: 250, slot: "operation" }
 ];
 
 const artifactColumns = [
@@ -93,16 +106,19 @@ const formatBytes = (value?: number) => {
 const shortHash = (value: string) => (value ? `${value.slice(0, 12)}…` : "-");
 
 const loadChannels = async () => {
-  const result = await getGitAiReleaseChannels();
-  channelCards.value = result.channels || {};
+  try {
+    const result = await getGitAiReleaseChannels();
+    channelCards.value = result.channels || {};
+  } catch {
+    message("获取通道信息失败", { type: "error" });
+  }
 };
 
 const onSearch = async () => {
   loading.value = true;
   try {
-    const result = await getGitAiReleaseList();
-    dataList.value = result.releases || result.data?.releases || [];
-    await loadChannels();
+    const [listResult] = await Promise.all([getGitAiReleaseList(), loadChannels()]);
+    dataList.value = listResult.releases || listResult.data?.releases || [];
   } catch {
     message("获取发布列表失败", { type: "error" });
   } finally {
@@ -110,10 +126,41 @@ const onSearch = async () => {
   }
 };
 
-const openUpload = () => {
+const resetReleaseForm = () => {
   uploadForm.value = { tag: "", version: "", channel: "latest", description: "" };
   uploadFiles.value = [];
+  currentArtifacts.value = [];
+  editingRelease.value = null;
+};
+
+const openUpload = () => {
+  dialogMode.value = "create";
+  resetReleaseForm();
   uploadVisible.value = true;
+};
+
+const openEdit = async (row: GitAiReleaseItem) => {
+  dialogMode.value = "edit";
+  resetReleaseForm();
+  uploadVisible.value = true;
+  editLoading.value = true;
+  try {
+    const result = await getGitAiReleaseDetail(row.id);
+    const release = result.release || result.data?.release || row;
+    editingRelease.value = release;
+    uploadForm.value = {
+      tag: release.tag,
+      version: release.version,
+      channel: release.channel,
+      description: release.description || ""
+    };
+    currentArtifacts.value = result.artifacts || result.data?.artifacts || [];
+  } catch {
+    message("获取发布详情失败", { type: "error" });
+    uploadVisible.value = false;
+  } finally {
+    editLoading.value = false;
+  }
 };
 
 const handleFileChange = (_file: unknown, fileList: Array<{ raw?: File }>) => {
@@ -126,12 +173,13 @@ const removeUploadFile = (file: { name: string }) => {
   uploadFiles.value = uploadFiles.value.filter(item => item.name !== file.name);
 };
 
-const handleUpload = async () => {
+const handleSaveRelease = async () => {
   if (!uploadForm.value.tag.trim()) {
     message("Tag 不能为空", { type: "warning" });
     return;
   }
-  if (missingFiles.value.length > 0) {
+  const replacingFiles = dialogMode.value === "create" || hasSelectedReplacementFiles.value;
+  if (replacingFiles && missingFiles.value.length > 0) {
     message(`缺少必需文件：${missingFiles.value.join("、")}`, { type: "warning" });
     return;
   }
@@ -144,12 +192,17 @@ const handleUpload = async () => {
 
   uploadLoading.value = true;
   try {
-    await uploadGitAiRelease(formData);
-    message("上传成功，发布包已进入待激活状态", { type: "success" });
+    if (dialogMode.value === "edit" && editingRelease.value) {
+      await updateGitAiRelease(editingRelease.value.id, formData);
+      message("修改成功", { type: "success" });
+    } else {
+      await uploadGitAiRelease(formData);
+      message("上传成功，发布包已进入待激活状态", { type: "success" });
+    }
     uploadVisible.value = false;
     await onSearch();
   } catch {
-    message("上传发布包失败", { type: "error" });
+    message(dialogMode.value === "edit" ? "修改发布失败" : "上传发布包失败", { type: "error" });
   } finally {
     uploadLoading.value = false;
   }
@@ -241,20 +294,26 @@ onMounted(onSearch);
             {{ formatTime(row.created_at) }}
           </template>
           <template #operation="{ row }">
-            <el-button link type="primary" :size="size" :icon="useRenderIcon(View)" @click="openDetail(row)">
+            <el-button class="reset-margin" link type="primary" :size="size" :icon="useRenderIcon(View)" @click="openDetail(row)">
               详情
             </el-button>
-            <el-popconfirm v-if="row.status !== 'active'" :title="`确认激活 ${row.tag} 到 ${row.channel}？`"
-              @confirm="handleActivate(row)">
+            <el-button class="reset-margin" link type="primary" :size="size" :icon="useRenderIcon(EditPen)" @click="openEdit(row)">
+              修改
+            </el-button>
+            <el-popconfirm
+              v-if="row.status !== 'active'"
+              :title="`确认激活 ${row.tag} 到 ${row.channel}？`"
+              @confirm="handleActivate(row)"
+            >
               <template #reference>
-                <el-button link type="success" :size="size" :icon="useRenderIcon(Check)">
+                <el-button class="reset-margin" link type="success" :size="size" :icon="useRenderIcon(Check)">
                   激活
                 </el-button>
               </template>
             </el-popconfirm>
             <el-popconfirm v-if="row.status !== 'active'" :title="`确认删除 ${row.tag}？`" @confirm="handleDelete(row)">
               <template #reference>
-                <el-button link type="danger" :size="size" :icon="useRenderIcon(Delete)">
+                <el-button class="reset-margin" link type="danger" :size="size" :icon="useRenderIcon(Delete)">
                   删除
                 </el-button>
               </template>
@@ -264,10 +323,26 @@ onMounted(onSearch);
       </template>
     </PureTableBar>
 
-    <el-dialog v-model="uploadVisible" title="上传 Git-AI Windows 发布包" width="min(640px, 92vw)" destroy-on-close>
-      <el-alert class="mb-4" type="info" :closable="false"
-        title="第一版只支持 Windows，必须上传 install.ps1 和 git-ai-windows-x64.exe。SHA256SUMS 由服务端生成。" />
-      <el-form :model="uploadForm" label-width="90px">
+    <el-dialog
+      v-model="uploadVisible"
+      :title="dialogTitle"
+      width="min(640px, 92vw)"
+      destroy-on-close
+    >
+      <el-alert
+        v-if="dialogMode === 'edit' && editingRelease?.status === 'active'"
+        class="mb-4"
+        type="warning"
+        :closable="false"
+        title="当前发布已激活，保存后客户端升级接口会立即使用新的元数据和文件。"
+      />
+      <el-alert
+        class="mb-4"
+        type="info"
+        :closable="false"
+        :title="dialogMode === 'edit' ? '未重新选择文件时仅修改元数据；选择文件后会完整替换发布文件并重新生成 SHA256SUMS。' : '第一版只支持 Windows，必须上传 install.ps1 和 git-ai-windows-x64.exe。SHA256SUMS 由服务端生成。'"
+      />
+      <el-form :model="uploadForm" label-width="90px" v-loading="editLoading">
         <el-form-item label="Tag" required>
           <el-input v-model="uploadForm.tag" placeholder="例如 v1.2.3" />
         </el-form-item>
@@ -295,12 +370,18 @@ onMounted(onSearch);
               {{ name }}
             </el-tag>
           </div>
+          <div v-if="dialogMode === 'edit' && currentArtifacts.length" class="current-artifacts">
+            <div class="current-artifacts-title">当前文件</div>
+            <el-tag v-for="artifact in currentArtifacts" :key="artifact.id" effect="plain">
+              {{ artifact.filename }} · {{ formatBytes(artifact.size_bytes) }}
+            </el-tag>
+          </div>
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="uploadVisible = false">取消</el-button>
-        <el-button type="primary" :loading="uploadLoading" @click="handleUpload">
-          上传
+        <el-button type="primary" :loading="uploadLoading" @click="handleSaveRelease">
+          {{ dialogMode === "edit" ? "保存" : "上传" }}
         </el-button>
       </template>
     </el-dialog>
@@ -383,6 +464,19 @@ onMounted(onSearch);
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 10px;
+}
+
+.current-artifacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.current-artifacts-title {
+  width: 100%;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 
 .artifact-link {
