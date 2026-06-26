@@ -18,12 +18,19 @@ class UploadFile:
 class FakeReleaseDatabase:
     def __init__(self):
         self.created = None
+        self.updated = None
         self.active_release = None
         self.artifacts = []
 
     def create_release(self, **kwargs):
         self.created = kwargs
         return {"id": "rel1", **{k: v for k, v in kwargs.items() if k != "artifacts"}}
+
+    def update_release(self, release_id, **kwargs):
+        self.updated = {"release_id": release_id, **kwargs}
+        if release_id == "missing":
+            return None
+        return {"id": release_id, **{k: v for k, v in kwargs.items() if k != "artifacts"}}
 
     def get_active_release(self, channel):
         return self.active_release if channel == "latest" else None
@@ -118,3 +125,75 @@ def test_list_channel_metadata_returns_tag_version_and_platforms():
         "checksum": "a" * 64,
         "platforms": ["windows-x64"],
     }
+
+
+def test_update_release_metadata_only_keeps_checksum():
+    service, db = build_service()
+
+    release = service.update_release(
+        "rel1",
+        tag=" v1.0.1 ",
+        version="",
+        channel="latest",
+        description="new",
+        files=[],
+    )
+
+    assert release["id"] == "rel1"
+    assert db.updated["tag"] == "v1.0.1"
+    assert db.updated["version"] == "v1.0.1"
+    assert db.updated["channel"] == "latest"
+    assert db.updated["description"] == "new"
+    assert db.updated["artifacts"] is None
+    assert db.updated["sha256sums_checksum"] is None
+
+
+def test_update_release_with_files_regenerates_sha256sums():
+    service, db = build_service()
+
+    release = service.update_release(
+        "rel1",
+        tag="v1.0.1",
+        version="1.0.1",
+        channel="latest",
+        description=None,
+        files=[
+            UploadFile("install.ps1", b"ps-new"),
+            UploadFile("git-ai-windows-x64.exe", b"exe-new"),
+        ],
+    )
+
+    assert release["id"] == "rel1"
+    artifact_names = [artifact["filename"] for artifact in db.updated["artifacts"]]
+    assert artifact_names == ["install.ps1", "git-ai-windows-x64.exe", "SHA256SUMS"]
+    checksum_artifact = next(a for a in db.updated["artifacts"] if a["filename"] == "SHA256SUMS")
+    assert db.updated["sha256sums_checksum"] == checksum_artifact["sha256"]
+    assert b"install.ps1" in checksum_artifact["content_blob"]
+
+
+def test_update_release_with_files_requires_windows_files():
+    service, _ = build_service()
+
+    with pytest.raises(ReleaseValidationError, match="git-ai-windows-x64.exe"):
+        service.update_release(
+            "rel1",
+            tag="v1.0.1",
+            version="1.0.1",
+            channel="latest",
+            description=None,
+            files=[UploadFile("install.ps1", b"ps")],
+        )
+
+
+def test_update_release_rejects_uploaded_sha256sums():
+    service, _ = build_service()
+
+    with pytest.raises(ReleaseValidationError, match="SHA256SUMS"):
+        service.update_release(
+            "rel1",
+            tag="v1.0.1",
+            version="1.0.1",
+            channel="latest",
+            description=None,
+            files=[UploadFile("SHA256SUMS", b"bad")],
+        )
